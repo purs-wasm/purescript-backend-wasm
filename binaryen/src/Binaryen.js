@@ -26,8 +26,23 @@ export const createType = (types) => binaryen.createType(types);
 export const localGetImpl = (mod) => (index) => (ty) => () =>
   mod.local.get(index, ty);
 
+export const localSetImpl = (mod) => (index) => (value) => () =>
+  mod.local.set(index, value);
+
+export const blockImpl = (mod) => (children) => (ty) => () =>
+  mod.block(null, children, ty);
+
+export const callImpl = (mod) => (target) => (operands) => (returnType) => () =>
+  mod.call(target, operands, returnType);
+
 export const i32AddImpl = (mod) => (left) => (right) => () =>
   mod.i32.add(left, right);
+
+export const i32SubImpl = (mod) => (left) => (right) => () =>
+  mod.i32.sub(left, right);
+
+export const i32MulImpl = (mod) => (left) => (right) => () =>
+  mod.i32.mul(left, right);
 
 export const i32ConstImpl = (mod) => (value) => () =>
   mod.i32.const(value);

@@ -19,7 +19,12 @@ module Binaryen
   , none
   , createType
   , localGet
+  , localSet
+  , block
+  , call
   , i32Add
+  , i32Sub
+  , i32Mul
   , i32Const
   , addFunction
   , addFunctionExport
@@ -78,10 +83,40 @@ foreign import localGetImpl :: Module -> Int -> Type -> Effect Expression
 localGet :: Module -> Int -> Type -> Effect Expression
 localGet = localGetImpl
 
+foreign import localSetImpl :: Module -> Int -> Expression -> Effect Expression
+
+-- | Set local variable `index` to `value`. The resulting node is a statement
+-- | (it has no value); sequence it inside a `block`.
+localSet :: Module -> Int -> Expression -> Effect Expression
+localSet = localSetImpl
+
+foreign import blockImpl :: Module -> Array Expression -> Type -> Effect Expression
+
+-- | Sequence expressions into an (anonymous) block whose value and type are
+-- | those of its last child.
+block :: Module -> Array Expression -> Type -> Effect Expression
+block = blockImpl
+
+foreign import callImpl :: Module -> String -> Array Expression -> Type -> Effect Expression
+
+-- | Call the internal function `target` with `operands`, yielding `returnType`.
+call :: Module -> String -> Array Expression -> Type -> Effect Expression
+call = callImpl
+
 foreign import i32AddImpl :: Module -> Expression -> Expression -> Effect Expression
 
 i32Add :: Module -> Expression -> Expression -> Effect Expression
 i32Add = i32AddImpl
+
+foreign import i32SubImpl :: Module -> Expression -> Expression -> Effect Expression
+
+i32Sub :: Module -> Expression -> Expression -> Effect Expression
+i32Sub = i32SubImpl
+
+foreign import i32MulImpl :: Module -> Expression -> Expression -> Effect Expression
+
+i32Mul :: Module -> Expression -> Expression -> Effect Expression
+i32Mul = i32MulImpl
 
 foreign import i32ConstImpl :: Module -> Int -> Effect Expression
 

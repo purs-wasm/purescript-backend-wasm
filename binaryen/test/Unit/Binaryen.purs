@@ -49,6 +49,20 @@ spec = describe "Binaryen (unit)" do
         B.validate mod
       ok `shouldEqual` true
 
+  describe "integer ops, locals, blocks, and calls" do
+    it "builds a valid module using i32Sub / i32Mul / localSet / block / call" do
+      { ok } <- liftEffect buildOps
+      ok `shouldEqual` true
+
+    it "emits the expected instructions" do
+      { wat } <- liftEffect buildOps
+      wat `shouldSatisfy` String.contains (Pattern "i32.sub")
+      wat `shouldSatisfy` String.contains (Pattern "i32.mul")
+      -- the `localSet` into the declared var local, sequenced by a `block`
+      wat `shouldSatisfy` String.contains (Pattern "local.set $2")
+      -- the direct `call` to the other function
+      wat `shouldSatisfy` String.contains (Pattern "call $helper")
+
   describe "emission" do
     it "wraps emitText output in a (module ...) form" do
       wat <- liftEffect $ withModule B.emitText
@@ -66,6 +80,33 @@ spec = describe "Binaryen (unit)" do
 buildAdd :: Effect { ok :: Boolean, wat :: String }
 buildAdd = withModule \mod -> do
   buildAddInto mod
+  ok <- B.validate mod
+  wat <- B.emitText mod
+  pure { ok, wat }
+
+-- | Build a two-function module exercising the integer ops, local set, block,
+-- | and call bindings: `helper(x) = x * x` and `caller(a, b) = helper (a - b)`,
+-- | where `a - b` is stashed in a declared var local. Returns whether it
+-- | validates plus its WAT.
+buildOps :: Effect { ok :: Boolean, wat :: String }
+buildOps = withModule \mod -> do
+  -- helper(x) = x * x  (uses i32Mul; two distinct local.get nodes, not shared)
+  hx0 <- B.localGet mod 0 B.i32
+  hx1 <- B.localGet mod 0 B.i32
+  helperBody <- B.i32Mul mod hx0 hx1
+  _ <- B.addFunction mod "helper" (B.createType [ B.i32 ]) B.i32 [] helperBody
+
+  -- caller(a, b) = helper (a - b)
+  a <- B.localGet mod 0 B.i32
+  b <- B.localGet mod 1 B.i32
+  diff <- B.i32Sub mod a b
+  setDiff <- B.localSet mod 2 diff -- local $2 = a - b
+  arg <- B.localGet mod 2 B.i32
+  called <- B.call mod "helper" [ arg ] B.i32
+  callerBody <- B.block mod [ setDiff, called ] B.i32
+  _ <- B.addFunction mod "caller" (B.createType [ B.i32, B.i32 ]) B.i32 [ B.i32 ] callerBody
+  _ <- B.addFunctionExport mod "caller" "caller"
+
   ok <- B.validate mod
   wat <- B.emitText mod
   pure { ok, wat }
