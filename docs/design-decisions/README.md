@@ -12,7 +12,7 @@ history.
 
 ## Format
 
-```
+```plain
 # <NNNN>. <Title>
 
 - Status: Proposed | Accepted | Superseded by <NNNN>
@@ -26,8 +26,8 @@ history.
 
 ## Index
 
-| #    | Title                                                             | Status   |
-| ---- | ----------------------------------------------------------------- | -------- |
+| # | Title | Status |
+| - | - | - |
 | 0001 | [Wasm GC substrate and value representation](0001-wasm-gc-substrate-and-value-representation.md) | Accepted |
 | 0002 | [FFI via a code-generator intrinsics table](0002-ffi-intrinsics-strategy.md) | Accepted |
 | 0003 | [Intermediate IR between CoreFn and Binaryen](0003-intermediate-ir.md) | Accepted |

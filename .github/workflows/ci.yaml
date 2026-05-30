@@ -6,9 +6,11 @@ on:
       - "**"
     paths-ignore:
       - "README.md"
+      - "docs/**/*.md"
   pull_request:
     paths-ignore:
       - "README.md"
+      - "docs/**/*.md"
 
 # Cancel a superseded run when new commits land on the same ref.
 concurrency:
