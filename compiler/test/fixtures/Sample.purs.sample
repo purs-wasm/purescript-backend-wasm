@@ -1,0 +1,57 @@
+-- | TEMPORARY: a construct-rich module used only to generate a real
+-- | `corefn.json` fixture for the decoder tests. Not part of the library.
+module Sample where
+
+import Prelude
+
+import Effect (Effect)
+import Effect.Console (log)
+
+foreign import nativeAdd :: Int -> Int -> Int
+
+data Color = Red | Green | Blue | Custom Int Int Int
+
+newtype Wrapper = Wrapper Int
+
+class Describe a where
+  describe :: a -> String
+
+instance Describe Color where
+  describe = case _ of
+    Red -> "red"
+    Green -> "green"
+    Blue -> "blue"
+    Custom _ _ _ -> "custom"
+
+type Point = { x :: Int, y :: Int }
+
+origin :: Point
+origin = { x: 0, y: 0 }
+
+moveX :: Point -> Int -> Point
+moveX p dx = p { x = p.x + dx }
+
+getX :: Point -> Int
+getX p = p.x
+
+literals :: { i :: Int, n :: Number, s :: String, c :: Char, b :: Boolean, arr :: Array Int }
+literals = { i: 42, n: 3.14, s: "hello", c: 'z', b: true, arr: [ 1, 2, 3 ] }
+
+apply2 :: (Int -> Int) -> Int -> Int
+apply2 f x = f (f x)
+
+fact :: Int -> Int
+fact n =
+  let
+    go acc m = if m <= 1 then acc else go (acc * m) (m - 1)
+  in
+    go 1 n
+
+classify :: Int -> String
+classify n = case n of
+  0 -> "zero"
+  m | m < 0 -> "negative"
+  whole@_ -> "positive: " <> describe Red <> show whole
+
+main :: Effect Unit
+main = log (describe Red)

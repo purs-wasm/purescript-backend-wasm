@@ -1,5 +1,16 @@
 {
   "name": "@purs-wasm/compiler",
+  "description": "PureScript CoreFn decoder and Wasm code generator",
   "type": "module",
-  "private": true
+  "private": true,
+  "scripts": {
+    "compile": "spago build",
+    "test:unit": "spago test",
+    "test": "npm run test:unit",
+    "format": "purs-tidy format-in-place src test",
+    "check": "purs-tidy check src test"
+  },
+  "dependencies": {
+    "cbor": "^10.0.12"
+  }
 }

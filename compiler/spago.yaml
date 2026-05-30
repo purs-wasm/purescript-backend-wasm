@@ -5,3 +5,40 @@ package:
     - console
     - prelude
     - effect
+    - argonaut-core
+    - argonaut-codecs
+    - arrays
+    - either
+    - maybe
+    - tuples
+    - foreign-object
+    - foldable-traversable
+    - strings
+    - foreign
+    - node-buffer
+    - aff
+    - js-promise-aff
+    - newtype
+    - control
+    - transformers
+    - functions
+    - identity
+    - bifunctors
+  test:
+    main: Test.Unit.Compiler
+    dependencies:
+      - console
+      - effect
+      - spec
+      - spec-node
+      - argonaut-core
+      - argonaut-codecs
+      - arrays
+      - either
+      - maybe
+      - tuples
+      - strings
+      - aff
+      - foreign
+      - node-buffer
+      - node-fs
