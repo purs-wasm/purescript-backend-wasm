@@ -4,3 +4,11 @@ package:
     - prelude
     - effect
     - arraybuffer-types
+  test:
+    main: Test.Unit.Binaryen
+    dependencies:
+      - console
+      - foldable-traversable
+      - spec
+      - spec-node
+      - strings

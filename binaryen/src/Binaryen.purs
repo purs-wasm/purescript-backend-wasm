@@ -33,21 +33,22 @@ import Prelude
 
 import Data.ArrayBuffer.Types (Uint8Array)
 import Effect (Effect)
+import Prim hiding (Type, Function)
 
 -- | A Binaryen module: a mutable arena holding functions, exports, etc.
-foreign import data Module :: Type
+foreign import data Module :: Prim.Type
 
 -- | An expression node (`ExpressionRef` in Binaryen.js).
-foreign import data Expression :: Type
+foreign import data Expression :: Prim.Type
 
 -- | A Binaryen value type (`Type` in Binaryen.js; an opaque numeric tag).
-foreign import data Type :: Type
+foreign import data Type :: Prim.Type
 
 -- | A function added to a module (`FunctionRef`).
-foreign import data Function :: Type
+foreign import data Function :: Prim.Type
 
 -- | An export added to a module (`ExportRef`).
-foreign import data Export :: Type
+foreign import data Export :: Prim.Type
 
 -- | Create a fresh, empty module.
 foreign import createModule :: Effect Module

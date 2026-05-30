@@ -1,7 +1,15 @@
 {
   "name": "@purs-wasm/binaryen",
+  "description": "A minimal port of Binaryen to PureScript",
   "type": "module",
   "private": true,
+  "scripts": {
+    "compile": "spago build",
+    "test:unit": "spago test",
+    "test:e2e": "spago test --main Test.E2E.Binaryen",
+    "test": "npm run test:unit && npm run test:e2e",
+    "format": "purs-tidy check src test"
+  },
   "dependencies": {
     "binaryen": "^123.0.0"
   }
