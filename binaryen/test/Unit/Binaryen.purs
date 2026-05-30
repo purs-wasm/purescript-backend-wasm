@@ -63,6 +63,19 @@ spec = describe "Binaryen (unit)" do
       -- the direct `call` to the other function
       wat `shouldSatisfy` String.contains (Pattern "call $helper")
 
+  describe "Wasm GC (rec group, struct/array, cast)" do
+    it "builds and validates a recursive type group with a box/ADT round-trip" do
+      { ok } <- liftEffect buildGc
+      ok `shouldEqual` true
+
+    it "emits the expected GC instructions" do
+      { wat } <- liftEffect buildGc
+      wat `shouldSatisfy` String.contains (Pattern "struct.new")
+      wat `shouldSatisfy` String.contains (Pattern "struct.get")
+      wat `shouldSatisfy` String.contains (Pattern "array.new_fixed")
+      wat `shouldSatisfy` String.contains (Pattern "array.get")
+      wat `shouldSatisfy` String.contains (Pattern "ref.cast")
+
   describe "emission" do
     it "wraps emitText output in a (module ...) form" do
       wat <- liftEffect $ withModule B.emitText
@@ -110,6 +123,47 @@ buildOps = withModule \mod -> do
   ok <- B.validate mod
   wat <- B.emitText mod
   pure { ok, wat }
+
+-- | Build the Slice-1 runtime rec group and a function that round-trips a value
+-- | through it, exercising the whole GC FFI: a recursive type group
+-- | (`$ADT` referencing `$Vals`), `struct.new`/`array.new_fixed` to build, and
+-- | `struct.get`/`array.get`/`ref.cast` to read a field back out as `i32`.
+-- |
+-- |   $Vals = (array (mut eqref))
+-- |   $Int  = (struct (field i32))
+-- |   $ADT  = (struct (field i32) (field (ref $Vals)))
+-- |
+-- | The function builds `$ADT{ tag: 5, fields: [ box(7) ] }`, then reads field 0
+-- | back to the `i32` 7.
+buildGc :: Effect { ok :: Boolean, wat :: String }
+buildGc = withModule \mod -> do
+  B.setFeaturesGC mod
+  tb <- B.typeBuilderCreate 3
+  B.typeBuilderSetArrayType tb 0 B.eqref true -- $Vals
+  B.typeBuilderSetStructType tb 1 [ { ty: B.i32, mutable: false } ] -- $Int
+  valsTmp <- B.typeBuilderGetTempHeapType tb 0
+  refVals <- B.typeBuilderGetTempRefType tb valsTmp false
+  B.typeBuilderSetStructType tb 2 -- $ADT references $Vals (the recursive bit)
+    [ { ty: B.i32, mutable: false }, { ty: refVals, mutable: false } ]
+  hts <- B.typeBuilderBuildAndDispose tb 3
+  case hts of
+    [ valsHt, intHt, adtHt ] -> do
+      seven <- B.i32Const mod 7
+      boxed <- B.structNew mod intHt [ seven ]
+      tag <- B.i32Const mod 5
+      vals <- B.arrayNewFixed mod valsHt [ boxed ]
+      adt <- B.structNew mod adtHt [ tag, vals ]
+      fieldsArr <- B.structGet mod 1 adt (B.typeFromHeapType valsHt false) false
+      idx0 <- B.i32Const mod 0
+      elem <- B.arrayGet mod fieldsArr idx0 B.eqref false
+      elemInt <- B.refCast mod elem (B.typeFromHeapType intHt false)
+      val <- B.structGet mod 0 elemInt B.i32 false
+      _ <- B.addFunction mod "gcRoundTrip" B.none B.i32 [] val
+      _ <- B.addFunctionExport mod "gcRoundTrip" "gcRoundTrip"
+      ok <- B.validate mod
+      wat <- B.emitText mod
+      pure { ok, wat }
+    _ -> pure { ok: false, wat: "<expected 3 heap types>" }
 
 -- | Byte length of an emitted wasm binary.
 foreign import byteLength :: Uint8Array -> Int

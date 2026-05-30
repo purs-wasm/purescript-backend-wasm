@@ -32,6 +32,23 @@ module Binaryen
   , validate
   , emitText
   , emitBinary
+  -- Wasm GC
+  , HeapType
+  , TypeBuilder
+  , eqref
+  , setFeaturesGC
+  , typeBuilderCreate
+  , typeBuilderSetStructType
+  , typeBuilderSetArrayType
+  , typeBuilderGetTempHeapType
+  , typeBuilderGetTempRefType
+  , typeBuilderBuildAndDispose
+  , typeFromHeapType
+  , structNew
+  , structGet
+  , arrayNewFixed
+  , arrayGet
+  , refCast
   ) where
 
 import Prelude
@@ -122,6 +139,71 @@ foreign import i32ConstImpl :: Module -> Int -> Effect Expression
 
 i32Const :: Module -> Int -> Effect Expression
 i32Const = i32ConstImpl
+
+-- --- Wasm GC ----------------------------------------------------------------
+-- Binaryen.js 123 exposes no high-level GC API, so these wrap the raw
+-- emscripten C API (see Binaryen.js for the heap marshalling). Heap types are
+-- built in batches via `TypeBuilder` so that mutually-recursive types can refer
+-- to one another (a slot can be referenced before it is defined).
+
+-- | A GC heap type (struct / array / signature), as produced by `TypeBuilder`.
+foreign import data HeapType :: Prim.Type
+
+-- | Mutable scratch space for defining a batch of (possibly recursive) heap
+-- | types; see `typeBuilderCreate` and `typeBuilderBuildAndDispose`.
+foreign import data TypeBuilder :: Prim.Type
+
+-- | The universal `eqref` value type — supertype of `i31ref` and every
+-- | struct/array reference; the backend's boxed value type.
+foreign import eqref :: Type
+
+-- | Enable the GC and reference-types features. Required before validating or
+-- | emitting a module that uses any construct below.
+foreign import setFeaturesGC :: Module -> Effect Unit
+
+-- | Create a `TypeBuilder` with `size` reserved slots (indices `0 .. size-1`).
+foreign import typeBuilderCreate :: Int -> Effect TypeBuilder
+
+-- | Define slot `index` as a struct with the given fields, in order.
+foreign import typeBuilderSetStructType
+  :: TypeBuilder -> Int -> Array { ty :: Type, mutable :: Boolean } -> Effect Unit
+
+-- | Define slot `index` as an array of `element`, with the given mutability.
+foreign import typeBuilderSetArrayType :: TypeBuilder -> Int -> Type -> Boolean -> Effect Unit
+
+-- | A temporary heap type referring to slot `index`. It may be used in other
+-- | slot definitions before that slot is defined — this is what lets recursive
+-- | types be expressed.
+foreign import typeBuilderGetTempHeapType :: TypeBuilder -> Int -> Effect HeapType
+
+-- | A temporary `(ref null? ht)` value type, for use in slot definitions.
+foreign import typeBuilderGetTempRefType :: TypeBuilder -> HeapType -> Boolean -> Effect Type
+
+-- | Finalize all slots into canonical heap types (result length = the builder's
+-- | `size`), disposing the builder. Throws if the type graph is invalid.
+foreign import typeBuilderBuildAndDispose :: TypeBuilder -> Int -> Effect (Array HeapType)
+
+-- | The `(ref null? ht)` value type for a finalized heap type.
+foreign import typeFromHeapType :: HeapType -> Boolean -> Type
+
+-- | `struct.new`: allocate a struct of the heap type, with field initializers
+-- | given in field order.
+foreign import structNew :: Module -> HeapType -> Array Expression -> Effect Expression
+
+-- | `struct.get`: read field `index` (of value type `fieldType`) from `ref`.
+-- | The boolean is the sign extension, relevant only for packed fields.
+foreign import structGet :: Module -> Int -> Expression -> Type -> Boolean -> Effect Expression
+
+-- | `array.new_fixed`: allocate an array of the heap type from the given
+-- | elements.
+foreign import arrayNewFixed :: Module -> HeapType -> Array Expression -> Effect Expression
+
+-- | `array.get`: read element at `index` (of value type `elementType`) from
+-- | `ref`. The boolean is sign extension, relevant only for packed elements.
+foreign import arrayGet :: Module -> Expression -> Expression -> Type -> Boolean -> Effect Expression
+
+-- | `ref.cast`: narrow `ref` to value type `ty` (traps on mismatch).
+foreign import refCast :: Module -> Expression -> Type -> Effect Expression
 
 foreign import addFunctionImpl
   :: Module
