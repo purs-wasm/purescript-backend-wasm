@@ -31,7 +31,7 @@ Code generation, by slice (see
 
 - [x] **Slice 0** — scalar core: top-level functions, saturated calls, integer
       literals, inlined i32 intrinsics; exported and runnable from the host
-- [ ] **Slice 1** — boxing (`eqref`) + ADTs + pattern matching (decision trees)
+- [x] **Slice 1** — boxing (`eqref`) + ADTs + pattern matching (decision trees)
 - [ ] **Slice 2** — closures + currying (eval/apply) + `Let`/`Rec` (knot-tying)
 - [ ] **Slice 3** — records + type-class dictionaries (dictionary-passing E2E)
 - [ ] **Slice 4** — strings + string runtime + arrays (`show`, `<>`, …)
@@ -40,5 +40,6 @@ Later:
 
 - [ ] Real `Prelude` arithmetic via dictionaries (`+`, `*`, …) end to end
 - [ ] `Effect` and effectful computation
-- [ ] Optimizations: unboxing, arity raising / uncurrying, nominal record layout
+- [ ] Optimizations: unboxing, arity raising / uncurrying, nominal record layout,
+      unboxed/immediate enum constructors (OCaml-style constant constructors)
 - [ ] User-defined FFI (beyond the built-in intrinsics table)

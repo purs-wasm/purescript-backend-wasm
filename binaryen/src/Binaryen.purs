@@ -25,7 +25,10 @@ module Binaryen
   , i32Add
   , i32Sub
   , i32Mul
+  , i32Eq
   , i32Const
+  , if_
+  , unreachable
   , addFunction
   , addFunctionExport
   , optimize
@@ -134,6 +137,26 @@ foreign import i32MulImpl :: Module -> Expression -> Expression -> Effect Expres
 
 i32Mul :: Module -> Expression -> Expression -> Effect Expression
 i32Mul = i32MulImpl
+
+foreign import i32EqImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.eq`: 1 if the operands are equal, 0 otherwise.
+i32Eq :: Module -> Expression -> Expression -> Effect Expression
+i32Eq = i32EqImpl
+
+foreign import ifImpl :: Module -> Expression -> Expression -> Expression -> Effect Expression
+
+-- | `if`: `if_ mod condition ifTrue ifFalse`. The result type is inferred from
+-- | the arms (which must agree, modulo `unreachable`).
+if_ :: Module -> Expression -> Expression -> Expression -> Effect Expression
+if_ = ifImpl
+
+foreign import unreachableImpl :: Module -> Effect Expression
+
+-- | `unreachable`: traps if reached. Has the bottom type, so it unifies with
+-- | any branch type (used as the default arm of an exhaustive `Switch`).
+unreachable :: Module -> Effect Expression
+unreachable = unreachableImpl
 
 foreign import i32ConstImpl :: Module -> Int -> Effect Expression
 

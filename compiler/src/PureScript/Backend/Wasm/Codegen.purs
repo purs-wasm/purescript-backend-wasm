@@ -1,19 +1,18 @@
 -- | Lower the backend IR (`PureScript.Backend.Wasm.IR`) to a Binaryen module.
 -- |
--- | This is the **Slice 0** code generator: the IR it consumes is the scalar
--- | `Int`-only subset, so every value is an `i32`. The mapping is deliberately
--- | mechanical — all the hard decisions were made during lowering (ADR 0003):
+-- | This is the **Slice 1** code generator. It realises the uniform `eqref`
+-- | calling convention (ADR 0004) on the Wasm GC representation (ADR 0001):
 -- |
--- |   * an IR `Slot` is a wasm local *index* directly (parameters first, then
--- |     `Let`-bound temporaries, in slot order);
--- |   * a `Let` becomes a `local.set` statement, and the chain of statements
--- |     plus the tail value are sequenced inside a `block` whose value is the
--- |     last child;
--- |   * `RPrim` becomes an inline `i32` op, `RCallKnown` a direct `call`.
+-- |   * every IR value is a boxed `eqref`; internal functions take and return
+-- |     `eqref`, and the host-facing `i32` interface is restored by per-export
+-- |     wrapper functions that box arguments and unbox the result;
+-- |   * `Int` is boxed as `$Int = (struct i32)`, an ADT as
+-- |     `$ADT = (struct i32 (ref $Vals))` with `$Vals = (array (mut eqref))`;
+-- |   * a `Switch` reads the scrutinee's tag (`struct.get 0`) and dispatches
+-- |     through an `if`/`i32.eq` chain ending in `unreachable`.
 -- |
--- | The generator assumes the IR satisfies the invariants the lowering
--- | guarantees (e.g. a binary intrinsic has exactly two operands); a violation
--- | raises an `Effect` exception rather than producing malformed wasm.
+-- | The runtime heap types are built once per module via Binaryen's
+-- | `TypeBuilder` and threaded through codegen in `Ctx`.
 module PureScript.Backend.Wasm.Codegen
   ( buildModule
   ) where
@@ -27,89 +26,171 @@ import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.IR (Atom(..), Block(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), Block(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rhs(..), Slot(..), VarRef(..))
 
--- | Build a Binaryen module from a Slice 0 IR `Program`. Functions are added
--- | first, then exports; `RCallKnown` references functions by name, which
--- | Binaryen resolves at validation time, so definition order does not matter.
+-- | The module's runtime heap types, plus the (non-null) reference value types
+-- | derived from them for `ref.cast` targets and field reads.
+type RuntimeTypes =
+  { intHt :: B.HeapType
+  , valsHt :: B.HeapType
+  , adtHt :: B.HeapType
+  , refInt :: B.Type
+  , refVals :: B.Type
+  , refAdt :: B.Type
+  }
+
+type Ctx = { mod :: B.Module, rt :: RuntimeTypes }
+
+-- | Build a Binaryen module from a Slice 1 IR `Program`: enable GC, build the
+-- | runtime type group, add every function (as an `eqref` function), then add an
+-- | `i32` export wrapper for each exported function.
 buildModule :: Program -> Effect B.Module
 buildModule prog = do
   mod <- B.createModule
-  traverse_ (addFunc mod) prog.funcs
-  traverse_ (addExport mod) prog.funcs
+  B.setFeaturesGC mod
+  rt <- buildRuntimeTypes mod
+  let ctx = { mod, rt }
+  traverse_ (addFunc ctx) prog.funcs
+  traverse_ (addExportWrapper ctx) prog.funcs
   pure mod
 
--- | The wasm type for a chosen representation. Slice 0 only ever uses `I32`;
--- | `Boxed` maps to the universal `eqref` box once Slice 1 defines it, and is
--- | unreachable here.
-repType :: Rep -> B.Type
-repType = case _ of
-  I32 -> B.i32
-  F64 -> B.f64
-  Boxed -> B.i32 -- placeholder; unreachable in Slice 0 (see ADR 0001 for the eqref box)
+-- | Build the recursive type group `$Vals` / `$Int` / `$ADT` (ADR 0001) once.
+buildRuntimeTypes :: B.Module -> Effect RuntimeTypes
+buildRuntimeTypes _ = do
+  tb <- B.typeBuilderCreate 3
+  B.typeBuilderSetArrayType tb 0 B.eqref true -- $Vals = (array (mut eqref))
+  B.typeBuilderSetStructType tb 1 [ { ty: B.i32, mutable: false } ] -- $Int = (struct i32)
+  valsTmp <- B.typeBuilderGetTempHeapType tb 0
+  refValsTmp <- B.typeBuilderGetTempRefType tb valsTmp false
+  -- $ADT = (struct i32 (ref $Vals)) — references $Vals, so it is built together
+  -- with it in one rec group.
+  B.typeBuilderSetStructType tb 2 [ { ty: B.i32, mutable: false }, { ty: refValsTmp, mutable: false } ]
+  hts <- B.typeBuilderBuildAndDispose tb 3
+  case hts of
+    [ valsHt, intHt, adtHt ] -> pure
+      { intHt
+      , valsHt
+      , adtHt
+      , refInt: B.typeFromHeapType intHt false
+      , refVals: B.typeFromHeapType valsHt false
+      , refAdt: B.typeFromHeapType adtHt false
+      }
+    _ -> throwException (error "Codegen: expected exactly 3 runtime heap types")
 
 funcNameStr :: FuncName -> String
 funcNameStr (FuncName n) = n
 
-addFunc :: B.Module -> IRFunc -> Effect Unit
-addFunc mod fn = do
-  body <- genBody mod fn.body
-  let params = B.createType (repType <$> fn.params)
-  -- Locals beyond the parameters are exactly the `Let`-bound slots, in slot
-  -- order — which is the order they appear walking the block top-down.
-  let varTypes = repType <$> letReps fn.body
-  _ <- B.addFunction mod (funcNameStr fn.name) params (repType fn.result) varTypes body
+-- | Add an internal function: all parameters and the result are `eqref`. Locals
+-- | beyond the parameters (the `Let`-bound slots) are declared `eqref`.
+addFunc :: Ctx -> IRFunc -> Effect Unit
+addFunc ctx fn = do
+  body <- genBody ctx fn.body
+  let params = B.createType (const B.eqref <$> fn.params)
+  let varTypes = Array.replicate (fn.localCount - Array.length fn.params) B.eqref
+  _ <- B.addFunction ctx.mod (funcNameStr fn.name) params B.eqref varTypes body
   pure unit
 
-addExport :: B.Module -> IRFunc -> Effect Unit
-addExport mod fn = case fn.export of
-  Just external -> void (B.addFunctionExport mod (funcNameStr fn.name) external)
+-- | Add the host-facing `i32` wrapper for an exported function: box each `i32`
+-- | argument, call the internal `eqref` function, and unbox its result.
+addExportWrapper :: Ctx -> IRFunc -> Effect Unit
+addExportWrapper ctx fn = case fn.export of
   Nothing -> pure unit
+  Just external -> do
+    let indices = Array.mapWithIndex (\i _ -> i) fn.params
+    boxedArgs <- traverse (\i -> B.localGet ctx.mod i B.i32 >>= boxInt ctx) indices
+    result <- B.call ctx.mod (funcNameStr fn.name) boxedArgs B.eqref
+    unboxed <- unboxIntExpr ctx result
+    let params = B.createType (const B.i32 <$> fn.params)
+    let wrapperName = funcNameStr fn.name <> "$export"
+    _ <- B.addFunction ctx.mod wrapperName params B.i32 [] unboxed
+    _ <- B.addFunctionExport ctx.mod wrapperName external
+    pure unit
 
--- | The representations of a block's `Let` bindings, in order.
-letReps :: Block -> Array Rep
-letReps = case _ of
-  Ret _ -> []
-  Let _ rep _ k -> Array.cons rep (letReps k)
+-- | Box an `i32` expression into an `eqref` (`struct.new $Int`).
+boxInt :: Ctx -> B.Expression -> Effect B.Expression
+boxInt ctx e = B.structNew ctx.mod ctx.rt.intHt [ e ]
 
--- | Generate the function body: each `Let` is a `local.set` statement, and the
--- | statements plus the tail value are wrapped in a `block`. A body that is a
--- | bare `Ret` (no bindings) is emitted as the value expression directly.
-genBody :: B.Module -> Block -> Effect B.Expression
-genBody mod = go []
+-- | Unbox an `eqref` expression to `i32` (`ref.cast` then `struct.get 0`).
+unboxIntExpr :: Ctx -> B.Expression -> Effect B.Expression
+unboxIntExpr ctx e = do
+  c <- B.refCast ctx.mod e ctx.rt.refInt
+  B.structGet ctx.mod 0 c B.i32 false
+
+-- | Generate a function body. `Let`s become `local.set` statements sequenced in
+-- | a `block` whose value is the tail (`Ret` atom or `Switch`).
+genBody :: Ctx -> Block -> Effect B.Expression
+genBody ctx = go []
   where
   go statements = case _ of
-    Ret atom -> do
-      value <- genAtom mod atom
-      if Array.null statements then pure value
-      else B.block mod (Array.snoc statements value) B.i32
-    Let (Slot index) _rep rhs k -> do
-      e <- genRhs mod rhs
-      stmt <- B.localSet mod index e
+    Ret atom -> seal statements =<< genAtom ctx atom
+    Switch scrutAtom branches dflt -> seal statements =<< genSwitch ctx scrutAtom branches dflt
+    Let (Slot index) _ rhs k -> do
+      e <- genRhs ctx rhs
+      stmt <- B.localSet ctx.mod index e
       go (Array.snoc statements stmt) k
+  seal statements value =
+    if Array.null statements then pure value
+    else B.block ctx.mod (Array.snoc statements value) B.eqref
 
-genAtom :: B.Module -> Atom -> Effect B.Expression
-genAtom mod = case _ of
-  ALitInt n -> B.i32Const mod n
-  AVar (Local (Slot index)) -> B.localGet mod index B.i32
+-- | A `Switch` becomes a chain of `if (tag == k) <branch> else …`, ending in the
+-- | default block or `unreachable`. The tag is read afresh per comparison (the
+-- | scrutinee is a cheap `local.get`), which avoids reserving an extra local.
+genSwitch :: Ctx -> Atom -> Array Branch -> Maybe Block -> Effect B.Expression
+genSwitch ctx scrutAtom branches dflt = chain branches
+  where
+  readTag = do
+    s <- genAtom ctx scrutAtom
+    c <- B.refCast ctx.mod s ctx.rt.refAdt
+    B.structGet ctx.mod 0 c B.i32 false
+  chain bs = case Array.uncons bs of
+    Nothing -> case dflt of
+      Just d -> genBody ctx d
+      Nothing -> B.unreachable ctx.mod
+    Just { head: Branch tag body, tail } -> do
+      tagExpr <- readTag
+      k <- B.i32Const ctx.mod tag
+      cond <- B.i32Eq ctx.mod tagExpr k
+      thenE <- genBody ctx body
+      elseE <- chain tail
+      B.if_ ctx.mod cond thenE elseE
 
-genRhs :: B.Module -> Rhs -> Effect B.Expression
-genRhs mod = case _ of
-  RAtom atom -> genAtom mod atom
-  RPrim intr args -> genPrim mod intr args
+genAtom :: Ctx -> Atom -> Effect B.Expression
+genAtom ctx = case _ of
+  ALitInt n -> B.i32Const ctx.mod n >>= boxInt ctx
+  AVar (Local (Slot index)) -> B.localGet ctx.mod index B.eqref
+
+genRhs :: Ctx -> Rhs -> Effect B.Expression
+genRhs ctx = case _ of
+  RAtom atom -> genAtom ctx atom
+  RPrim intr args -> genPrim ctx intr args
   RCallKnown name args -> do
-    operands <- traverse (genAtom mod) args
-    B.call mod (funcNameStr name) operands B.i32
+    operands <- traverse (genAtom ctx) args
+    B.call ctx.mod (funcNameStr name) operands B.eqref
+  RMkData tag fields -> do
+    fieldEs <- traverse (genAtom ctx) fields
+    vals <- B.arrayNewFixed ctx.mod ctx.rt.valsHt fieldEs
+    tagE <- B.i32Const ctx.mod tag
+    B.structNew ctx.mod ctx.rt.adtHt [ tagE, vals ]
+  RProjField adtAtom index -> do
+    a <- genAtom ctx adtAtom
+    c <- B.refCast ctx.mod a ctx.rt.refAdt
+    vals <- B.structGet ctx.mod 1 c ctx.rt.refVals false
+    idx <- B.i32Const ctx.mod index
+    B.arrayGet ctx.mod vals idx B.eqref false
 
--- | Slice 0 intrinsics are all binary `i32` ops; the lowering guarantees the
--- | arity, so a different operand count is an internal error.
-genPrim :: B.Module -> Intrinsic -> Array Atom -> Effect B.Expression
-genPrim mod intr = case _ of
+-- | Slice 1 intrinsics are all binary `i32` ops; operands are unboxed, the op is
+-- | applied, and the result re-boxed. The lowering guarantees the arity.
+genPrim :: Ctx -> Intrinsic -> Array Atom -> Effect B.Expression
+genPrim ctx intr = case _ of
   [ a, b ] -> do
-    ea <- genAtom mod a
-    eb <- genAtom mod b
-    case intr of
-      IntAdd -> B.i32Add mod ea eb
-      IntSub -> B.i32Sub mod ea eb
-      IntMul -> B.i32Mul mod ea eb
+    ea <- unboxIntAtom ctx a
+    eb <- unboxIntAtom ctx b
+    r <- case intr of
+      IntAdd -> B.i32Add ctx.mod ea eb
+      IntSub -> B.i32Sub ctx.mod ea eb
+      IntMul -> B.i32Mul ctx.mod ea eb
+    boxInt ctx r
   _ -> throwException (error "Codegen: binary intrinsic given a non-binary operand list")
+
+unboxIntAtom :: Ctx -> Atom -> Effect B.Expression
+unboxIntAtom ctx atom = genAtom ctx atom >>= unboxIntExpr ctx

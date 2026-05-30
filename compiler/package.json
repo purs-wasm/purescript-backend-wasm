@@ -6,7 +6,7 @@
   "scripts": {
     "compile": "spago build",
     "test:unit": "spago test",
-    "test:e2e": "spago test -m Test.E2E.Slice0",
+    "test:e2e": "spago test -m Test.E2E.Compiler",
     "test": "npm run test:unit && npm run test:e2e",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test"

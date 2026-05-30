@@ -44,6 +44,14 @@ export const i32SubImpl = (mod) => (left) => (right) => () =>
 export const i32MulImpl = (mod) => (left) => (right) => () =>
   mod.i32.mul(left, right);
 
+export const i32EqImpl = (mod) => (left) => (right) => () =>
+  mod.i32.eq(left, right);
+
+export const ifImpl = (mod) => (cond) => (ifTrue) => (ifFalse) => () =>
+  mod.if(cond, ifTrue, ifFalse);
+
+export const unreachableImpl = (mod) => () => mod.unreachable();
+
 export const i32ConstImpl = (mod) => (value) => () =>
   mod.i32.const(value);
 

@@ -52,8 +52,8 @@ instance showSlot :: Show Slot where
 -- | Slice 0 only needs `Local`; the constructors a later slice adds are noted
 -- | rather than declared, to keep pattern matches in the lowering/codegen total
 -- | over exactly what exists today.
-data VarRef
-  = Local Slot
+data VarRef = Local Slot
+
 -- Slice 1: | Global FuncName  -- reference to a top-level value
 -- Slice 2: | EnvField Int     -- a captured free variable, read from the closure env
 
@@ -69,6 +69,7 @@ instance showVarRef :: Show VarRef where
 data Atom
   = ALitInt Int
   | AVar VarRef
+
 -- Slice with each literal kind: ALitNumber / ALitChar / ALitString / ALitBoolean
 
 derive instance eqAtom :: Eq Atom
@@ -109,9 +110,18 @@ data Rhs
   = RAtom Atom
   | RPrim Intrinsic (Array Atom) -- inlined machine op over evaluated operands
   | RCallKnown FuncName (Array Atom) -- saturated direct call to a top-level function (ADR 0003 eval/apply)
+  -- | Allocate an ADT value: constructor `tag` plus its field initializers in
+  -- | field order. Operands are `eqref` (ADR 0004); a nullary constructor has an
+  -- | empty operand list. Lowered to `struct.new $ADT [tag, array.new_fixed
+  -- | $Vals fields]`.
+  | RMkData Int (Array Atom)
+  -- | Project field `index` out of an ADT value (itself an `eqref`), yielding
+  -- | the field's `eqref`. Lowered to a cast to `(ref $ADT)`, a `struct.get` of
+  -- | the fields array, then `array.get`.
+  | RProjField Atom Int
+
 -- Slice 2: | RApply Atom (Array Atom)      -- generic curried apply (arity mismatch)
 --          | RMkClosure FuncName (Array Atom)
--- Slice 1: | RMkData Int (Array Atom) | RProjField Atom Int
 -- Slice 3: | RMkRecord (Array (Tuple String Atom)) | RProjLabel Atom String
 -- where needed: | RBox Rep Atom | RUnbox Rep Atom
 
@@ -126,13 +136,26 @@ instance showRhs :: Show Rhs where
 data Block
   = Ret Atom
   | Let Slot Rep Rhs Block
--- Slice 1: | Switch Atom (Array Branch) (Maybe Block)  -- compiled decision tree
+  -- | A compiled pattern match: read the scrutinee ADT's constructor tag and
+  -- | branch on it. Field bindings live inside each branch body as `RProjField`
+  -- | `Let`s. The optional default block is taken when no tag matches; a
+  -- | non-exhaustive match with no default traps (`unreachable`).
+  | Switch Atom (Array Branch) (Maybe Block)
+
 -- Slice 2: | LetRec (Array (Tuple Slot Alloc)) Block   -- allocate-then-patch knot-tying
+
+-- | One arm of a `Switch`: the constructor `tag` it matches, and the block to
+-- | run when the scrutinee has that tag.
+data Branch = Branch Int Block
+
+instance showBranch :: Show Branch where
+  show (Branch tag body) = "(Branch " <> show tag <> " " <> show body <> ")"
 
 instance showBlock :: Show Block where
   show = case _ of
     Ret a -> "(Ret " <> show a <> ")"
     Let s r rhs k -> "(Let " <> show s <> " " <> show r <> " " <> show rhs <> " " <> show k <> ")"
+    Switch scrut branches dflt -> "(Switch " <> show scrut <> " " <> show branches <> " " <> show dflt <> ")"
 
 -- | A top-level function. `params` carries both the arity (its length) and the
 -- | representation of each parameter; parameters occupy slots
@@ -146,6 +169,10 @@ type IRFunc =
   , result :: Rep
   , body :: Block
   , export :: Maybe String
+  -- | Total local slots (parameters plus every `Let`-bound temporary, including
+  -- | those inside `Switch` branches). Codegen declares `localCount - |params|`
+  -- | extra locals; lowering supplies it from its final fresh-slot counter.
+  , localCount :: Int
   }
 
 -- | A whole compiled module.
