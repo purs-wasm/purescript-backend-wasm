@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+    paths-ignore:
+      - "README.md"
+  pull_request:
+    paths-ignore:
+      - "README.md"
+
+# Cancel a superseded run when new commits land on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [compiler, binaryen]
+    steps:
+      # Setup Nix envirionment
+      - uses: actions/checkout@v3
+      - uses: cachix/install-nix-action@v23
+        with:
+          # No nixpkgs channel pin here: the toolchain comes from `nix develop`,
+          # so flake.nix + flake.lock are the single source of truth.
+          extra_nix_config: experimental-features = nix-command flakes
+      - uses: cachix/cachix-action@v14
+        with:
+          name: katsujukou-github
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+      - uses: nicknovitski/nix-develop@v1
+
+      # Run CI jobs
+      - name: Install
+        run: pnpm -F './${{ matrix.target }}' install
+
+      - name: Compile
+        run: pnpm -F './${{ matrix.target}}' run compile
+
+      - name: Test
+        run: pnpm -F './${{ matrix.target }}' run test
+
+      - name: Check
+        run: pnpm -F './${{ matrix.target }}' run check
