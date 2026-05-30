@@ -1,0 +1,8 @@
+{
+  "name": "@purs-wasm/binaryen",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "binaryen": "^123.0.0"
+  }
+}

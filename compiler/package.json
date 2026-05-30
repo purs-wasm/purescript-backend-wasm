@@ -1,0 +1,5 @@
+{
+  "name": "@purs-wasm/compiler",
+  "type": "module",
+  "private": true
+}

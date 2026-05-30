@@ -1,0 +1,6 @@
+/.spago
+/output
+/output-es
+/dist
+**/node_modules
+**/.DS_Store

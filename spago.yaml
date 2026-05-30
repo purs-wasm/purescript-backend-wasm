@@ -1,0 +1,4 @@
+workspace:
+  packageSet:
+    registry: 77.4.0
+  extraPackages: {}

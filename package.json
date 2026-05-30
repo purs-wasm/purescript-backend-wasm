@@ -1,0 +1,8 @@
+{
+  "name": "purescript-backend-wasm",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "binaryen": "^123.0.0"
+  }
+}
