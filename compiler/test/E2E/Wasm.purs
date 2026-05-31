@@ -22,7 +22,7 @@ import Data.Either (Either(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
 import PureScript.Backend.Wasm.Codegen (buildModule)
-import PureScript.Backend.Wasm.FromCoreFn (lowerModule)
+import PureScript.Backend.Wasm.Lower (lowerModule)
 import PureScript.CoreFn.FromJSON (decodeModule)
 
 -- | Decode the fixture, lower it to IR, generate a Binaryen module, and

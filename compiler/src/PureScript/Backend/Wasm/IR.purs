@@ -139,31 +139,33 @@ derive instance genericRhs :: Generic Rhs _
 instance showRhs :: Show Rhs where
   show = genericShow
 
--- | An A-normal-form block: a chain of `Let` bindings ending in a tail `Ret`.
--- | Every intermediate result is named by a `Slot`, mapping 1:1 onto a wasm
--- | local. The `Rep` on each `Let` is the representation of the bound slot, so
--- | codegen can declare the local's wasm type without consulting anything else.
-data Block
-  = Ret Atom
-  | Let Slot Rep Rhs Block
+-- | An expression in A-normal form: a chain of `Let` bindings ending in a tail
+-- | position. Every intermediate result is named by a `Slot`, mapping 1:1 onto
+-- | a wasm local. The `Rep` on each `Let` is the representation of the bound
+-- | slot, so codegen can declare the local's wasm type without consulting
+-- | anything else.
+data AnfExpr
+  -- | The tail position: the expression evaluates to this already-computed atom.
+  = Return Atom
+  | Let Slot Rep Rhs AnfExpr
   -- | A compiled pattern match: read the scrutinee ADT's constructor tag and
   -- | branch on it. Field bindings live inside each branch body as `RProjField`
-  -- | `Let`s. The optional default block is taken when no tag matches; a
+  -- | `Let`s. The optional default is taken when no tag matches; a
   -- | non-exhaustive match with no default traps (`unreachable`).
-  | Switch Atom (Array Branch) (Maybe Block)
+  | Switch Atom (Array Branch) (Maybe AnfExpr)
 
--- Slice 2: | LetRec (Array (Tuple Slot Alloc)) Block   -- allocate-then-patch knot-tying
+-- Slice 2: | LetRec (Array (Tuple Slot Alloc)) AnfExpr   -- allocate-then-patch knot-tying
 
--- | One arm of a `Switch`: the constructor `tag` it matches, and the block to
--- | run when the scrutinee has that tag.
-data Branch = Branch Int Block
+-- | One arm of a `Switch`: the constructor `tag` it matches, and the expression
+-- | to run when the scrutinee has that tag.
+data Branch = Branch Int AnfExpr
 
 instance showBranch :: Show Branch where
   show (Branch tag body) = "(Branch " <> show tag <> " " <> show body <> ")"
 
-instance showBlock :: Show Block where
+instance showAnfExpr :: Show AnfExpr where
   show = case _ of
-    Ret a -> "(Ret " <> show a <> ")"
+    Return a -> "(Return " <> show a <> ")"
     Let s r rhs k -> "(Let " <> show s <> " " <> show r <> " " <> show rhs <> " " <> show k <> ")"
     Switch scrut branches dflt -> "(Switch " <> show scrut <> " " <> show branches <> " " <> show dflt <> ")"
 
@@ -177,7 +179,7 @@ type IRFunc =
   { name :: FuncName
   , params :: Array Rep
   , result :: Rep
-  , body :: Block
+  , body :: AnfExpr
   , export :: Maybe String
   -- | Total local slots (parameters plus every `Let`-bound temporary, including
   -- | those inside `Switch` branches). Codegen declares `localCount - |params|`

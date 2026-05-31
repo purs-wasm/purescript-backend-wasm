@@ -3,7 +3,7 @@
 -- | known-call vs unknown-apply distinction. Small CoreFn modules are built by
 -- | hand and lowered, and the resulting IR is inspected structurally (rather
 -- | than by exact slot numbers, which would be brittle).
-module Test.Unit.PureScript.Backend.Wasm.FromCoreFn (spec) where
+module Test.Unit.PureScript.Backend.Wasm.Lower (spec) where
 
 import Prelude
 
@@ -11,8 +11,8 @@ import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), maybe)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.FromCoreFn (LowerError(..), lowerModule)
-import PureScript.Backend.Wasm.IR (Atom(..), Block(..), Branch(..), IRFunc, Program, Rep(..), Rhs(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower (LowerError(..), lowerModule)
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), IRFunc, Program, Rep(..), Rhs(..), VarRef(..))
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
@@ -58,9 +58,9 @@ lower decls = lowerModule
 -- --- IR inspection helpers --------------------------------------------------
 
 -- | Every `Rhs` in a block, descending into `Switch` branches and the default.
-allRhs :: Block -> Array Rhs
+allRhs :: AnfExpr -> Array Rhs
 allRhs = case _ of
-  Ret _ -> []
+  Return _ -> []
   Let _ _ rhs k -> Array.cons rhs (allRhs k)
   Switch _ branches dflt ->
     (branches >>= \(Branch _ b) -> allRhs b) <> maybe [] allRhs dflt
@@ -76,15 +76,15 @@ rhsAtoms = case _ of
   RApply f a -> [ f, a ]
 
 -- | Every `Atom` appearing in a block.
-blockAtoms :: Block -> Array Atom
+blockAtoms :: AnfExpr -> Array Atom
 blockAtoms = case _ of
-  Ret a -> [ a ]
+  Return a -> [ a ]
   Let _ _ rhs k -> rhsAtoms rhs <> blockAtoms k
   Switch s branches dflt ->
     Array.cons s ((branches >>= \(Branch _ b) -> blockAtoms b) <> maybe [] blockAtoms dflt)
 
 -- | The capture lists of every `RMkClosure` in a block.
-closureCaptures :: Block -> Array (Array Atom)
+closureCaptures :: AnfExpr -> Array (Array Atom)
 closureCaptures b = Array.mapMaybe captureOf (allRhs b)
   where
   captureOf = case _ of
@@ -92,7 +92,7 @@ closureCaptures b = Array.mapMaybe captureOf (allRhs b)
     _ -> Nothing
 
 -- | The constructor tags of every `RMkData` in a block.
-mkDataTags :: Block -> Array Int
+mkDataTags :: AnfExpr -> Array Int
 mkDataTags b = Array.mapMaybe tagOf (allRhs b)
   where
   tagOf = case _ of
@@ -121,7 +121,7 @@ fDecl :: CF.Bind
 fDecl = def "f" (lam "a" (lam "b" (appE (lam "y" (appE (appE (qv "addI") (lv "a")) (lv "y"))) (lv "b"))))
 
 spec :: Spec Unit
-spec = describe "PureScript.Backend.Wasm.FromCoreFn (lowering)" do
+spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
   describe "closure conversion" do
     it "lifts a capturing lambda to a separate code function" do
       case lower [ fDecl ] of

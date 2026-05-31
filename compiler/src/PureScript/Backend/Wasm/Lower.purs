@@ -18,67 +18,29 @@
 -- |     intrinsic / constructor / top-level function (i.e. it is a local closure
 -- |     value or a lambda), it lowers to `RApply` — a `call_ref` through the
 -- |     closure (ADR 0003 eval/apply), one argument at a time.
-module PureScript.Backend.Wasm.FromCoreFn
+module PureScript.Backend.Wasm.Lower
   ( lowerModule
-  , LowerError(..)
+  , module ReExport
   ) where
 
 import Prelude
 
-import Control.Monad.State (StateT, gets, modify_, runStateT)
-import Control.Monad.Trans.Class (lift)
+import Control.Monad.State (gets, modify_, runStateT)
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
-import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe(..), fromMaybe)
-import Data.Show.Generic (genericShow)
 import Data.String (joinWith)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.IR (Atom(..), Block(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.FreeVars (freeVars)
+import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
+import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.CoreFn (Bind(..), Module, Qualified(..))
 import PureScript.CoreFn as C
-
--- | Slice 2 supports a strict subset; anything outside it is reported so the
--- | gap is explicit rather than silently mis-compiled.
-data LowerError
-  = UnsupportedExpr String
-  | UnsupportedBinder String
-  | UnknownVariable String
-  | UnknownConstructor String
-  | NotSaturated String Int Int -- name, expected arity, actual args
-  | GuardedCaseUnsupported
-
-derive instance eqLowerError :: Eq LowerError
-derive instance genericLowerError :: Generic LowerError _
-instance showLowerError :: Show LowerError where
-  show = genericShow
-
--- | Lowering state. `slot` is the current function's next free local slot
--- | (saved/restored around each top-level function and around each lambda lift);
--- | `lifted` accumulates the code functions produced by lambda lifting, and
--- | `nextCode` names them uniquely. The latter two persist across the whole
--- | module.
-type LState =
-  { slot :: Int
-  , lifted :: Array IRFunc
-  , nextCode :: Int
-  }
-
-type Lower a = StateT LState (Either LowerError) a
-
-throw :: forall a. LowerError -> Lower a
-throw = lift <<< Left
-
--- | Allocate a fresh local slot in the current function.
-fresh :: Lower Slot
-fresh = do
-  n <- gets _.slot
-  modify_ _ { slot = n + 1 }
-  pure (Slot n)
 
 type CtorInfo = { tag :: Int, arity :: Int }
 
@@ -127,64 +89,6 @@ peelAbs = go []
     C.Abs _ p b -> go (Array.snoc acc p) b
     body -> { params: acc, body }
 
--- | The free *local* variables of an expression: identifiers referenced via
--- | `Qualified Nothing` that are not bound by an enclosing lambda, `let`, or
--- | case binder. Qualified names (top-level / foreign / constructors) are never
--- | captured. Order is first-appearance, deduplicated — used both to build the
--- | capture list and to index `EnvField`s, so it must be deterministic.
-freeVars :: Array String -> C.Expr -> Array String
-freeVars bound = Array.nub <<< goExpr bound
-  where
-  goExpr bnd = case _ of
-    C.Var _ (Qualified Nothing x) -> if Array.elem x bnd then [] else [ x ]
-    C.Var _ _ -> []
-    C.Literal _ lit -> goLit bnd lit
-    C.Constructor _ _ _ _ -> []
-    C.Accessor _ _ e -> goExpr bnd e
-    C.ObjectUpdate _ e _ updates -> goExpr bnd e <> (updates >>= \(Tuple _ v) -> goExpr bnd v)
-    C.Abs _ p e -> goExpr (Array.snoc bnd p) e
-    C.App _ f a -> goExpr bnd f <> goExpr bnd a
-    C.Case _ scruts alts -> (scruts >>= goExpr bnd) <> (alts >>= goAlt bnd)
-    C.Let _ binds body ->
-      -- Conservative scoping (sufficient for Slice 2, whose lambda bodies have no
-      -- nested lets): treat every let-bound name as in scope for both the
-      -- right-hand sides and the body.
-      let
-        bnd' = bnd <> (binds >>= bindNames)
-      in
-        (binds >>= bindExprs >>= goExpr bnd') <> goExpr bnd' body
-  goLit bnd = case _ of
-    C.LitArray es -> es >>= goExpr bnd
-    C.LitObject kvs -> kvs >>= \(Tuple _ v) -> goExpr bnd v
-    _ -> []
-  goAlt bnd alt =
-    let
-      bnd' = bnd <> (alt.binders >>= binderVars)
-    in
-      case alt.result of
-        Right e -> goExpr bnd' e
-        Left guards -> guards >>= \g -> goExpr bnd' g.guard <> goExpr bnd' g.expression
-  bindNames = case _ of
-    NonRec _ n _ -> [ n ]
-    Rec rs -> map _.ident rs
-  bindExprs = case _ of
-    NonRec _ _ e -> [ e ]
-    Rec rs -> map _.expr rs
-
--- | The variables a binder brings into scope.
-binderVars :: C.Binder -> Array String
-binderVars = case _ of
-  C.NullBinder _ -> []
-  C.VarBinder _ n -> [ n ]
-  C.NamedBinder _ n b -> Array.cons n (binderVars b)
-  C.LiteralBinder _ lit -> litBinderVars lit
-  C.ConstructorBinder _ _ _ bs -> bs >>= binderVars
-  where
-  litBinderVars = case _ of
-    C.LitArray bs -> bs >>= binderVars
-    C.LitObject kvs -> kvs >>= \(Tuple _ b) -> binderVars b
-    _ -> []
-
 resolveLocal :: Env -> String -> Lower Atom
 resolveLocal env ident = case Object.lookup ident env.locals of
   Just atom -> pure atom
@@ -192,7 +96,7 @@ resolveLocal env ident = case Object.lookup ident env.locals of
 
 -- | Bind an `Rhs` to a fresh slot (always `Boxed` under ADR 0004) and continue
 -- | with the atom naming its result.
-bindRhs :: Rhs -> (Atom -> Lower Block) -> Lower Block
+bindRhs :: Rhs -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 bindRhs rhs k = do
   slot <- fresh
   rest <- k (AVar (Local slot))
@@ -200,7 +104,7 @@ bindRhs rhs k = do
 
 -- | Reduce an expression to a trivial `Atom`, threading any computation into
 -- | `Let`s that wrap the continuation `k`.
-lowerArg :: Env -> C.Expr -> (Atom -> Lower Block) -> Lower Block
+lowerArg :: Env -> C.Expr -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerArg env expr k = case expr of
   C.Literal _ (C.LitInt n) -> k (ALitInt n)
   C.Literal _ _ -> throw (UnsupportedExpr "non-Int literal")
@@ -217,7 +121,7 @@ lowerArg env expr k = case expr of
   _ -> throw (UnsupportedExpr "unsupported expression in argument position")
 
 -- | Lower a left-to-right list of operands to atoms, then continue.
-lowerArgs :: Env -> Array C.Expr -> (Array Atom -> Lower Block) -> Lower Block
+lowerArgs :: Env -> Array C.Expr -> (Array Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerArgs env args k = case Array.uncons args of
   Nothing -> k []
   Just { head: e, tail } -> lowerArg env e \a -> lowerArgs env tail \as -> k (Array.cons a as)
@@ -226,7 +130,7 @@ lowerArgs env args k = case Array.uncons args of
 -- | function applied saturated is a direct primitive / allocation / call; any
 -- | other head (a local closure value or a lambda) is an `RApply` via
 -- | `call_ref`.
-lowerApp :: Env -> { head :: C.Expr, args :: Array C.Expr } -> (Atom -> Lower Block) -> Lower Block
+lowerApp :: Env -> { head :: C.Expr, args :: Array C.Expr } -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerApp env { head, args } k = case head of
   C.Var _ (Qualified (Just _) ident)
     | Just (Tuple intr arity) <- foreignIntrinsic ident ->
@@ -247,7 +151,7 @@ lowerApp env { head, args } k = case head of
 
 -- | Apply a closure atom to a list of argument atoms one at a time, each a
 -- | single-argument `RApply` whose result feeds the next (arity-1 closures).
-applyChain :: Atom -> Array Atom -> (Atom -> Lower Block) -> Lower Block
+applyChain :: Atom -> Array Atom -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 applyChain f args k = case Array.uncons args of
   Nothing -> k f
   Just { head: a, tail } -> bindRhs (RApply f a) \r -> applyChain r tail k
@@ -271,7 +175,7 @@ liftLambda env param body = do
   let codeEnv = env { locals = codeLocals }
   saved <- gets _.slot
   modify_ _ { slot = 2 }
-  codeBlock <- lowerTail codeEnv body
+  codeAnfExpr <- lowerTail codeEnv body
   codeCount <- gets _.slot
   modify_ _ { slot = saved }
   modify_ \s -> s
@@ -279,23 +183,23 @@ liftLambda env param body = do
         { name: codeName
         , params: [ CloRef, Boxed ] -- (ref $Clo), then the eqref argument
         , result: Boxed
-        , body: codeBlock
+        , body: codeAnfExpr
         , export: Nothing
         , localCount: codeCount
         }
     }
   pure { codeName, captures }
 
--- | Lower an expression in tail position to a complete `Block`.
-lowerTail :: Env -> C.Expr -> Lower Block
+-- | Lower an expression in tail position to a complete `AnfExpr`.
+lowerTail :: Env -> C.Expr -> Lower AnfExpr
 lowerTail env = case _ of
   C.Case _ scrutinees alternatives -> lowerCase env scrutinees alternatives
   C.Let _ binds body -> lowerCoreLet env binds body
-  expr -> lowerArg env expr \atom -> pure (Ret atom)
+  expr -> lowerArg env expr \atom -> pure (Return atom)
 
 -- | A CoreFn `let` (non-recursive): bind each definition, extending the local
 -- | environment, then lower the body. (purs hoists `case` scrutinees here.)
-lowerCoreLet :: Env -> Array Bind -> C.Expr -> Lower Block
+lowerCoreLet :: Env -> Array Bind -> C.Expr -> Lower AnfExpr
 lowerCoreLet env binds body = case Array.uncons binds of
   Nothing -> lowerTail env body
   Just { head: NonRec _ ident e, tail } ->
@@ -304,7 +208,7 @@ lowerCoreLet env binds body = case Array.uncons binds of
   Just { head: Rec _ } -> throw (UnsupportedExpr "recursive let (deferred)")
 
 -- | Compile a `case` into a `Switch` on the scrutinee's constructor tag.
-lowerCase :: Env -> Array C.Expr -> Array C.CaseAlternative -> Lower Block
+lowerCase :: Env -> Array C.Expr -> Array C.CaseAlternative -> Lower AnfExpr
 lowerCase env scrutinees alternatives = case scrutinees of
   [ scrutinee ] ->
     lowerArg env scrutinee \scrutAtom -> do
@@ -327,7 +231,7 @@ lowerAlternative env scrutAtom alt = case alt.result of
     _ -> throw (UnsupportedBinder "Slice 1 expects exactly one binder per alternative")
 
 -- | Bind a constructor's sub-binders to its fields by position.
-bindFields :: Env -> Atom -> Int -> Array C.Binder -> C.Expr -> Lower Block
+bindFields :: Env -> Atom -> Int -> Array C.Binder -> C.Expr -> Lower AnfExpr
 bindFields env scrutAtom index subBinders body = case Array.uncons subBinders of
   Nothing -> lowerTail env body
   Just { head: b, tail } -> case b of

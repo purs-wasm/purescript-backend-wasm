@@ -28,7 +28,7 @@ import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.IR (Atom(..), Block(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
 
 -- | The module's runtime heap types, plus the (non-null) reference value types
 -- | derived from them for `ref.cast` targets, field reads, and signatures.
@@ -148,12 +148,12 @@ unboxIntExpr ctx e = do
   B.structGet ctx.mod 0 c B.i32 false
 
 -- | Generate a function body. `Let`s become `local.set` statements sequenced in
--- | a `block` whose value is the tail (`Ret` atom or `Switch`).
-genBody :: Ctx -> Block -> Effect B.Expression
+-- | a `block` whose value is the tail (`Return` atom or `Switch`).
+genBody :: Ctx -> AnfExpr -> Effect B.Expression
 genBody ctx = go []
   where
   go statements = case _ of
-    Ret atom -> seal statements =<< genAtom ctx atom
+    Return atom -> seal statements =<< genAtom ctx atom
     Switch scrutAtom branches dflt -> seal statements =<< genSwitch ctx scrutAtom branches dflt
     Let (Slot index) _ rhs k -> do
       e <- genRhs ctx rhs
@@ -165,7 +165,7 @@ genBody ctx = go []
 
 -- | A `Switch` becomes a chain of `if (tag == k) <branch> else …`, ending in the
 -- | default block or `unreachable`. The tag is read afresh per comparison.
-genSwitch :: Ctx -> Atom -> Array Branch -> Maybe Block -> Effect B.Expression
+genSwitch :: Ctx -> Atom -> Array Branch -> Maybe AnfExpr -> Effect B.Expression
 genSwitch ctx scrutAtom branches dflt = chain branches
   where
   readTag = do
