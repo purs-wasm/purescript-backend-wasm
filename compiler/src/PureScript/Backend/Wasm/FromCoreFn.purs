@@ -239,11 +239,18 @@ lowerApp env { head, args } k = case head of
   _ ->
     lowerArg env head \fAtom ->
       lowerArgs env args \atoms ->
-        bindRhs (RApply fAtom atoms) k
+        applyChain fAtom atoms k
   where
   saturated name arity withAtoms =
     if Array.length args == arity then lowerArgs env args withAtoms
     else throw (NotSaturated name arity (Array.length args))
+
+-- | Apply a closure atom to a list of argument atoms one at a time, each a
+-- | single-argument `RApply` whose result feeds the next (arity-1 closures).
+applyChain :: Atom -> Array Atom -> (Atom -> Lower Block) -> Lower Block
+applyChain f args k = case Array.uncons args of
+  Nothing -> k f
+  Just { head: a, tail } -> bindRhs (RApply f a) \r -> applyChain r tail k
 
 -- | Lift a `C.Abs` to a top-level code function and return its name plus the
 -- | atoms to capture (the lambda's free locals, resolved in the current scope).

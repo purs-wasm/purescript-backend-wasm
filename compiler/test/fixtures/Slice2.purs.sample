@@ -28,3 +28,12 @@ applyTwice f x = f (f x)
 
 twiceAdd :: Int -> Int -> Int
 twiceAdd k x = applyTwice (\y -> addI k y) x
+
+-- `f x y` applies an unknown function value to *two* arguments — a multi-argument
+-- application, lowered to a chain of single-argument `call_ref`s.
+applyBoth :: (Int -> Int -> Int) -> Int -> Int -> Int
+applyBoth f x y = f x y
+
+-- `sum3 a b c == a + b + c`, via a nested capturing lambda passed to applyBoth.
+sum3 :: Int -> Int -> Int -> Int
+sum3 a b c = applyBoth (\x y -> addI (addI a x) y) b c

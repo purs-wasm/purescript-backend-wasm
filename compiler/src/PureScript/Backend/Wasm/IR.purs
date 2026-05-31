@@ -127,10 +127,10 @@ data Rhs
   -- | variables (its environment), in capture order. Lowered to
   -- | `struct.new $Clo [ref.func code, array.new_fixed $Vals captures]`.
   | RMkClosure FuncName (Array Atom)
-  -- | Apply a closure value (an `eqref`) to arguments. Slice 2 is full-apply:
-  -- | each argument is a separate `call_ref` through the closure's arity-1 code,
-  -- | so multiple arguments chain left to right.
-  | RApply Atom (Array Atom)
+  -- | Apply a closure value (an `eqref`) to a *single* argument via `call_ref`.
+  -- | Closures are arity-1 (PureScript curries), so the lowering decomposes a
+  -- | multi-argument application into a left-to-right chain of these.
+  | RApply Atom Atom
 
 -- Slice 3: | RMkRecord (Array (Tuple String Atom)) | RProjLabel Atom String
 -- where needed: | RBox Rep Atom | RUnbox Rep Atom

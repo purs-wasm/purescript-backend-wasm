@@ -220,17 +220,16 @@ genRhs ctx = case _ of
     envArr <- B.arrayNewFixed ctx.mod ctx.rt.valsHt capEs
     fref <- B.refFunc ctx.mod (funcNameStr codeName) ctx.rt.codeHt
     B.structNew ctx.mod ctx.rt.cloHt [ fref, envArr ]
-  -- Slice 2 is single-argument full-apply: read the closure's funcref, cast it
-  -- to `(ref $Code)`, and `call_ref` with the closure itself plus the argument.
-  RApply headAtom args -> case args of
-    [ arg ] -> do
-      cloForCode <- genAtom ctx headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
-      fref <- B.structGet ctx.mod 0 cloForCode B.funcref false
-      codeF <- B.refCast ctx.mod fref ctx.rt.refCode
-      cloOperand <- genAtom ctx headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
-      argE <- genAtom ctx arg
-      B.callRef ctx.mod codeF [ cloOperand, argE ] ctx.rt.codeHt
-    _ -> throwException (error "Codegen: multi-argument apply is deferred (Slice 2 is single-arg full-apply)")
+  -- Apply an arity-1 closure: read its funcref, cast to `(ref $Code)`, and
+  -- `call_ref` with the closure itself plus the argument. (A multi-argument
+  -- application is a chain of these, produced by the lowering.)
+  RApply headAtom argAtom -> do
+    cloForCode <- genAtom ctx headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
+    fref <- B.structGet ctx.mod 0 cloForCode B.funcref false
+    codeF <- B.refCast ctx.mod fref ctx.rt.refCode
+    cloOperand <- genAtom ctx headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
+    argE <- genAtom ctx argAtom
+    B.callRef ctx.mod codeF [ cloOperand, argE ] ctx.rt.codeHt
 
 -- | Slice 0/1 intrinsics are all binary `i32` ops; operands are unboxed, the op
 -- | applied, and the result re-boxed. The lowering guarantees the arity.

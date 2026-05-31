@@ -73,7 +73,7 @@ rhsAtoms = case _ of
   RMkData _ as -> as
   RProjField a _ -> [ a ]
   RMkClosure _ as -> as
-  RApply a as -> Array.cons a as
+  RApply f a -> [ f, a ]
 
 -- | Every `Atom` appearing in a block.
 blockAtoms :: Block -> Array Atom
@@ -158,6 +158,15 @@ spec = describe "PureScript.Backend.Wasm.FromCoreFn (lowering)" do
           case exported "g" prog of
             Nothing -> fail "expected an exported function g"
             Just fn -> Array.any isApply (allRhs fn.body) `shouldEqual` true
+
+    it "chains a multi-argument application into single-argument applies" do
+      -- g f x y = f x y  -- an unknown 2-argument application
+      let g = def "g" (lam "f" (lam "x" (lam "y" (appE (appE (lv "f") (lv "x")) (lv "y")))))
+      case lower [ g ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "g" prog of
+          Nothing -> fail "expected an exported function g"
+          Just fn -> Array.length (Array.filter isApply (allRhs fn.body)) `shouldEqual` 2
 
     it "keeps a saturated intrinsic as a primitive, not an apply" do
       -- h x = addI x x

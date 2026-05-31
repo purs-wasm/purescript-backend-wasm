@@ -7,7 +7,7 @@ module Test.E2E.Slice2 (spec) where
 import Prelude
 
 import Effect.Class (liftEffect)
-import Test.E2E.Wasm (callI32x2, instantiateFixture)
+import Test.E2E.Wasm (callI32x2, callI32x3, instantiateFixture)
 import Test.Spec (Spec, before, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -25,3 +25,8 @@ spec =
         it "passes a capturing lambda to a higher-order function" \inst -> do
           result <- liftEffect (callI32x2 inst "twiceAdd" 10 5)
           result `shouldEqual` 25
+
+        -- sum3 a b c = applyBoth (\x y -> addI (addI a x) y) b c  -- multi-arg apply
+        it "applies a multi-argument closure via a chain of call_ref" \inst -> do
+          result <- liftEffect (callI32x3 inst "sum3" 1 2 3)
+          result `shouldEqual` 6
