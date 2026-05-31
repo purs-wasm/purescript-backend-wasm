@@ -350,6 +350,28 @@ another (thunked) field `<SuperclassName><n>` (e.g. `Base0`), read by the same
 deep hierarchies work. (Positional/tuple dictionaries would be faster but need
 type information; deferred to a later optimization — ADR 0007.)
 
+### Performance note: dictionaries are rebuilt on every use (no memoization)
+
+`purs` already hoists an instance-specialized method to a module-level binding —
+e.g. `doubleInt n = double n` becomes `double1 = double addableInt` plus
+`doubleInt = \n -> double1 n`, so the specialization is named once rather than
+repeated at each call site. We **preserve** that structure.
+
+What we do **not** yet do is *memoize* it. A top-level value binding (a CAF — an
+instance dictionary like `addableInt`, or a specialized method like `double1`)
+compiles to a **nullary function**, and every reference to it is a fresh `call`.
+So each `doubleInt(n)` re-runs `double1()` → `addableInt()`, which **re-allocates
+the dictionary `$Rec` struct and its arrays and re-does the label projection**
+every time. The JS backend's `const double1 = double(addableInt)` instead
+evaluates once at module load and caches the value.
+
+This is a real penalty on the dispatch hot path (allocation + search per call).
+The fix is **ADR 0006** (compile acyclic CAFs to module globals initialized once),
+which would give the same evaluate-once sharing as the JS `const`. Eliminating
+the dictionary and projection altogether — `add dict x y → intAdd x y` — is the
+separate, further optimization of **ADR 0005** (dictionary elimination). Both are
+Proposed, not yet implemented.
+
 ## Host interface
 
 Every exported function gets a thin `…$export` wrapper with the host-facing

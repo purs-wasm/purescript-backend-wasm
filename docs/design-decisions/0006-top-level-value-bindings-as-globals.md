@@ -52,6 +52,14 @@ globalized; recursive non-function values remain unsupported.
 - The host reads `five.value` instead of calling `five()`, matching the intuition
   that a value is a value; it is also computed once at instantiation rather than
   recomputed on every call.
+- Concrete motivation after Slice 3: instance dictionaries and instance-specialized
+  methods (`addableInt`, `double1 = double addableInt`) are CAFs, and as nullary
+  getter functions they are **re-evaluated on every reference** — re-allocating the
+  dictionary `$Rec` struct/arrays and re-doing the label projection on each dispatch
+  (see `docs/supported-features.md`). Globalizing CAFs gives the same evaluate-once
+  sharing the JS backend gets from `const double1 = double(addableInt)`, removing
+  that per-call allocation from the dictionary hot path. (Eliminating the dictionary
+  entirely is the separate ADR 0005 optimization.)
 - Requires a topological sort of value-binding dependencies and a synthesized
   init function. Evaluation moves to instantiation time; since current CAFs are
   pure (`Effect` is deferred, ADR scope), eager initialization is observationally
