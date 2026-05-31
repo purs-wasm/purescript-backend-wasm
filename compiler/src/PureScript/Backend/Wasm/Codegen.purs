@@ -26,9 +26,10 @@ import Data.Array as Array
 import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 
 -- | The module's runtime heap types, plus the (non-null) reference value types
 -- | derived from them for `ref.cast` targets, field reads, and signatures.
@@ -162,9 +163,51 @@ genBody ctx = go []
       e <- genRhs ctx rhs
       stmt <- B.localSet ctx.mod index e
       go (Array.snoc statements stmt) k
+    LetRec recBinds k -> do
+      let groupSlots = map (\(RecBind (Slot s) _ _) -> s) recBinds
+      allocs <- traverse (allocRecClosure ctx groupSlots) recBinds
+      patches <- traverse (patchRecClosure ctx groupSlots) recBinds
+      go (statements <> allocs <> Array.concat patches) k
   seal statements value =
     if Array.null statements then pure value
     else B.block ctx.mod (Array.snoc statements value) B.eqref
+
+-- | Is this captured atom a forward reference to another member of the same
+-- | `LetRec` group (and thus a slot to back-patch)?
+isGroupRef :: Array Int -> Atom -> Boolean
+isGroupRef groupSlots = case _ of
+  AVar (Local (Slot s)) -> Array.elem s groupSlots
+  _ -> false
+
+-- | Allocate one recursive closure, with sibling-referencing env slots left as a
+-- | placeholder (a boxed 0, overwritten by `patchRecClosure`); returns the
+-- | `local.set` of the closure into its slot.
+allocRecClosure :: Ctx -> Array Int -> RecBind -> Effect B.Expression
+allocRecClosure ctx groupSlots (RecBind (Slot slot) codeName env) = do
+  envEls <- traverse element env
+  envArr <- B.arrayNewFixed ctx.mod ctx.rt.valsHt envEls
+  fref <- B.refFunc ctx.mod (funcNameStr codeName) ctx.rt.codeHt
+  clo <- B.structNew ctx.mod ctx.rt.cloHt [ fref, envArr ]
+  B.localSet ctx.mod slot clo
+  where
+  element atom
+    | isGroupRef groupSlots atom = B.i32Const ctx.mod 0 >>= boxInt ctx
+    | otherwise = genAtom ctx atom
+
+-- | Back-patch a recursive closure's environment: for every slot that referred
+-- | to a sibling (now allocated), `array.set` the real closure into place.
+patchRecClosure :: Ctx -> Array Int -> RecBind -> Effect (Array B.Expression)
+patchRecClosure ctx groupSlots (RecBind (Slot slot) _ env) =
+  traverse patch (Array.filter (\(Tuple _ a) -> isGroupRef groupSlots a) (Array.mapWithIndex Tuple env))
+  where
+  patch (Tuple index atom) = do
+    -- the group slot is an `eqref` local; narrow it to `(ref $Clo)` to reach the
+    -- environment array
+    clo <- B.localGet ctx.mod slot B.eqref >>= \c -> B.refCast ctx.mod c ctx.rt.refClo
+    envArr <- B.structGet ctx.mod 1 clo ctx.rt.refVals false
+    idx <- B.i32Const ctx.mod index
+    val <- genAtom ctx atom
+    B.arraySet ctx.mod envArr idx val
 
 -- | A `Switch` becomes a chain of `if (tag == k) <branch> else …`, ending in the
 -- | default block or `unreachable`. The tag is read afresh per comparison.

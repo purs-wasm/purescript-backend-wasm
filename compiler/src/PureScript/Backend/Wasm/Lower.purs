@@ -22,8 +22,9 @@
 -- |   * **Recursion.** Top-level `Rec` groups compile as ordinary module
 -- |     functions calling one another by name. A single-binding recursive `let`
 -- |     recurs through the code function's own closure parameter (no knot-tying).
--- |     Mutually-recursive `let` groups (which would need allocate-then-patch
--- |     knot-tying) are not yet supported.
+-- |     A mutually-recursive `let` group becomes a `LetRec`: the closures are
+-- |     allocated first and their sibling-referencing environment slots are then
+-- |     back-patched (knot-tying), since each refers to the others.
 module PureScript.Backend.Wasm.Lower
   ( lowerModule
   , module ReExport
@@ -44,7 +45,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.FreeVars (freeVars)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.CoreFn (Bind(..), Module, Qualified(..))
 import PureScript.CoreFn as C
 
@@ -264,8 +265,29 @@ lowerCoreLet env binds body = case Array.uncons binds of
       { codeName, captures } <- liftLambda (Just ident) env param recBody
       bindRhs (RMkClosure codeName captures) \fAtom ->
         lowerCoreLet (env { locals = Object.insert ident fAtom env.locals }) tail body
-    [ _ ] -> throw (UnsupportedExpr "a recursive let binding must be a function")
-    _ -> throw (UnsupportedExpr "mutually-recursive let (knot-tying not yet supported)")
+    _ -> do
+      -- Mutual recursion: pre-allocate a slot per binding so each member's
+      -- closure can refer to its siblings (as forward references resolved by the
+      -- `LetRec` knot-tying), then lift each member's body.
+      slots <- traverse (const fresh) recBinds
+      let
+        bound = Array.zip recBinds slots
+        env' = env
+          { locals = foldl (\m (Tuple rb s) -> Object.insert rb.ident (AVar (Local s)) m) env.locals bound }
+      recBindsIR <- traverse (lowerRecBind env') bound
+      rest <- lowerCoreLet env' tail body
+      pure (LetRec recBindsIR rest)
+
+-- | Lower one member of a mutually-recursive `let` group, given its
+-- | pre-allocated slot. Captures are resolved in an environment where every
+-- | group member is already bound to its slot, so sibling references become
+-- | forward references for the `LetRec` to patch.
+lowerRecBind :: Env -> Tuple C.RecBinding Slot -> Lower RecBind
+lowerRecBind env (Tuple rb slot) = case rb.expr of
+  C.Abs _ param recBody -> do
+    { codeName, captures } <- liftLambda Nothing env param recBody
+    pure (RecBind slot codeName captures)
+  _ -> throw (UnsupportedExpr "a recursive let binding must be a function")
 
 -- | Compile a `case` into a `Switch` on the scrutinee's constructor tag.
 lowerCase :: Env -> Array C.Expr -> Array C.CaseAlternative -> Lower AnfExpr

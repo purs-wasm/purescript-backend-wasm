@@ -54,3 +54,20 @@ countN n =
 
 count3 :: Int
 count3 = countN (S (S (S Z)))
+
+-- local *mutual* recursion: `ev`/`od` reference each other in one `let rec`
+-- group, so each closure captures the other (resolved by knot-tying).
+parity :: Nat -> Int
+parity n =
+  let
+    ev m = case m of
+      Z -> 1
+      S k -> od k
+    od m = case m of
+      Z -> 0
+      S k -> ev k
+  in
+    ev n
+
+parityOf5 :: Int
+parityOf5 = parity (S (S (S (S (S Z)))))

@@ -12,7 +12,7 @@ import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), maybe)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower (LowerError, lowerModule)
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), IRFunc, Program, Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), IRFunc, Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
@@ -47,6 +47,11 @@ ctor typeName name fields = CF.NonRec ann name (CF.Constructor ann typeName name
 letRec :: String -> CF.Expr -> CF.Expr -> CF.Expr
 letRec name recExpr body = CF.Let ann [ CF.Rec [ { ann, ident: name, expr: recExpr } ] ] body
 
+-- | `let { n1 = e1; n2 = e2 } in body`, as a two-binding recursive `let`.
+letRec2 :: String -> CF.Expr -> String -> CF.Expr -> CF.Expr -> CF.Expr
+letRec2 n1 e1 n2 e2 body =
+  CF.Let ann [ CF.Rec [ { ann, ident: n1, expr: e1 }, { ann, ident: n2, expr: e2 } ] ] body
+
 lower :: Array CF.Bind -> Either LowerError Program
 lower decls = lowerModule
   { name: [ "T" ]
@@ -68,6 +73,7 @@ allRhs = case _ of
   Let _ _ rhs k -> Array.cons rhs (allRhs k)
   Switch _ branches dflt ->
     (branches >>= \(Branch _ b) -> allRhs b) <> maybe [] allRhs dflt
+  LetRec _ k -> allRhs k
 
 rhsAtoms :: Rhs -> Array Atom
 rhsAtoms = case _ of
@@ -86,6 +92,7 @@ blockAtoms = case _ of
   Let _ _ rhs k -> rhsAtoms rhs <> blockAtoms k
   Switch s branches dflt ->
     Array.cons s ((branches >>= \(Branch _ b) -> blockAtoms b) <> maybe [] blockAtoms dflt)
+  LetRec recBinds k -> (recBinds >>= \(RecBind _ _ env) -> env) <> blockAtoms k
 
 -- | The capture lists of every `RMkClosure` in a block.
 closureCaptures :: AnfExpr -> Array (Array Atom)
@@ -119,6 +126,13 @@ selfApply :: Rhs -> Boolean
 selfApply = case _ of
   RApply (AVar (Local (Slot 0))) _ -> true
   _ -> false
+
+-- | The members of the first `LetRec` group reachable along the `Let` spine.
+letRecOf :: AnfExpr -> Maybe (Array RecBind)
+letRecOf = case _ of
+  LetRec rbs _ -> Just rbs
+  Let _ _ _ k -> letRecOf k
+  _ -> Nothing
 
 exported :: String -> Program -> Maybe IRFunc
 exported name prog = Array.find (\fn -> fn.export == Just name) prog.funcs
@@ -213,6 +227,28 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Right prog -> case Array.head (liftedFuncs prog) of
           Nothing -> fail "expected a lifted code function for go"
           Just code -> Array.any selfApply (allRhs code.body) `shouldEqual` true
+
+    it "compiles a mutually-recursive let to a knot-tied LetRec group" do
+      -- p x = let ev m = od m; od m = ev m in ev x
+      let
+        p = def "p"
+          ( lam "x"
+              ( letRec2
+                  "ev"
+                  (lam "m" (appE (lv "od") (lv "m")))
+                  "od"
+                  (lam "m" (appE (lv "ev") (lv "m")))
+                  (appE (lv "ev") (lv "x"))
+              )
+          )
+      case lower [ p ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "p" prog of
+          Nothing -> fail "expected an exported function p"
+          Just fn -> case letRecOf fn.body of
+            Nothing -> fail "expected a LetRec group"
+            -- two members, each capturing exactly its sibling
+            Just rbs -> map (\(RecBind _ _ env) -> Array.length env) rbs `shouldEqual` [ 1, 1 ]
 
   describe "data types" do
     it "assigns constructor tags by declaration order and erases the constructors" do

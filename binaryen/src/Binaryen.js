@@ -154,6 +154,9 @@ export const arrayNewFixed = (mod) => (ht) => (values) => () => {
 export const arrayGet = (mod) => (ref) => (index) => (ty) => (signed) => () =>
   binaryen._BinaryenArrayGet(mod.ptr, ref, index, ty, signed ? 1 : 0);
 
+export const arraySet = (mod) => (ref) => (index) => (value) => () =>
+  binaryen._BinaryenArraySet(mod.ptr, ref, index, value);
+
 export const refCast = (mod) => (ref) => (ty) => () =>
   binaryen._BinaryenRefCast(mod.ptr, ref, ty);
 

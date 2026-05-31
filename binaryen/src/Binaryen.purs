@@ -53,6 +53,7 @@ module Binaryen
   , structGet
   , arrayNewFixed
   , arrayGet
+  , arraySet
   , refCast
   , refFunc
   , callRef
@@ -239,6 +240,10 @@ foreign import arrayNewFixed :: Module -> HeapType -> Array Expression -> Effect
 -- | `array.get`: read element at `index` (of value type `elementType`) from
 -- | `ref`. The boolean is sign extension, relevant only for packed elements.
 foreign import arrayGet :: Module -> Expression -> Expression -> Type -> Boolean -> Effect Expression
+
+-- | `array.set`: write `value` into element `index` of the (mutable) array
+-- | `ref`. Used to back-patch mutually-recursive closures' environments.
+foreign import arraySet :: Module -> Expression -> Expression -> Expression -> Effect Expression
 
 -- | `ref.cast`: narrow `ref` to value type `ty` (traps on mismatch).
 foreign import refCast :: Module -> Expression -> Type -> Effect Expression

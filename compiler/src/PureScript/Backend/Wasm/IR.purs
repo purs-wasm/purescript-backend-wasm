@@ -153,21 +153,33 @@ data AnfExpr
   -- | `Let`s. The optional default is taken when no tag matches; a
   -- | non-exhaustive match with no default traps (`unreachable`).
   | Switch Atom (Array Branch) (Maybe AnfExpr)
-
--- Slice 2: | LetRec (Array (Tuple Slot Alloc)) AnfExpr   -- allocate-then-patch knot-tying
+  -- | A mutually-recursive closure group (a `let rec` of functions). Each
+  -- | `RecBind` is allocated first with its environment, then the slots that
+  -- | refer to sibling group members are back-patched (knot-tying), since those
+  -- | closures do not exist when the array is built. Bound for the continuation.
+  | LetRec (Array RecBind) AnfExpr
 
 -- | One arm of a `Switch`: the constructor `tag` it matches, and the expression
 -- | to run when the scrutinee has that tag.
 data Branch = Branch Int AnfExpr
 
+-- | One member of a `LetRec`: the slot it binds, the lifted code function, and
+-- | its captured environment (in order). Env atoms that reference another
+-- | member's slot are the forward references resolved by knot-tying.
+data RecBind = RecBind Slot FuncName (Array Atom)
+
 instance showBranch :: Show Branch where
   show (Branch tag body) = "(Branch " <> show tag <> " " <> show body <> ")"
+
+instance showRecBind :: Show RecBind where
+  show (RecBind slot name env) = "(RecBind " <> show slot <> " " <> show name <> " " <> show env <> ")"
 
 instance showAnfExpr :: Show AnfExpr where
   show = case _ of
     Return a -> "(Return " <> show a <> ")"
     Let s r rhs k -> "(Let " <> show s <> " " <> show r <> " " <> show rhs <> " " <> show k <> ")"
     Switch scrut branches dflt -> "(Switch " <> show scrut <> " " <> show branches <> " " <> show dflt <> ")"
+    LetRec binds k -> "(LetRec " <> show binds <> " " <> show k <> ")"
 
 -- | A top-level function. `params` carries both the arity (its length) and the
 -- | representation of each parameter; parameters occupy slots

@@ -32,8 +32,8 @@ Code generation, by slice (see
 - [x] **Slice 0** — scalar core: top-level functions, saturated calls, integer
       literals, inlined i32 intrinsics; exported and runnable from the host
 - [x] **Slice 1** — boxing (`eqref`) + ADTs + pattern matching (decision trees)
-- [x] **Slice 2** — closures + higher-order application (eval/apply, full-apply;
-      partial application & recursive `let` deferred)
+- [x] **Slice 2** — closures + currying (eval/apply): partial/over application,
+      first-class functions, top-level & local recursion (`let rec` knot-tying)
 - [ ] **Slice 3** — records + type-class dictionaries (dictionary-passing E2E)
 - [ ] **Slice 4** — strings + string runtime + arrays (`show`, `<>`, …)
 

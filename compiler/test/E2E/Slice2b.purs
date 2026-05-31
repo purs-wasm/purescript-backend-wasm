@@ -29,3 +29,8 @@ spec =
         it "runs a self-recursive local let-binding" \inst -> do
           result <- liftEffect (callI32x0 inst "count3")
           result `shouldEqual` 3
+
+        -- parityOf5 = parity 5, via mutually-recursive local `let rec ev/od` (knot-tying)
+        it "runs a mutually-recursive local let-binding" \inst -> do
+          result <- liftEffect (callI32x0 inst "parityOf5")
+          result `shouldEqual` 0
