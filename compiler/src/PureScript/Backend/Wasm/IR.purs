@@ -27,6 +27,7 @@ data Rep
   = I32 -- Int (and, in monomorphic positions later, Char / Boolean)
   | F64 -- Number
   | Boxed -- the universal `eqref` box of ADR 0001 (Slice 1+)
+  | CloRef -- (ref $Clo): the closure parameter of a lifted code function (Slice 2)
 
 derive instance eqRep :: Eq Rep
 derive instance genericRep :: Generic Rep _
@@ -52,10 +53,13 @@ instance showSlot :: Show Slot where
 -- | Slice 0 only needs `Local`; the constructors a later slice adds are noted
 -- | rather than declared, to keep pattern matches in the lowering/codegen total
 -- | over exactly what exists today.
-data VarRef = Local Slot
+data VarRef
+  = Local Slot
+  -- | A captured free variable, read by index from the enclosing closure's
+  -- | environment array. Only appears inside a lifted code function (Slice 2).
+  | EnvField Int
 
 -- Slice 1: | Global FuncName  -- reference to a top-level value
--- Slice 2: | EnvField Int     -- a captured free variable, read from the closure env
 
 derive instance eqVarRef :: Eq VarRef
 derive instance genericVarRef :: Generic VarRef _
@@ -119,9 +123,15 @@ data Rhs
   -- | the field's `eqref`. Lowered to a cast to `(ref $ADT)`, a `struct.get` of
   -- | the fields array, then `array.get`.
   | RProjField Atom Int
+  -- | Allocate a closure: the lifted code function plus the captured free
+  -- | variables (its environment), in capture order. Lowered to
+  -- | `struct.new $Clo [ref.func code, array.new_fixed $Vals captures]`.
+  | RMkClosure FuncName (Array Atom)
+  -- | Apply a closure value (an `eqref`) to arguments. Slice 2 is full-apply:
+  -- | each argument is a separate `call_ref` through the closure's arity-1 code,
+  -- | so multiple arguments chain left to right.
+  | RApply Atom (Array Atom)
 
--- Slice 2: | RApply Atom (Array Atom)      -- generic curried apply (arity mismatch)
---          | RMkClosure FuncName (Array Atom)
 -- Slice 3: | RMkRecord (Array (Tuple String Atom)) | RProjLabel Atom String
 -- where needed: | RBox Rep Atom | RUnbox Rep Atom
 

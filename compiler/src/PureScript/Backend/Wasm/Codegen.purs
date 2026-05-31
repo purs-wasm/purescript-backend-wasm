@@ -158,6 +158,9 @@ genAtom :: Ctx -> Atom -> Effect B.Expression
 genAtom ctx = case _ of
   ALitInt n -> B.i32Const ctx.mod n >>= boxInt ctx
   AVar (Local (Slot index)) -> B.localGet ctx.mod index B.eqref
+  -- Implemented in Slice 2 (task #17): read the captured value from the
+  -- enclosing closure's environment array.
+  AVar (EnvField _) -> throwException (error "Codegen: EnvField is implemented in Slice 2 (task #17)")
 
 genRhs :: Ctx -> Rhs -> Effect B.Expression
 genRhs ctx = case _ of
@@ -177,6 +180,9 @@ genRhs ctx = case _ of
     vals <- B.structGet ctx.mod 1 c ctx.rt.refVals false
     idx <- B.i32Const ctx.mod index
     B.arrayGet ctx.mod vals idx B.eqref false
+  -- Implemented in Slice 2 (task #17), with the $Clo / $Code types and call_ref.
+  RMkClosure _ _ -> throwException (error "Codegen: RMkClosure is implemented in Slice 2 (task #17)")
+  RApply _ _ -> throwException (error "Codegen: RApply is implemented in Slice 2 (task #17)")
 
 -- | Slice 1 intrinsics are all binary `i32` ops; operands are unboxed, the op is
 -- | applied, and the result re-boxed. The lowering guarantees the arity.
