@@ -21,7 +21,7 @@ functions take and return `eqref`. The recurring shapes in the WAT:
 Binaryen prunes unused types, so a module that only uses `Int` shows just the
 boxed-`Int` struct.
 
-## Top-level functions and full (saturated) application
+## Top-level functions, saturated application, and 32-bit integer arithmetic
 
 ```purs
 foreign import addI :: Int -> Int -> Int
@@ -34,8 +34,9 @@ five = addN 2 3
 ```
 
 `addI` is a module-local foreign primitive mapped to the `i32.add` intrinsic
-(ADR 0002). `five` is a saturated call to `addN`, which lowers to a direct
-`call`. Full emitted WAT:
+(ADR 0002); `mulI`/`subI` map to `i32.mul`/`i32.sub` the same way. `Int`
+literals box an `i32.const`. `five` is a saturated call to `addN`, which lowers
+to a direct `call`. Full emitted WAT:
 
 ```wat
 (module
@@ -72,7 +73,167 @@ five = addN 2 3
 
 So the host calls `five()` → `5`, `addN(2, 3)` → `5`.
 
-## Mutually-recursive local bindings (`let rec`)
+## Algebraic data types and single-scrutinee pattern matching
+
+```purs
+data OptInt = None | Some Int
+
+orElse :: OptInt -> Int -> Int
+orElse o d = case o of
+  None -> d
+  Some x -> x
+
+someOrElse :: Int -> Int
+someOrElse n = orElse (Some n) 0
+```
+
+A value of an ADT is `(struct tag fields)`: an `i32` **constructor tag**
+(assigned by declaration order — `None` = 0, `Some` = 1) plus a boxed-`eqref`
+**field array**. Construction is `struct.new` over an `array.new_fixed` of the
+fields. A single-scrutinee `case` lowers to a **decision tree**: an `if`/`else`
+chain that compares the scrutinee's tag against each constructor; a constructor
+binder reads the matched fields out of the array with `array.get`. The match is
+known to be exhaustive, so the final fall-through is `unreachable`.
+
+```wat
+;; types: $0 = (struct (field i32))                    boxed Int
+;;        $1 = (array (mut eqref))                      field array
+;;        $2 = (struct (field i32) (field (ref $1)))    an ADT: tag + fields
+(func $M.orElse (param $0 eqref) (param $1 eqref) (result eqref)   ;; o, d
+  (local $2 eqref)
+  (if (result eqref)
+   (i32.eq (struct.get $2 0 (ref.cast (ref $2) (local.get $0))) (i32.const 0))   ;; tag o == 0 (None)?
+   (then (local.get $1))                                                         ;; None -> d
+   (else
+    (if (result eqref)
+     (i32.eq (struct.get $2 0 (ref.cast (ref $2) (local.get $0))) (i32.const 1)) ;; tag o == 1 (Some)?
+     (then
+      ;; Some x -> x  : bind x = field 0 of o, then return it
+      (local.set $2 (array.get $1 (struct.get $2 1 (ref.cast (ref $2) (local.get $0))) (i32.const 0)))
+      (local.get $2))
+     (else (unreachable))))))                                                    ;; exhaustive
+(func $M.someOrElse (param $0 eqref) (result eqref)   ;; n
+  (local $1 eqref) (local $2 eqref)
+  ;; Some n  — construct: tag 1, one field
+  (local.set $1 (struct.new $2 (i32.const 1) (array.new_fixed $1 1 (local.get $0))))
+  ;; orElse (Some n) 0  — saturated direct call; the literal 0 is box(0)
+  (local.set $2 (call $M.orElse (local.get $1) (struct.new $0 (i32.const 0))))
+  (local.get $2))
+```
+
+A nullary constructor just has an empty field array (`None` is
+`(struct.new $2 (i32.const 0) (array.new_fixed $1 0))`), and binders at other
+positions read the corresponding index — e.g. `case Triple a b c of Triple _ _ z`
+reads `z` with `(array.get $1 … (i32.const 2))`.
+
+## Closures and higher-order functions
+
+```purs
+foreign import addI :: Int -> Int -> Int
+
+applyTwice :: (Int -> Int) -> Int -> Int
+applyTwice f x = f (f x)
+
+twiceAdd :: Int -> Int -> Int
+twiceAdd k x = applyTwice (\y -> addI k y) x
+```
+
+A closure is `(struct funcref (ref env))`: a **code pointer** plus a captured-
+environment array. A lambda is lambda-lifted to a top-level code function whose
+*first* parameter is its own closure (so it can read captures from the env);
+`twiceAdd` builds the closure for `\y -> addI k y`, capturing `k` in the env.
+Applying an *unknown* function value (here `applyTwice`'s parameter `f`) loads
+its code pointer and uses `call_ref`, passing the closure itself as the first
+argument (eval/apply, ADR 0003).
+
+```wat
+;; types: $1 = (array (mut eqref))                         env array
+;;        $2 = (struct (field funcref) (field (ref $1)))   closure = code ptr + env
+;;        $3 = (func (param (ref $2) eqref) (result eqref)) code signature
+(func $M.twiceAdd (param $0 eqref) (param $1 eqref) (result eqref)   ;; k, x
+  (local $2 eqref) (local $3 eqref)
+  ;; (\y -> addI k y) : closure over code $code0, capturing k in env slot 0
+  (local.set $2 (struct.new $2 (ref.func $M.$code0) (array.new_fixed $1 1 (local.get $0))))
+  ;; applyTwice is known & saturated -> direct call
+  (local.set $3 (call $M.applyTwice (local.get $2) (local.get $1)))
+  (local.get $3))
+(func $M.applyTwice (param $0 eqref) (param $1 eqref) (result eqref)   ;; f, x
+  (local $2 eqref) (local $3 eqref)
+  ;; f x  — f is unknown: load f's code ptr, call_ref with f as the closure arg
+  (local.set $2 (call_ref $3 (ref.cast (ref $2) (local.get $0)) (local.get $1)
+                  (ref.cast (ref $3) (struct.get $2 0 (ref.cast (ref $2) (local.get $0))))))
+  ;; f (f x)  — again, on the previous result
+  (local.set $3 (call_ref $3 (ref.cast (ref $2) (local.get $0)) (local.get $2)
+                  (ref.cast (ref $3) (struct.get $2 0 (ref.cast (ref $2) (local.get $0))))))
+  (local.get $3))
+;; the lifted body of (\y -> addI k y): k lives in env slot 0, y is the argument
+(func $M.$code0 (param $0 (ref $2)) (param $1 eqref) (result eqref)
+  (local $2 eqref)
+  (local.set $2 (struct.new $0 (i32.add
+    (struct.get $0 0 (ref.cast (ref $0) (array.get $1 (struct.get $2 1 (local.get $0)) (i32.const 0)))) ;; unbox k
+    (struct.get $0 0 (ref.cast (ref $0) (local.get $1))))))                                             ;; unbox y
+  (local.get $2))
+```
+
+## Partial and over-application
+
+```purs
+addN :: Int -> Int -> Int
+addN x y = addI x y
+
+add3 :: Int -> Int
+add3 = addN 3       -- partial application of a known 2-arg function (a PAP)
+
+add3of :: Int -> Int
+add3of n = add3 n   -- over-applies the (nullary) PAP value
+```
+
+`addN 3` supplies only one of `addN`'s two arguments. Since `addN` is known, it
+is **eta-expanded** into a chain of one-argument closures (`$code4`/`$code5`):
+applying `$code4` to `3` returns a closure (`$code5`) that has captured `3` and
+still awaits the second argument. `add3of n = add3 n` then **over-applies** that
+PAP value — it computes `add3`, then supplies the remaining argument with
+`call_ref`. (The same `call_ref` machinery covers multi-argument application of
+an unknown value: `f x y` becomes a chain of single-argument `call_ref`s.)
+
+```wat
+;; types: $0 = (array (mut eqref))   $1 = closure   $2 = boxed Int
+;;        $4 = (func (param (ref $1) eqref) (result eqref))   code signature
+(func $M.add3 (result eqref)
+  (local $0 eqref) (local $1 eqref)
+  ;; eta-expansion closure for addN (no captures yet), then apply it to 3
+  (local.set $0 (struct.new $1 (ref.func $M.$code4) (array.new_fixed $0 0)))
+  (local.set $1 (call_ref $4 (ref.cast (ref $1) (local.get $0)) (struct.new $2 (i32.const 3))
+                  (ref.cast (ref $4) (struct.get $1 0 (ref.cast (ref $1) (local.get $0))))))
+  (local.get $1))   ;; result: a closure still awaiting one argument
+(func $M.add3of (param $0 eqref) (result eqref)   ;; n
+  (local $1 eqref) (local $2 eqref)
+  (local.set $1 (call $M.add3))                    ;; the PAP value (a closure)
+  ;; over-apply it: supply the remaining argument via call_ref
+  (local.set $2 (call_ref $4 (ref.cast (ref $1) (local.get $1)) (local.get $0)
+                  (ref.cast (ref $4) (struct.get $1 0 (ref.cast (ref $1) (local.get $1))))))
+  (local.get $2))
+;; eta-expansion of the 2-arg addN into one-arg closures:
+;; $code4 captures the 1st argument and returns a closure awaiting the 2nd
+(func $M.$code4 (param $0 (ref $1)) (param $1 eqref) (result eqref)
+  (local $2 eqref)
+  (local.set $2 (struct.new $1 (ref.func $M.$code5) (array.new_fixed $0 1 (local.get $1))))
+  (local.get $2))
+;; $code5 has both arguments (one captured, one passed) and makes the real call
+(func $M.$code5 (param $0 (ref $1)) (param $1 eqref) (result eqref)
+  (local $2 eqref)
+  (local.set $2 (call $M.addN
+    (array.get $0 (struct.get $1 1 (local.get $0)) (i32.const 0))   ;; captured 1st arg (3)
+    (local.get $1)))                                               ;; 2nd arg
+  (local.get $2))
+```
+
+## Recursion
+
+Top-level mutual recursion needs nothing special — each call is a saturated,
+known, direct `call` (e.g. `isEvenN`/`isOddN` calling each other). A
+self-recursive local `let` recurs through its own closure parameter. The hard
+case is **local mutual recursion**, shown here:
 
 ```purs
 data Nat = Z | S Nat
@@ -116,28 +277,9 @@ lifted to top-level code functions (`$code0`/`$code1`, omitted here). The body o
   (local.get $3))
 ```
 
-## Currently supported
+## Host interface
 
-- Top-level function definitions; saturated calls (direct `call`).
-- `Int` literals and arithmetic via module-local `foreign import` primitives
-  mapped to `i32` intrinsics (`addI`/`mulI`/`subI`). *(Not yet the real Prelude
-  `+`/`*`, which go through type-class dictionaries — see below.)*
-- Algebraic data types: construction, and **single-scrutinee, unguarded**
-  pattern matching with constructor binders (`Var`/wildcard sub-binders).
-- Closures: lambdas with free-variable capture; higher-order functions;
-  **partial application / over-application** and first-class function values;
-  multi-argument application.
-- Recursion: top-level mutual recursion, local self-recursion, and local mutual
-  recursion (`let rec`, via knot-tying).
-- Host interface: functions exported with an `Int` (`i32`) signature.
-
-## Not yet supported
-
-- Real Prelude **type classes / instance dictionaries** — so `+`, `*`, `show`,
-  `==`, etc. through instances (the next milestone; dictionaries appear as
-  recursive *value* groups and want a topological-sort + optimization pass).
-- `Number`, `String`, `Char`, `Boolean` literals and operations; `Array`s;
-  records.
-- Multi-scrutinee `case`, guards, nested or literal binders.
-- `Effect` and other effectful computation.
-- Recursive non-function values (PureScript's `$runtime_lazy`).
+Every exported function gets a thin `…$export` wrapper with the host-facing
+`i32` signature (visible in the first example): it boxes the `i32` arguments,
+calls the internal `eqref` function, and unboxes the `i32` result. Today the
+host boundary is `Int`-typed.
