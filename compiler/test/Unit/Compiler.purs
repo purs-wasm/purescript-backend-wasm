@@ -7,6 +7,7 @@ import Prelude
 import Effect (Effect)
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
+import Test.Unit.PureScript.Backend.Wasm.FromCoreFn as FromCoreFn
 import Test.Unit.PureScript.CoreFn as CoreFn
 import Test.Unit.PureScript.ExternsFile as ExternsFile
 
@@ -14,3 +15,4 @@ main :: Effect Unit
 main = runSpecAndExitProcess [ consoleReporter ] do
   CoreFn.spec
   ExternsFile.spec
+  FromCoreFn.spec
