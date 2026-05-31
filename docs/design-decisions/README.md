@@ -33,6 +33,7 @@ history.
 | 0003 | [Intermediate IR between CoreFn and Binaryen](0003-intermediate-ir.md) | Accepted |
 | 0004 | [Uniform eqref calling convention (boxed values)](0004-uniform-eqref-calling-convention.md) | Accepted |
 | 0005 | [A high-level optimization IR](0005-high-level-optimization-ir.md) | Proposed |
+| 0006 | [Top-level value bindings (CAFs) as exported globals](0006-top-level-value-bindings-as-globals.md) | Proposed |
 
 ## Scope
 
