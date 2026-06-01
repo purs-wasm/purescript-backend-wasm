@@ -9,6 +9,7 @@ import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 import Test.Unit.PureScript.Backend.Wasm.Lower as Lower
 import Test.Unit.PureScript.Backend.Wasm.Lower.FreeVars as FreeVars
+import Test.Unit.PureScript.Backend.Wasm.Lower.Match as Match
 import Test.Unit.PureScript.CoreFn as CoreFn
 import Test.Unit.PureScript.ExternsFile as ExternsFile
 
@@ -17,4 +18,5 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   CoreFn.spec
   ExternsFile.spec
   Lower.spec
+  Match.spec
   FreeVars.spec
