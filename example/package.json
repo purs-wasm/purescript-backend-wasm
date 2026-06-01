@@ -1,0 +1,9 @@
+{
+  "name": "example",
+  "type": "module",
+  "scripts": {
+    "build:ps": "cd .. && spago build -p example --ouput example/output",
+    "build:wasm": "cd .. && ./bin/index.dev.js -I ./example/output -O ./example/output-wasm",
+    "exec": "node ./run.mjs"
+  }
+}

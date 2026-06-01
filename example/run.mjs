@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const wasmPath = fileURLToPath(new URL("./output-wasm/index.wasm", import.meta.url));
+const wasmPath = fileURLToPath(new URL("./output-wasm/Example.Fib/index.wasm", import.meta.url));
 const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), {});
 const exports = instance.exports;
 
