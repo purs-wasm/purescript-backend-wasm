@@ -48,6 +48,7 @@ data Intrinsic
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
   | ArrayConcat -- Array a -> Array a -> Array a (`Data.Semigroup` `<>`: allocate + copy both)
+  | ShowInt -- Int -> String (`Data.Show`'s `showIntImpl`: decimal digits, runtime helper)
   -- | `Data.Bounded`'s `top` / `bottom` for `Int` / `Char` / `Number`: nullary
   -- | constant values (the foreign is a bare value, not a function — arity 0).
   | TopInt -- maxBound Int (`i32.const 2147483647`)
@@ -102,6 +103,8 @@ foreignIntrinsic = case _ of
   -- `Data.Semigroup` `<>`: string concat reuses the string runtime helper
   "concatString" -> Just (Tuple StrConcat 2)
   "concatArray" -> Just (Tuple ArrayConcat 2)
+  -- `Data.Show` on `Int` (the other `show*Impl` foreigns are not wired yet)
+  "showIntImpl" -> Just (Tuple ShowInt 1)
   "numAdd" -> Just (Tuple NumAdd 2)
   "numMul" -> Just (Tuple NumMul 2)
   "numSub" -> Just (Tuple NumSub 2)

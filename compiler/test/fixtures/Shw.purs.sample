@@ -1,0 +1,24 @@
+module Shw where
+
+import Prelude
+
+-- show Int: literal small values
+showZero :: Int
+showZero = if show 0 == "0" then 1 else 0
+
+showPos :: Int
+showPos = if show 42 == "42" then 1 else 0
+
+-- negatives / INT_MIN passed as args (keeps the test off the Ring negate path)
+showNegArg :: Int -> Int
+showNegArg n = if show n == "-7" then 1 else 0
+
+showMinArg :: Int -> Int
+showMinArg n = if show n == "-2147483648" then 1 else 0
+
+-- show Boolean is a pure case in Data.Show (no foreign)
+showBoolT :: Int
+showBoolT = if show true == "true" then 1 else 0
+
+showBoolF :: Int
+showBoolF = if show false == "false" then 1 else 0

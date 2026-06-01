@@ -79,6 +79,7 @@ buildModule prog = do
   addStrEqHelper ctx
   addStrConcatHelper ctx
   addArrayConcatHelper ctx
+  addShowIntHelper ctx
   addIntEuclidHelpers ctx
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx) prog.funcs
@@ -100,6 +101,10 @@ strConcatHelperName = "$rt.strConcat"
 -- | The shared array concatenation helper (see `addArrayConcatHelper`).
 arrayConcatHelperName :: String
 arrayConcatHelperName = "$rt.arrayConcat"
+
+-- | The shared `Int` decimal-rendering helper (see `addShowIntHelper`).
+showIntHelperName :: String
+showIntHelperName = "$rt.showInt"
 
 -- | The shared Euclidean `Int` division/remainder/degree helpers (see
 -- | `addIntEuclidHelpers`).
@@ -368,6 +373,68 @@ addArrayConcatHelper ctx = do
   result <- B.localGet mod 5 rt.refVals
   body <- B.block mod [ setA, setB, setLenA, setDest, copyA, copyB, result ] B.eqref
   _ <- B.addFunction mod arrayConcatHelperName (B.createType [ B.eqref, B.eqref ]) B.eqref [ rt.refVals, rt.refVals, B.i32, rt.refVals ] body
+  pure unit
+
+-- | Add the shared `Int` decimal-rendering helper
+-- | `$rt.showInt(n : i32) -> eqref ($Str)` (`Data.Show`'s `showIntImpl`): write the
+-- | base-10 digits of `n` into an 11-byte scratch buffer from the right, then copy
+-- | the used suffix into the result string. Digits are extracted from `n`
+-- | *in place* via `rem_s` / `div_s` (taking `abs` of each single-digit remainder),
+-- | so `INT_MIN` never has to be negated as a whole — which would overflow `i32`.
+-- | Param 0 is `n` (reassigned as it is consumed); locals: 1 the write position,
+-- | 2 the scratch buffer, 3 the sign flag, 4 the result length, 5 the result bytes.
+addShowIntHelper :: Ctx -> Effect Unit
+addShowIntHelper ctx = do
+  let mod = ctx.mod
+  let rt = ctx.rt
+  let cap = 11 -- widest `i32` decimal: "-2147483648"
+  let getN = B.localGet mod 0 B.i32
+  let getPos = B.localGet mod 1 B.i32
+  let getScratch = B.localGet mod 2 rt.refBytes
+  setNeg <- (getN >>= \n -> B.i32Const mod 0 >>= B.i32LtS mod n) >>= B.localSet mod 3
+  setScratch <- (B.i32Const mod 0 >>= \z -> B.i32Const mod cap >>= \c -> B.arrayNew mod rt.bytesHt c z) >>= B.localSet mod 2
+  setPos <- B.i32Const mod cap >>= B.localSet mod 1
+  -- pos := pos - 1
+  let decPos = (getPos >>= \p -> B.i32Const mod 1 >>= B.i32Sub mod p) >>= B.localSet mod 1
+  -- scratch[pos] := '0' + abs(n % 10)
+  storeDigit <- do
+    rem <- getN >>= \n -> B.i32Const mod 10 >>= B.i32RemS mod n
+    isNeg <- getN >>= \n -> B.i32Const mod 10 >>= B.i32RemS mod n >>= \r -> B.i32Const mod 0 >>= B.i32LtS mod r
+    negRem <- B.i32Const mod 0 >>= \z -> B.i32Sub mod z rem
+    remPos <- getN >>= \n -> B.i32Const mod 10 >>= B.i32RemS mod n
+    digit <- B.if_ mod isNeg negRem remPos
+    byte <- B.i32Const mod 48 >>= \z -> B.i32Add mod z digit
+    arr <- getScratch
+    pos <- getPos
+    B.arraySet mod arr pos byte
+  setDiv <- (getN >>= \n -> B.i32Const mod 10 >>= B.i32DivS mod n) >>= B.localSet mod 0
+  decThenStore <- decPos
+  cont <- getN >>= \n -> B.i32Const mod 0 >>= B.i32Ne mod n >>= B.brIf mod "show"
+  loopBody <- B.block mod [ decThenStore, storeDigit, setDiv, cont ] B.auto
+  loopE <- B.loop mod "show" loopBody
+  -- prepend '-' for a negative value
+  signDec <- decPos
+  signStore <- do
+    arr <- getScratch
+    pos <- getPos
+    B.i32Const mod 45 >>= B.arraySet mod arr pos
+  signNeg <- B.localGet mod 3 B.i32
+  signThen <- B.block mod [ signDec, signStore ] B.none
+  signElse <- B.block mod [] B.none
+  signBlock <- B.if_ mod signNeg signThen signElse
+  -- len := cap - pos ; result := copy scratch[pos .. cap)
+  setLen <- (B.i32Const mod cap >>= \c -> getPos >>= \p -> B.i32Sub mod c p) >>= B.localSet mod 4
+  setResult <- (B.i32Const mod 0 >>= \z -> B.localGet mod 4 B.i32 >>= \len -> B.arrayNew mod rt.bytesHt len z) >>= B.localSet mod 5
+  copy <- do
+    dest <- B.localGet mod 5 rt.refBytes
+    d0 <- B.i32Const mod 0
+    src <- getScratch
+    srcIdx <- getPos
+    len <- B.localGet mod 4 B.i32
+    B.arrayCopy mod dest d0 src srcIdx len
+  result <- B.localGet mod 5 rt.refBytes >>= \d -> B.structNew mod rt.strHt [ d ]
+  body <- B.block mod [ setNeg, setScratch, setPos, loopE, signBlock, setLen, setResult, copy, result ] B.eqref
+  _ <- B.addFunction mod showIntHelperName (B.createType [ B.i32 ]) B.eqref [ B.i32, rt.refBytes, B.i32, B.i32, rt.refBytes ] body
   pure unit
 
 -- | The Euclidean `Int` division family (`Data.EuclideanRing`'s `Int` instance),
@@ -746,6 +813,10 @@ genPrim ctx intr args = case intr, args of
     ea <- genAtom ctx a
     eb <- genAtom ctx b
     B.call ctx.mod arrayConcatHelperName [ ea, eb ] B.eqref
+  -- Int -> String: unbox the operand, delegate to the decimal-rendering helper
+  ShowInt, [ a ] -> do
+    ea <- unboxIntAtom ctx a
+    B.call ctx.mod showIntHelperName [ ea ] B.eqref
   StrEq, [ a, b ] -> do
     ea <- genAtom ctx a
     eb <- genAtom ctx b
