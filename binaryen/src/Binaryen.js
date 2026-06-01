@@ -63,6 +63,12 @@ export const i32SubImpl = (mod) => (left) => (right) => () =>
 export const i32MulImpl = (mod) => (left) => (right) => () =>
   mod.i32.mul(left, right);
 
+export const i32DivSImpl = (mod) => (left) => (right) => () =>
+  mod.i32.div_s(left, right);
+
+export const i32RemSImpl = (mod) => (left) => (right) => () =>
+  mod.i32.rem_s(left, right);
+
 export const i32EqImpl = (mod) => (left) => (right) => () =>
   mod.i32.eq(left, right);
 

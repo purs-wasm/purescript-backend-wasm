@@ -20,6 +20,7 @@ import Test.E2E.PreludeArith as PreludeArith
 import Test.E2E.PreludeCompare as PreludeCompare
 import Test.E2E.PreludeBool as PreludeBool
 import Test.E2E.PreludeNumber as PreludeNumber
+import Test.E2E.PreludeEuclid as PreludeEuclid
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -39,3 +40,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeCompare.spec
   PreludeBool.spec
   PreludeNumber.spec
+  PreludeEuclid.spec

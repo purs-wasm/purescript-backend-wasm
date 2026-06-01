@@ -29,6 +29,11 @@ data Intrinsic
   | OrdInt
   | IntToNum -- Int -> Number (`f64.convert_i32_s`)
   | NumToInt -- Number -> Int (`i32.trunc_f64_s`)
+  -- | `Data.EuclideanRing`'s `Int` instance: Euclidean division (non-negative
+  -- | remainder), with a zero guard so it matches `Prelude` and never traps.
+  | IntDiv -- Int -> Int -> Int  (`(x - intMod x y) / y`, 0 when y = 0)
+  | IntMod -- Int -> Int -> Int  (`((x % |y|) + |y|) % |y|`, 0 when y = 0)
+  | IntDegree -- Int -> Int  (`min (|x|) maxInt`)
   | NumAdd -- Number -> Number -> Number (`f64.add`)
   | NumSub -- Number -> Number -> Number (`f64.sub`)
   | NumMul -- Number -> Number -> Number (`f64.mul`)
@@ -62,6 +67,10 @@ foreignIntrinsic = case _ of
   "intAdd" -> Just (Tuple IntAdd 2)
   "intMul" -> Just (Tuple IntMul 2)
   "intSub" -> Just (Tuple IntSub 2)
+  -- `Data.EuclideanRing` integer division (Euclidean: non-negative remainder)
+  "intDiv" -> Just (Tuple IntDiv 2)
+  "intMod" -> Just (Tuple IntMod 2)
+  "intDegree" -> Just (Tuple IntDegree 1)
   -- `Data.Eq` / `Data.Ord` on Int (and Char, which shares its representation)
   "eqIntImpl" -> Just (Tuple IntEq 2)
   "eqCharImpl" -> Just (Tuple IntEq 2)

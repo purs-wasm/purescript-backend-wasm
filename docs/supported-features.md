@@ -545,9 +545,20 @@ and `/` (`euclideanRingNumber`) map to the `numAdd` / `numMul` / `numSub` / `num
 foreigns — `f64.add` / `sub` / `mul` / `div` on the unboxed `$Num`. `==` on `Number`
 is `eqNumberImpl` (`f64.eq`), and `Data.Int.toNumber` is `f64.convert_i32_s`.
 
-`Show`, the `Boolean`/aggregate `Eq`/`Ord` instances, `Int` `/` (Euclidean
-`div`/`mod`), `Data.Int.round`/`floor`/`…`, and `Number`'s `Ord`, are not wired up
-yet.
+**`Int` Euclidean division** completes `Int`'s algebra (`Data.EuclideanRing`'s
+`Int` instance — the top of the hierarchy; `Int` is *not* a `Field`, which needs a
+`DivisionRing` multiplicative inverse). `div` / `mod` / `degree` reach the `intDiv`
+/ `intMod` / `intDegree` foreigns through `euclideanRingInt`, and lower to three
+shared runtime helpers — `$rt.intDiv` / `$rt.intMod` / `$rt.intDegree` — rather
+than raw `i32.div_s` / `i32.rem_s`, because `Prelude` semantics differ from the
+wasm instructions in two ways the helpers reproduce: a **non-negative remainder**
+(`mod x y = ((x % |y|) + |y|) % |y|`, so `(-7) mod 2 = 1`, not `-1`) and a **zero
+guard** (`x div 0 = x mod 0 = 0` instead of trapping). `intDiv` is then just
+`(x - intMod x y) / y` — once the remainder is removed, the quotient divides
+exactly, so no sign correction is needed.
+
+`Show`, the `Boolean`/aggregate `Eq`/`Ord` instances, `Data.Int.round`/`floor`/`…`,
+and `Number`'s `Ord`, are not wired up yet.
 
 ## Records
 

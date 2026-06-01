@@ -32,6 +32,8 @@ module Binaryen
   , i32Add
   , i32Sub
   , i32Mul
+  , i32DivS
+  , i32RemS
   , i32Eq
   , i32Ne
   , i32LtU
@@ -214,6 +216,20 @@ foreign import i32MulImpl :: Module -> Expression -> Expression -> Effect Expres
 
 i32Mul :: Module -> Expression -> Expression -> Effect Expression
 i32Mul = i32MulImpl
+
+foreign import i32DivSImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.div_s`: signed integer division, truncating toward zero. Traps on
+-- | division by zero and on `INT_MIN / -1`; callers must guard those.
+i32DivS :: Module -> Expression -> Expression -> Effect Expression
+i32DivS = i32DivSImpl
+
+foreign import i32RemSImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.rem_s`: signed remainder (sign follows the dividend). Traps on a zero
+-- | divisor; callers must guard it.
+i32RemS :: Module -> Expression -> Expression -> Effect Expression
+i32RemS = i32RemSImpl
 
 foreign import i32EqImpl :: Module -> Expression -> Expression -> Effect Expression
 

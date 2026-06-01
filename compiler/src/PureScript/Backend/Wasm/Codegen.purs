@@ -78,6 +78,7 @@ buildModule prog = do
   addProjHelper ctx
   addStrEqHelper ctx
   addStrConcatHelper ctx
+  addIntEuclidHelpers ctx
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx) prog.funcs
   pure mod
@@ -94,6 +95,17 @@ strEqHelperName = "$rt.strEq"
 -- | The shared string concatenation helper (see `addStrConcatHelper`).
 strConcatHelperName :: String
 strConcatHelperName = "$rt.strConcat"
+
+-- | The shared Euclidean `Int` division/remainder/degree helpers (see
+-- | `addIntEuclidHelpers`).
+intModHelperName :: String
+intModHelperName = "$rt.intMod"
+
+intDivHelperName :: String
+intDivHelperName = "$rt.intDiv"
+
+intDegreeHelperName :: String
+intDegreeHelperName = "$rt.intDegree"
 
 -- | Build the value type group (`$Vals` / `$Int` / `$ADT` / `$Clo`) and, in a
 -- | separate recursion group, the closure code signature `$Code`. `$Clo` holds
@@ -313,6 +325,71 @@ addStrConcatHelper ctx = do
   body <- B.block mod [ setA, setB, setLenA, setDest, copyA, copyB, result ] B.eqref
   _ <- B.addFunction mod strConcatHelperName (B.createType [ B.eqref, B.eqref ]) B.eqref [ rt.refBytes, rt.refBytes, B.i32, rt.refBytes ] body
   pure unit
+
+-- | The Euclidean `Int` division family (`Data.EuclideanRing`'s `Int` instance),
+-- | as three shared `i32 -> i32` helpers. They reproduce `Prelude`'s semantics —
+-- | a **non-negative** remainder and a **zero guard** that returns 0 instead of
+-- | trapping — which the raw `i32.div_s`/`i32.rem_s` (truncating, and trapping on
+-- | a zero divisor) do not provide on their own.
+-- |
+-- | `intMod x y = ((x % |y|) + |y|) % |y|` (0 when `y = 0`). `intDiv` then reuses
+-- | it: once `r = intMod x y` is the non-negative remainder, `x - r` is exactly
+-- | divisible by `y`, so `intDiv x y = (x - r) / y` is a plain truncating divide
+-- | that needs no sign correction. `intDegree x = min |x| maxInt` (`maxInt` only
+-- | matters for `INT_MIN`, whose `i32` negation overflows back to `INT_MIN`).
+addIntEuclidHelpers :: Ctx -> Effect Unit
+addIntEuclidHelpers ctx = do
+  let mod = ctx.mod
+  -- abs of the i32 in `slot`: negate when it is signed-negative.
+  let
+    absOf slot = do
+      v <- B.localGet mod slot B.i32
+      isNeg <- B.localGet mod slot B.i32 >>= \x -> B.i32Const mod 0 >>= B.i32LtS mod x
+      neg <- B.i32Const mod 0 >>= \z -> B.localGet mod slot B.i32 >>= B.i32Sub mod z
+      B.if_ mod isNeg neg v
+  -- $rt.intMod(x = 0, y = 1) -> i32 ; yy = 2
+  do
+    yIsZero <- B.localGet mod 1 B.i32 >>= B.i32Eqz mod
+    setYY <- absOf 1 >>= B.localSet mod 2
+    -- ((x % yy) + yy) % yy
+    xRemYY <- do
+      x <- B.localGet mod 0 B.i32
+      yy <- B.localGet mod 2 B.i32
+      B.i32RemS mod x yy
+    plusYY <- B.localGet mod 2 B.i32 >>= B.i32Add mod xRemYY
+    nonNeg <- B.localGet mod 2 B.i32 >>= B.i32RemS mod plusYY
+    elseB <- B.block mod [ setYY, nonNeg ] B.auto
+    z <- B.i32Const mod 0
+    body <- B.if_ mod yIsZero z elseB
+    _ <- B.addFunction mod intModHelperName (B.createType [ B.i32, B.i32 ]) B.i32 [ B.i32 ] body
+    pure unit
+  -- $rt.intDiv(x = 0, y = 1) -> i32 ; (x - intMod x y) / y, 0 when y = 0
+  do
+    yIsZero <- B.localGet mod 1 B.i32 >>= B.i32Eqz mod
+    r <- do
+      x <- B.localGet mod 0 B.i32
+      y <- B.localGet mod 1 B.i32
+      B.call mod intModHelperName [ x, y ] B.i32
+    quotient <- do
+      x <- B.localGet mod 0 B.i32
+      numer <- B.i32Sub mod x r
+      y <- B.localGet mod 1 B.i32
+      B.i32DivS mod numer y
+    z <- B.i32Const mod 0
+    body <- B.if_ mod yIsZero z quotient
+    _ <- B.addFunction mod intDivHelperName (B.createType [ B.i32, B.i32 ]) B.i32 [] body
+    pure unit
+  -- $rt.intDegree(x = 0) -> i32 ; min |x| maxInt ; a = 1
+  do
+    setA <- absOf 0 >>= B.localSet mod 1
+    -- the only signed-negative abs is INT_MIN's overflow; clamp it to maxInt
+    aIsNeg <- B.localGet mod 1 B.i32 >>= \a -> B.i32Const mod 0 >>= B.i32LtS mod a
+    maxInt <- B.i32Const mod 2147483647
+    a <- B.localGet mod 1 B.i32
+    clamp <- B.if_ mod aIsNeg maxInt a
+    body <- B.block mod [ setA, clamp ] B.auto
+    _ <- B.addFunction mod intDegreeHelperName (B.createType [ B.i32 ]) B.i32 [ B.i32 ] body
+    pure unit
 
 -- | Encode a `String` to its UTF-8 bytes (the elements of a `$Bytes` literal).
 utf8Bytes :: String -> Array Int
@@ -581,6 +658,13 @@ genPrim ctx intr args = case intr, args of
     gtE <- genAtom ctx gt
     inner <- B.if_ ctx.mod eqCond eqE gtE
     B.if_ ctx.mod ltCond ltE inner
+  -- Euclidean Int division/remainder/degree: unbox, delegate to the shared
+  -- runtime helpers (zero guard + non-negative remainder), re-box the result.
+  IntDiv, [ a, b ] -> intCall2 intDivHelperName a b
+  IntMod, [ a, b ] -> intCall2 intModHelperName a b
+  IntDegree, [ a ] -> do
+    ea <- unboxIntAtom ctx a
+    B.call ctx.mod intDegreeHelperName [ ea ] B.i32 >>= boxInt ctx
   -- Int -> Number
   IntToNum, [ a ] -> do
     ea <- unboxIntAtom ctx a
@@ -633,6 +717,10 @@ genPrim ctx intr args = case intr, args of
     ea <- unboxIntAtom ctx a
     eb <- unboxIntAtom ctx b
     op ctx.mod ea eb >>= boxInt ctx
+  intCall2 name a b = do
+    ea <- unboxIntAtom ctx a
+    eb <- unboxIntAtom ctx b
+    B.call ctx.mod name [ ea, eb ] B.i32 >>= boxInt ctx
   boolBinop op a b = do
     ea <- genAtom ctx a >>= unboxBoolExpr ctx
     eb <- genAtom ctx b >>= unboxBoolExpr ctx
