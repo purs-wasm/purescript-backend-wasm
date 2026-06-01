@@ -78,6 +78,10 @@ data Intrinsic
   | IntSub
   | IntMul
   | IntEq -- Int -> Int -> Boolean (`i32.eq`, result boxed as an `i31` Boolean)
+  -- | `Data.Ord`'s `ordIntImpl lt eq gt x y`: the `Ordering` (`lt`/`eq`/`gt`) of
+  -- | two `Int`s. Five operands — the three `Ordering` values and the two ints —
+  -- | selected by a signed `i32` comparison.
+  | OrdInt
   | IntToNum -- Int -> Number (`f64.convert_i32_s`)
   | NumToInt -- Number -> Int (`i32.trunc_f64_s`)
   | StrLen -- String -> Int (UTF-8 byte length, `array.len`)

@@ -26,9 +26,15 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Data.Semiring.corefn.json` | (real Prelude) | `Test.E2E.PreludeArith`       | linked for `semiringInt` / `add` / `mul` / `intAdd` / `intMul` |
 | `Data.Ring.corefn.json`     | (real Prelude) | `Test.E2E.PreludeArith`       | linked for `ringInt` / `sub` / `intSub` |
 
-`Data.Semiring` / `Data.Ring` are **real `purs`-compiled Prelude output** (copied
-verbatim from a build's `output/<Module>/corefn.json`); regenerate them from the
-package set's `prelude` if it is bumped.
+| `Cmp.corefn.json`     | `Cmp.purs.sample`     | `Test.E2E.PreludeCompare`     | real Prelude `==` / `<` / `compare` on `Int` (Eq/Ord dictionaries) |
+| `Data.Eq.corefn.json`       | (real Prelude) | `Test.E2E.PreludeCompare`     | linked for `eqInt` / `eqIntImpl` |
+| `Data.Ord.corefn.json`      | (real Prelude) | `Test.E2E.PreludeCompare`     | linked for `ordInt` / `compare` / `lessThan` / `ordIntImpl` |
+| `Data.Ordering.corefn.json` | (real Prelude) | `Test.E2E.PreludeCompare`     | the `Ordering` ADT (`LT`/`EQ`/`GT`) |
+
+`Data.Semiring` / `Data.Ring` / `Data.Eq` / `Data.Ord` / `Data.Ordering` are
+**real `purs`-compiled Prelude output** (copied verbatim from a build's
+`output/<Module>/corefn.json`); regenerate them from the package set's `prelude`
+if it is bumped.
 
 ## Regenerating
 

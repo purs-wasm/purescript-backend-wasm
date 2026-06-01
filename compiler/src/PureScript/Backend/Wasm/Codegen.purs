@@ -565,6 +565,21 @@ genPrim ctx intr args = case intr, args of
     ea <- unboxIntAtom ctx a
     eb <- unboxIntAtom ctx b
     B.i32Eq ctx.mod ea eb >>= B.i31New ctx.mod
+  -- ordIntImpl lt eq gt x y = if x < y then lt else if x == y then eq else gt
+  OrdInt, [ lt, eq, gt, x, y ] -> do
+    ltCond <- do
+      ex <- unboxIntAtom ctx x
+      ey <- unboxIntAtom ctx y
+      B.i32LtS ctx.mod ex ey
+    eqCond <- do
+      ex <- unboxIntAtom ctx x
+      ey <- unboxIntAtom ctx y
+      B.i32Eq ctx.mod ex ey
+    ltE <- genAtom ctx lt
+    eqE <- genAtom ctx eq
+    gtE <- genAtom ctx gt
+    inner <- B.if_ ctx.mod eqCond eqE gtE
+    B.if_ ctx.mod ltCond ltE inner
   -- Int -> Number
   IntToNum, [ a ] -> do
     ea <- unboxIntAtom ctx a

@@ -107,6 +107,11 @@ foreignIntrinsic = case _ of
   "intAdd" -> Just (Tuple IntAdd 2)
   "intMul" -> Just (Tuple IntMul 2)
   "intSub" -> Just (Tuple IntSub 2)
+  -- real Prelude: `Data.Eq` / `Data.Ord` on Int (and Char, which shares its rep)
+  "eqIntImpl" -> Just (Tuple IntEq 2)
+  "eqCharImpl" -> Just (Tuple IntEq 2)
+  "eqStringImpl" -> Just (Tuple StrEq 2)
+  "ordIntImpl" -> Just (Tuple OrdInt 5)
   _ -> Nothing
 
 -- | The globally-unique key/name for a module-qualified top-level identifier:
@@ -439,8 +444,8 @@ lowerCase env scrutinees alternatives = case scrutinees of
   [ scrutinee ] ->
     lowerArg env scrutinee \scrutAtom -> case caseKind alternatives of
       KConstructor -> do
-        branches <- traverse (lowerAlternative env scrutAtom) alternatives
-        pure (Switch scrutAtom branches Nothing)
+        { branches, dflt } <- lowerCtorAlternatives env scrutAtom alternatives
+        pure (Switch scrutAtom branches dflt)
       KLiteral -> do
         { branches, dflt } <- lowerLitAlternatives env scrutAtom alternatives
         pure (LitSwitch scrutAtom branches dflt)
@@ -552,19 +557,31 @@ bindNewtypeVar env var scrutAtom = case var of
   Just name -> env { locals = Object.insert name scrutAtom env.locals }
   Nothing -> env
 
--- | One alternative → one `Branch`, with the constructor's sub-binders bound as
--- | field projections inside the branch body.
-lowerAlternative :: Env -> Atom -> C.CaseAlternative -> Lower Branch
-lowerAlternative env scrutAtom alt = case alt.result of
-  Left _ -> throw GuardedCaseUnsupported
-  Right body -> case alt.binders of
-    [ binder ] -> case binder of
-      C.ConstructorBinder _ _ ctorNameQ subBinders -> do
-        info <- requireCtor env (qualifiedKeyOf ctorNameQ)
-        body' <- bindFields env scrutAtom 0 subBinders body
-        pure (Branch info.tag body')
-      _ -> throw (UnsupportedBinder "expected a constructor binder")
-    _ -> throw (UnsupportedBinder "expected exactly one binder per alternative")
+-- | Lower constructor-match alternatives into `Branch`es plus the catch-all
+-- | default. Each `ConstructorBinder` becomes a `Branch` (its sub-binders bound as
+-- | field projections in the body); a trailing var/wildcard binder is the default
+-- | (`case x of Ctor -> …; _ -> …`), binding the scrutinee for a `VarBinder`.
+lowerCtorAlternatives
+  :: Env -> Atom -> Array C.CaseAlternative -> Lower { branches :: Array Branch, dflt :: Maybe AnfExpr }
+lowerCtorAlternatives env scrutAtom = go
+  where
+  go alternatives = case Array.uncons alternatives of
+    Nothing -> pure { branches: [], dflt: Nothing }
+    Just { head: alt, tail } -> case alt.result of
+      Left _ -> throw GuardedCaseUnsupported
+      Right body -> case alt.binders of
+        [ C.ConstructorBinder _ _ ctorNameQ subBinders ] -> do
+          info <- requireCtor env (qualifiedKeyOf ctorNameQ)
+          branchBody <- bindFields env scrutAtom 0 subBinders body
+          rest <- go tail
+          pure (rest { branches = Array.cons (Branch info.tag branchBody) rest.branches })
+        [ C.NullBinder _ ] -> do
+          d <- lowerTail env body
+          pure { branches: [], dflt: Just d }
+        [ C.VarBinder _ name ] -> do
+          d <- lowerTail (env { locals = Object.insert name scrutAtom env.locals }) body
+          pure { branches: [], dflt: Just d }
+        _ -> throw (UnsupportedBinder "case alternative: expected a constructor or catch-all binder")
 
 -- | Bind a constructor's sub-binders to its fields by position.
 bindFields :: Env -> Atom -> Int -> Array C.Binder -> C.Expr -> Lower AnfExpr

@@ -35,6 +35,7 @@ module Binaryen
   , i32Eq
   , i32Ne
   , i32LtU
+  , i32LtS
   , i32Const
   , i32TruncF64S
   , f64Const
@@ -224,6 +225,12 @@ foreign import i32LtUImpl :: Module -> Expression -> Expression -> Effect Expres
 -- | `i32.lt_u`: 1 if `left < right` as unsigned, 0 otherwise.
 i32LtU :: Module -> Expression -> Expression -> Effect Expression
 i32LtU = i32LtUImpl
+
+foreign import i32LtSImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.lt_s`: 1 if `left < right` as signed, 0 otherwise.
+i32LtS :: Module -> Expression -> Expression -> Effect Expression
+i32LtS = i32LtSImpl
 
 foreign import ifImpl :: Module -> Expression -> Expression -> Expression -> Effect Expression
 

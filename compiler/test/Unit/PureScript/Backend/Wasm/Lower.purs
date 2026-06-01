@@ -72,6 +72,14 @@ boolAlt b body = { binders: [ CF.LiteralBinder ann (CF.LitBoolean b) ], result: 
 strAlt :: String -> CF.Expr -> CF.CaseAlternative
 strAlt s body = { binders: [ CF.LiteralBinder ann (CF.LitString s) ], result: Right body }
 
+-- | A constructor alternative `Ctor sub… -> body` (type `Ty`, module `T`).
+ctorAlt :: String -> Array CF.Binder -> CF.Expr -> CF.CaseAlternative
+ctorAlt name subBinders body =
+  { binders:
+      [ CF.ConstructorBinder ann (CF.Qualified (Just [ "T" ]) "Ty") (CF.Qualified (Just [ "T" ]) name) subBinders ]
+  , result: Right body
+  }
+
 -- | A wildcard alternative `_ -> body`.
 wildAlt :: CF.Expr -> CF.CaseAlternative
 wildAlt body = { binders: [ CF.NullBinder ann ], result: Right body }
@@ -246,6 +254,14 @@ litSwitchOf = case _ of
   Let _ _ _ k -> litSwitchOf k
   _ -> Nothing
 
+-- | The first `Switch` reachable along the `Let` spine: its branch tags and
+-- | whether it has a default arm.
+switchOf :: AnfExpr -> Maybe { tags :: Array Int, hasDefault :: Boolean }
+switchOf = case _ of
+  Switch _ branches dflt -> Just { tags: map (\(Branch t _) -> t) branches, hasDefault: isJust dflt }
+  Let _ _ _ k -> switchOf k
+  _ -> Nothing
+
 hasSwitch :: AnfExpr -> Boolean
 hasSwitch = case _ of
   Switch _ _ _ -> true
@@ -411,6 +427,20 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
           Array.length prog.funcs `shouldEqual` 2
           (mkDataTags <<< _.body <$> exported "mkA" prog) `shouldEqual` Just [ 0 ]
           (mkDataTags <<< _.body <$> exported "mkB" prog) `shouldEqual` Just [ 1 ]
+
+    it "compiles a constructor match with a catch-all to a Switch with a default" do
+      -- data Ty = A | B ; f x = case x of A -> 1; _ -> 0
+      let
+        decls =
+          [ ctor "Ty" "A" []
+          , ctor "Ty" "B" []
+          , def "f" (lam "x" (caseOf (lv "x") [ ctorAlt "A" [] (litInt 1), wildAlt (litInt 0) ]))
+          ]
+      case lower decls of
+        Left err -> fail (show err)
+        Right prog ->
+          (switchOf <<< _.body <$> exported "f" prog)
+            `shouldEqual` Just (Just { tags: [ 0 ], hasDefault: true })
 
   describe "records and dictionaries" do
     it "lowers a record literal to RMkRecord with label ids sorted" do

@@ -69,6 +69,9 @@ export const i32EqImpl = (mod) => (left) => (right) => () =>
 export const i32LtUImpl = (mod) => (left) => (right) => () =>
   mod.i32.lt_u(left, right);
 
+export const i32LtSImpl = (mod) => (left) => (right) => () =>
+  mod.i32.lt_s(left, right);
+
 export const i32NeImpl = (mod) => (left) => (right) => () =>
   mod.i32.ne(left, right);
 
