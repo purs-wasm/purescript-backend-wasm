@@ -600,19 +600,30 @@ is now desugared into right-nested single-scrutinee `case`s (one per column),
 reusing the per-column lowering. (Multi-*alternative* multi-scrutinee matches still
 need real column-wise pattern compilation and remain unsupported.)
 
-**`Data.Show`** for `Int` and `Boolean`. `show` on `Int` (`showIntImpl`) lowers to a
-new `$rt.showInt` runtime helper: it writes the base-10 digits into an 11-byte
-scratch buffer from the right — extracting each digit with `rem_s` / `div_s` and
-taking the `abs` of the remainder, so `INT_MIN` is rendered without ever negating
-the whole value (which would overflow `i32`) — then copies the used suffix into the
-result `$Str`. `show` on `Boolean` is a pure `case` in `Data.Show` (no foreign) that
-returns the `"true"` / `"false"` literals. `show` on **`Number`** is deliberately
-left unwired: matching JS `Number.toString()` requires a *shortest round-trip*
-float-to-decimal algorithm (Ryū / Grisu / Dragon4) — a large, self-contained piece
-(128-bit / `i64` arithmetic and power-of-ten tables) that belongs with the
-user-defined-FFI work. `show` on `Char` / `String` / `Array` is also not wired yet
-(the `Char` / `String` escaping rules and the higher-order `Array` join are their own
-step).
+**`Data.Show`** for `Int`, `Boolean`, `Char`, `String`, and `Array` — everything
+except `Number`. The string-building work lives in `runtime.wat` (ADR 0010):
+
+- `Int` (`showIntImpl`) → `$rt.showInt`: write the base-10 digits into an 11-byte
+  scratch from the right (extract with `rem_s` / `div_s`, `abs` of each remainder, so
+  `INT_MIN` renders without ever negating the whole value), then copy the used suffix.
+- `Boolean` is a pure `case` in `Data.Show` (no foreign): `"true"` / `"false"`.
+- `Char` (`showCharImpl`) → `$rt.showChar`: quote with `'`, escaping control chars
+  (named `\n` … or `\DDD`), `'` and `\`, and UTF-8-encoding any other code point.
+- `String` (`showStringImpl`) → `$rt.showString`: quote with `"`, escaping `"`, `\`,
+  named control chars, and other controls as `\DDD` (with the `\&` separator when a
+  digit follows). It works byte-by-byte on the UTF-8 bytes — every escaped byte is
+  `< 0x80`, so multi-byte sequences pass through untouched.
+- `Array` (`showArrayImpl`) → `$rt.showArray`: `[` + each element shown by the
+  element-show **closure** (`f`, called per element via `call_ref` from the runtime)
+  joined with `,` + `]`. This is the first place the runtime *invokes* a generated
+  closure across the module boundary — it relies on the same structural GC-type
+  identity (now also for `$Clo` / `$Code`) that the import boundary uses.
+
+`show` on **`Number`** is deliberately left unwired: matching JS `Number.toString()`
+needs a *shortest round-trip* float-to-decimal algorithm (Ryū / Grisu / Dragon4) — a
+large, self-contained piece (128-bit / `i64` arithmetic and power-of-ten tables) that
+belongs with the user-defined-FFI work. It can be added to `runtime.wat` (or merged
+in as its own module) later.
 
 The `Boolean`/aggregate `Eq`/`Ord` instances, `Data.Int.round`/`floor`/`…`, and
 `Number`'s `Ord`, are not wired up yet.

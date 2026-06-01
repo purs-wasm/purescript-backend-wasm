@@ -98,6 +98,9 @@ importRuntime ctx = do
   imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
   imp arrayConcatHelperName "arrayConcat" [ B.eqref, B.eqref ] B.eqref
   imp showIntHelperName "showInt" [ B.i32 ] B.eqref
+  imp showCharHelperName "showChar" [ B.i32 ] B.eqref
+  imp showStringHelperName "showString" [ B.eqref ] B.eqref
+  imp showArrayHelperName "showArray" [ B.eqref, B.eqref ] B.eqref
   imp intModHelperName "intMod" [ B.i32, B.i32 ] B.i32
   imp intDivHelperName "intDiv" [ B.i32, B.i32 ] B.i32
   imp intDegreeHelperName "intDegree" [ B.i32 ] B.i32
@@ -119,9 +122,18 @@ strConcatHelperName = "$rt.strConcat"
 arrayConcatHelperName :: String
 arrayConcatHelperName = "$rt.arrayConcat"
 
--- | The shared `Int` decimal-rendering helper (see `addShowIntHelper`).
+-- | The shared `Show` rendering helpers (defined in `runtime.wat`).
 showIntHelperName :: String
 showIntHelperName = "$rt.showInt"
+
+showCharHelperName :: String
+showCharHelperName = "$rt.showChar"
+
+showStringHelperName :: String
+showStringHelperName = "$rt.showString"
+
+showArrayHelperName :: String
+showArrayHelperName = "$rt.showArray"
 
 -- | The shared Euclidean `Int` division/remainder/degree helpers (see
 -- | `addIntEuclidHelpers`).
@@ -550,6 +562,19 @@ genPrim ctx intr args = case intr, args of
   ShowInt, [ a ] -> do
     ea <- unboxIntAtom ctx a
     B.call ctx.mod showIntHelperName [ ea ] B.eqref
+  -- Char -> String: the code point goes to the char-rendering helper
+  ShowChar, [ a ] -> do
+    ea <- unboxIntAtom ctx a
+    B.call ctx.mod showCharHelperName [ ea ] B.eqref
+  -- String -> String: pass the `$Str` (eqref) to the string-rendering helper
+  ShowString, [ a ] -> do
+    ea <- genAtom ctx a
+    B.call ctx.mod showStringHelperName [ ea ] B.eqref
+  -- (a -> String) -> Array a -> String: the element-show closure and the array
+  ShowArray, [ f, xs ] -> do
+    ef <- genAtom ctx f
+    exs <- genAtom ctx xs
+    B.call ctx.mod showArrayHelperName [ ef, exs ] B.eqref
   StrEq, [ a, b ] -> do
     ea <- genAtom ctx a
     eb <- genAtom ctx b

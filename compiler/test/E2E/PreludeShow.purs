@@ -27,6 +27,7 @@ spec =
                 [ "compiler/test/fixtures/Shw.corefn.json"
                 , "compiler/test/fixtures/Data.Show.corefn.json"
                 , "compiler/test/fixtures/Data.Eq.corefn.json"
+                , "compiler/test/fixtures/Data.Semigroup.corefn.json"
                 ]
             )
         )
@@ -45,3 +46,33 @@ spec =
           t <- liftEffect (callI32x0 inst "showBoolT")
           f <- liftEffect (callI32x0 inst "showBoolF")
           [ t, f ] `shouldEqual` [ 1, 1 ]
+
+        it "shows Chars: plain, escaped ' and \\, named control, and UTF-8" \inst -> do
+          a <- liftEffect (callI32x0 inst "showCharA")
+          q <- liftEffect (callI32x0 inst "showCharQuote")
+          bs <- liftEffect (callI32x0 inst "showCharBackslash")
+          nl <- liftEffect (callI32x0 inst "showCharNewline")
+          u <- liftEffect (callI32x0 inst "showCharUnicode")
+          [ a, q, bs, nl, u ] `shouldEqual` [ 1, 1, 1, 1, 1 ]
+
+        it "shows Strings: plain, escaped \" and \\, named control" \inst -> do
+          hi <- liftEffect (callI32x0 inst "showStrHi")
+          esc <- liftEffect (callI32x0 inst "showStrEsc")
+          nl <- liftEffect (callI32x0 inst "showStrNewline")
+          [ hi, esc, nl ] `shouldEqual` [ 1, 1, 1 ]
+
+        it "inserts the \\& separator when a \\DDD escape is followed by a digit" \inst -> do
+          amp <- liftEffect (callI32x0 inst "showStrAmp")
+          amp `shouldEqual` 1
+
+        it "shows Arrays by joining element shows (Int, empty, String)" \inst -> do
+          ints <- liftEffect (callI32x0 inst "showArrInts")
+          empty <- liftEffect (callI32x0 inst "showArrEmpty")
+          strs <- liftEffect (callI32x0 inst "showArrStr")
+          [ ints, empty, strs ] `shouldEqual` [ 1, 1, 1 ]
+
+        it "round-trips emoji Strings (BMP + 4-byte astral + ZWJ) and a BMP Char" \inst -> do
+          smiley <- liftEffect (callI32x0 inst "showEmojiSmiley")
+          family <- liftEffect (callI32x0 inst "showEmojiFamily")
+          bmp <- liftEffect (callI32x0 inst "showBmpChar")
+          [ smiley, family, bmp ] `shouldEqual` [ 1, 1, 1 ]
