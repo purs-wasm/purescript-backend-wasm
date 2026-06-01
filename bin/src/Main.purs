@@ -24,10 +24,16 @@ import Node.FS.Perms (permsAll)
 import Node.Path (FilePath)
 import Node.Path as Path
 import Node.Process as Process
-import PureScript.Backend.Wasm.Compiler (compileModules, compileModulesText, parseModule)
+import PureScript.Backend.Wasm.Compiler (compileModules, parseModule)
 import PureScript.CoreFn (ModuleName, toModuleName)
 import Unsafe.Coerce (unsafeCoerce)
 import Version as Version
+
+-- | Run an external tool synchronously (used for `wasm-merge` / `wasm-dis`).
+foreign import execFileImpl :: String -> Array String -> Effect Unit
+
+execFile :: String -> Array String -> Aff Unit
+execFile cmd args = liftEffect (execFileImpl cmd args)
 
 type BuildOption =
   { input :: FilePath
@@ -126,16 +132,26 @@ buildCmd args = do
   -- companion artifacts (a .wat, a future JS loader / source map) sit together.
   let bundleDir = Path.concat [ args.outDir, NEL.head args.entryModules ]
   FS.mkdir' bundleDir { recursive: true, mode: permsAll }
-  if args.text then
-    liftEffect (compileModulesText opts roots modules) >>= case _ of
-      Left err -> throwError (error err)
-      Right wat -> writeArtifact (Path.concat [ bundleDir, "index.wat" ]) (\f -> FS.writeTextFile UTF8 f wat)
-  else
-    liftEffect (compileModules opts roots modules) >>= case _ of
-      Left err -> throwError (error err)
-      Right bytes -> writeArtifact (Path.concat [ bundleDir, "index.wasm" ]) (\f -> FS.writeFile f (unsafeCoerce bytes))
+  -- The generated module imports the shared runtime (`$rt.*`, ADR 0010). Compile
+  -- it, then merge `runtime.wasm` in with `wasm-merge` to produce one
+  -- self-contained wasm (imports resolved); `--text` disassembles that result.
+  let appPath = Path.concat [ bundleDir, "app.wasm" ]
+  let wasmPath = Path.concat [ bundleDir, "index.wasm" ]
+  liftEffect (compileModules opts roots modules) >>= case _ of
+    Left err -> throwError (error err)
+    Right bytes -> do
+      FS.writeFile appPath (unsafeCoerce bytes)
+      execFile wasmMergeBin [ appPath, "app", runtimeWasm, "rt", "-o", wasmPath, "--all-features" ]
+      FS.unlink appPath
+      if args.text then do
+        let watPath = Path.concat [ bundleDir, "index.wat" ]
+        execFile wasmDisBin [ wasmPath, "-o", watPath, "--all-features" ]
+        FS.unlink wasmPath
+        Console.log (Fmt.fmt @"Wrote {file}" { file: watPath })
+      else
+        Console.log (Fmt.fmt @"Wrote {file}" { file: wasmPath })
   where
-  writeArtifact :: FilePath -> (FilePath -> Aff Unit) -> Aff Unit
-  writeArtifact outFile write = do
-    write outFile
-    Console.log (Fmt.fmt @"Wrote {file}" { file: outFile })
+  -- Resolved against the current working directory (run `bin` from the repo root).
+  runtimeWasm = "runtime/runtime.wasm"
+  wasmMergeBin = "binaryen/node_modules/binaryen/bin/wasm-merge"
+  wasmDisBin = "binaryen/node_modules/binaryen/bin/wasm-dis"

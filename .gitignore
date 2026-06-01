@@ -3,6 +3,8 @@
 /output-es
 /output-wasm
 /dist
+# generated from runtime/runtime.wat by `npm run build:runtime` (chained into test:e2e)
+/runtime/runtime.wasm
 **/node_modules
 **/.DS_Store
 .psc-ide-port

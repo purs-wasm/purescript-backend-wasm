@@ -54,6 +54,7 @@ module Binaryen
   , unreachable
   , addFunction
   , addFunctionExport
+  , addFunctionImport
   , optimize
   , validate
   , emitText
@@ -479,6 +480,15 @@ foreign import addFunctionExportImpl :: Module -> String -> String -> Effect Exp
 -- | Export an internal function under an external name.
 addFunctionExport :: Module -> String -> String -> Effect Export
 addFunctionExport = addFunctionExportImpl
+
+foreign import addFunctionImportImpl :: Module -> String -> String -> String -> Type -> Type -> Effect Unit
+
+-- | Declare an imported function: `addFunctionImport mod internalName
+-- | externalModule externalBase params results`. The internal name is how the
+-- | module's own code refers to it (e.g. in `call`); the external module/base
+-- | name is what the host (or a merged module) must supply.
+addFunctionImport :: Module -> String -> String -> String -> Type -> Type -> Effect Unit
+addFunctionImport = addFunctionImportImpl
 
 foreign import optimizeImpl :: Module -> Effect Unit
 

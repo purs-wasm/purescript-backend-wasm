@@ -260,6 +260,10 @@ export const addFunctionExportImpl =
   (mod) => (internalName) => (externalName) => () =>
     mod.addFunctionExport(internalName, externalName);
 
+export const addFunctionImportImpl =
+  (mod) => (internalName) => (externalModule) => (externalBase) => (params) => (results) => () =>
+    mod.addFunctionImport(internalName, externalModule, externalBase, params, results);
+
 export const optimizeImpl = (mod) => () => mod.optimize();
 
 // --- Validation & emission --------------------------------------------------

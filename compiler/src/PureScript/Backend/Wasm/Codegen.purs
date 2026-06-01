@@ -75,15 +75,32 @@ buildModule prog = do
   B.setFeaturesGC mod
   rt <- buildRuntimeTypes mod
   let ctx = { mod, rt, params: [] }
-  addProjHelper ctx
-  addStrEqHelper ctx
-  addStrConcatHelper ctx
-  addArrayConcatHelper ctx
-  addShowIntHelper ctx
-  addIntEuclidHelpers ctx
+  importRuntime ctx
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx) prog.funcs
   pure mod
+
+-- | The module name under which generated code imports the shared runtime
+-- | (ADR 0010). Satisfied by instantiating `runtime.wasm` (tests) or by
+-- | `wasm-merge` (the single-file build).
+runtimeModuleName :: String
+runtimeModuleName = "rt"
+
+-- | Declare the imports for the shared runtime helpers (now defined in
+-- | `runtime.wat`, ADR 0010). The internal names (e.g. `$rt.strEq`) are unchanged,
+-- | so existing `B.call` sites resolve to the imports transparently. The boundary
+-- | uses only `eqref`/`i32` (ADR 0004), so no concrete GC type crosses it.
+importRuntime :: Ctx -> Effect Unit
+importRuntime ctx = do
+  let imp name base params result = B.addFunctionImport ctx.mod name runtimeModuleName base (B.createType params) result
+  imp projHelperName "proj" [ B.eqref, B.i32 ] B.eqref
+  imp strEqHelperName "strEq" [ B.eqref, B.eqref ] B.i32
+  imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
+  imp arrayConcatHelperName "arrayConcat" [ B.eqref, B.eqref ] B.eqref
+  imp showIntHelperName "showInt" [ B.i32 ] B.eqref
+  imp intModHelperName "intMod" [ B.i32, B.i32 ] B.i32
+  imp intDivHelperName "intDiv" [ B.i32, B.i32 ] B.i32
+  imp intDegreeHelperName "intDegree" [ B.i32 ] B.i32
 
 -- | The shared record/dictionary projection helper (see `addProjHelper`).
 projHelperName :: String
@@ -211,296 +228,12 @@ addExportWrapper ctx fn = case fn.export of
     _ <- B.addFunctionExport ctx.mod wrapperName external
     pure unit
 
--- | Add the shared record/dictionary projection helper
--- | `$rt.proj(rec : eqref, target : i32) -> eqref`: a linear search of the
--- | record's interned label-id array for `target`, returning the parallel value
--- | (ADR 0007). Emitted once and called by every `RProjLabel`. Records are never
--- | empty (a dictionary always has its methods), so the first read needs no bound
--- | check; subsequent iterations are guarded by `i < len`, and exhausting the
--- | array traps (the label was absent — a compile-time impossibility).
-addProjHelper :: Ctx -> Effect Unit
-addProjHelper ctx = do
-  let mod = ctx.mod
-  let rt = ctx.rt
-  let recRec = B.localGet mod 0 B.eqref >>= \r -> B.refCast mod r rt.refRec
-  setI0 <- B.i32Const mod 0 >>= B.localSet mod 2
-  -- if ids[i] == target: break out of `found` with vals[i]
-  idsArr <- recRec >>= \r -> B.structGet mod 0 r rt.refLabelIds false
-  iForId <- B.localGet mod 2 B.i32
-  idAtI <- B.arrayGet mod idsArr iForId B.i32 false
-  target <- B.localGet mod 1 B.i32
-  cond <- B.i32Eq mod idAtI target
-  valsArr <- recRec >>= \r -> B.structGet mod 1 r rt.refVals false
-  iForVal <- B.localGet mod 2 B.i32
-  foundVal <- B.arrayGet mod valsArr iForVal B.eqref false
-  returnFound <- B.brWithValue mod "found" foundVal
-  noop <- B.block mod [] B.none
-  testAndReturn <- B.if_ mod cond returnFound noop
-  -- i := i + 1
-  setIInc <- do
-    iOld <- B.localGet mod 2 B.i32
-    one <- B.i32Const mod 1
-    B.i32Add mod iOld one >>= B.localSet mod 2
-  -- continue while i < len
-  idsArr2 <- recRec >>= \r -> B.structGet mod 0 r rt.refLabelIds false
-  len <- B.arrayLen mod idsArr2
-  iForCmp <- B.localGet mod 2 B.i32
-  lt <- B.i32LtU mod iForCmp len
-  brLoop <- B.brIf mod "loop" lt
-  trapNoMatch <- B.unreachable mod
-  loopBody <- B.block mod [ testAndReturn, setIInc, brLoop, trapNoMatch ] B.auto
-  loopE <- B.loop mod "loop" loopBody
-  trapEnd <- B.unreachable mod
-  found <- B.blockNamed mod "found" [ setI0, loopE, trapEnd ] B.eqref
-  _ <- B.addFunction mod projHelperName (B.createType [ B.eqref, B.i32 ]) B.eqref [ B.i32 ] found
-  pure unit
-
 -- | The `(ref $Bytes)` byte array of a `String` atom (`ref.cast $Str` then
 -- | `struct.get 0`).
 strBytes :: Ctx -> Atom -> Effect B.Expression
 strBytes ctx atom = do
   s <- genAtom ctx atom >>= \e -> B.refCast ctx.mod e ctx.rt.refStr
   B.structGet ctx.mod 0 s ctx.rt.refBytes false
-
--- | Add the shared string byte-equality helper
--- | `$rt.strEq(a : eqref, b : eqref) -> i32` (1 if equal): compare lengths, then
--- | bytes left to right. Locals: 2/3 the two byte arrays, 4 their (shared)
--- | length, 5 the index.
-addStrEqHelper :: Ctx -> Effect Unit
-addStrEqHelper ctx = do
-  let mod = ctx.mod
-  let rt = ctx.rt
-  let bytesOf p = B.localGet mod p B.eqref >>= \e -> B.refCast mod e rt.refStr >>= \s -> B.structGet mod 0 s rt.refBytes false
-  setA <- bytesOf 0 >>= B.localSet mod 2
-  setB <- bytesOf 1 >>= B.localSet mod 3
-  setLen <- (B.localGet mod 2 rt.refBytes >>= B.arrayLen mod) >>= B.localSet mod 4
-  -- if lengths differ, not equal
-  lenB <- B.localGet mod 3 rt.refBytes >>= B.arrayLen mod
-  lenMismatch <- B.localGet mod 4 B.i32 >>= \la -> B.i32Ne mod la lenB
-  ret0a <- B.i32Const mod 0 >>= B.brWithValue mod "ret"
-  guardLen <- B.if_ mod lenMismatch ret0a =<< B.block mod [] B.none
-  setI0 <- B.i32Const mod 0 >>= B.localSet mod 5
-  -- if i == len, all bytes matched
-  iEqLen <- (Tuple <$> B.localGet mod 5 B.i32 <*> B.localGet mod 4 B.i32) >>= \(Tuple i l) -> B.i32Eq mod i l
-  ret1 <- B.i32Const mod 1 >>= B.brWithValue mod "ret"
-  doneCheck <- B.if_ mod iEqLen ret1 =<< B.block mod [] B.none
-  -- if bytesA[i] != bytesB[i], not equal
-  aI <- (Tuple <$> B.localGet mod 2 rt.refBytes <*> B.localGet mod 5 B.i32) >>= \(Tuple arr i) -> B.arrayGet mod arr i B.i32 false
-  bI <- (Tuple <$> B.localGet mod 3 rt.refBytes <*> B.localGet mod 5 B.i32) >>= \(Tuple arr i) -> B.arrayGet mod arr i B.i32 false
-  byteMismatch <- B.i32Ne mod aI bI
-  ret0b <- B.i32Const mod 0 >>= B.brWithValue mod "ret"
-  diffCheck <- B.if_ mod byteMismatch ret0b =<< B.block mod [] B.none
-  incI <- (B.localGet mod 5 B.i32 >>= \i -> B.i32Const mod 1 >>= B.i32Add mod i) >>= B.localSet mod 5
-  backedge <- B.br mod "loop"
-  loopBody <- B.block mod [ doneCheck, diffCheck, incI, backedge ] B.auto
-  loopE <- B.loop mod "loop" loopBody
-  trapEnd <- B.unreachable mod
-  body <- B.blockNamed mod "ret" [ setA, setB, setLen, guardLen, setI0, loopE, trapEnd ] B.i32
-  _ <- B.addFunction mod strEqHelperName (B.createType [ B.eqref, B.eqref ]) B.i32 [ rt.refBytes, rt.refBytes, B.i32, B.i32 ] body
-  pure unit
-
--- | Add the shared string concatenation helper
--- | `$rt.strConcat(a : eqref, b : eqref) -> eqref`: allocate a byte array of the
--- | combined length and `array.copy` both halves in. Locals: 2/3 the byte arrays,
--- | 4 the length of `a`, 5 the destination array.
-addStrConcatHelper :: Ctx -> Effect Unit
-addStrConcatHelper ctx = do
-  let mod = ctx.mod
-  let rt = ctx.rt
-  let bytesOf p = B.localGet mod p B.eqref >>= \e -> B.refCast mod e rt.refStr >>= \s -> B.structGet mod 0 s rt.refBytes false
-  setA <- bytesOf 0 >>= B.localSet mod 2
-  setB <- bytesOf 1 >>= B.localSet mod 3
-  setLenA <- (B.localGet mod 2 rt.refBytes >>= B.arrayLen mod) >>= B.localSet mod 4
-  -- dest = new (mut i8) array of length lenA + lenB, zero-initialised
-  lenB <- B.localGet mod 3 rt.refBytes >>= B.arrayLen mod
-  total <- B.localGet mod 4 B.i32 >>= \la -> B.i32Add mod la lenB
-  zero <- B.i32Const mod 0
-  setDest <- B.arrayNew mod rt.bytesHt total zero >>= B.localSet mod 5
-  -- copy a into [0, lenA), then b into [lenA, lenA + lenB)
-  d0 <- B.i32Const mod 0
-  s0 <- B.i32Const mod 0
-  copyA <- do
-    dest <- B.localGet mod 5 rt.refBytes
-    src <- B.localGet mod 2 rt.refBytes
-    len <- B.localGet mod 4 B.i32
-    B.arrayCopy mod dest d0 src s0 len
-  copyB <- do
-    dest <- B.localGet mod 5 rt.refBytes
-    destIdx <- B.localGet mod 4 B.i32
-    src <- B.localGet mod 3 rt.refBytes
-    srcIdx <- B.i32Const mod 0
-    len <- B.localGet mod 3 rt.refBytes >>= B.arrayLen mod
-    B.arrayCopy mod dest destIdx src srcIdx len
-  result <- B.localGet mod 5 rt.refBytes >>= \d -> B.structNew mod rt.strHt [ d ]
-  body <- B.block mod [ setA, setB, setLenA, setDest, copyA, copyB, result ] B.eqref
-  _ <- B.addFunction mod strConcatHelperName (B.createType [ B.eqref, B.eqref ]) B.eqref [ rt.refBytes, rt.refBytes, B.i32, rt.refBytes ] body
-  pure unit
-
--- | Add the shared array concatenation helper
--- | `$rt.arrayConcat(a : eqref, b : eqref) -> eqref` (`Data.Semigroup`'s `<>` on
--- | `Array`): allocate a `$Vals = (array (mut eqref))` of the combined length and
--- | `array.copy` both halves in. Mirrors `addStrConcatHelper`, but the elements
--- | are `eqref` (so the new array is built with `array.new_default`, every slot a
--- | null that the copies overwrite) and `$Vals` is itself the value — no wrapping
--- | struct. Locals: 2/3 the source arrays, 4 the length of `a`, 5 the destination.
-addArrayConcatHelper :: Ctx -> Effect Unit
-addArrayConcatHelper ctx = do
-  let mod = ctx.mod
-  let rt = ctx.rt
-  let valsOf p = B.localGet mod p B.eqref >>= \e -> B.refCast mod e rt.refVals
-  setA <- valsOf 0 >>= B.localSet mod 2
-  setB <- valsOf 1 >>= B.localSet mod 3
-  setLenA <- (B.localGet mod 2 rt.refVals >>= B.arrayLen mod) >>= B.localSet mod 4
-  lenB <- B.localGet mod 3 rt.refVals >>= B.arrayLen mod
-  total <- B.localGet mod 4 B.i32 >>= \la -> B.i32Add mod la lenB
-  -- init with a null `eqref`; every slot is overwritten by the copies below.
-  nullInit <- B.refNull mod B.eqref
-  setDest <- B.arrayNew mod rt.valsHt total nullInit >>= B.localSet mod 5
-  d0 <- B.i32Const mod 0
-  s0 <- B.i32Const mod 0
-  copyA <- do
-    dest <- B.localGet mod 5 rt.refVals
-    src <- B.localGet mod 2 rt.refVals
-    len <- B.localGet mod 4 B.i32
-    B.arrayCopy mod dest d0 src s0 len
-  copyB <- do
-    dest <- B.localGet mod 5 rt.refVals
-    destIdx <- B.localGet mod 4 B.i32
-    src <- B.localGet mod 3 rt.refVals
-    srcIdx <- B.i32Const mod 0
-    len <- B.localGet mod 3 rt.refVals >>= B.arrayLen mod
-    B.arrayCopy mod dest destIdx src srcIdx len
-  result <- B.localGet mod 5 rt.refVals
-  body <- B.block mod [ setA, setB, setLenA, setDest, copyA, copyB, result ] B.eqref
-  _ <- B.addFunction mod arrayConcatHelperName (B.createType [ B.eqref, B.eqref ]) B.eqref [ rt.refVals, rt.refVals, B.i32, rt.refVals ] body
-  pure unit
-
--- | Add the shared `Int` decimal-rendering helper
--- | `$rt.showInt(n : i32) -> eqref ($Str)` (`Data.Show`'s `showIntImpl`): write the
--- | base-10 digits of `n` into an 11-byte scratch buffer from the right, then copy
--- | the used suffix into the result string. Digits are extracted from `n`
--- | *in place* via `rem_s` / `div_s` (taking `abs` of each single-digit remainder),
--- | so `INT_MIN` never has to be negated as a whole — which would overflow `i32`.
--- | Param 0 is `n` (reassigned as it is consumed); locals: 1 the write position,
--- | 2 the scratch buffer, 3 the sign flag, 4 the result length, 5 the result bytes.
-addShowIntHelper :: Ctx -> Effect Unit
-addShowIntHelper ctx = do
-  let mod = ctx.mod
-  let rt = ctx.rt
-  let cap = 11 -- widest `i32` decimal: "-2147483648"
-  let getN = B.localGet mod 0 B.i32
-  let getPos = B.localGet mod 1 B.i32
-  let getScratch = B.localGet mod 2 rt.refBytes
-  setNeg <- (getN >>= \n -> B.i32Const mod 0 >>= B.i32LtS mod n) >>= B.localSet mod 3
-  setScratch <- (B.i32Const mod 0 >>= \z -> B.i32Const mod cap >>= \c -> B.arrayNew mod rt.bytesHt c z) >>= B.localSet mod 2
-  setPos <- B.i32Const mod cap >>= B.localSet mod 1
-  -- pos := pos - 1
-  let decPos = (getPos >>= \p -> B.i32Const mod 1 >>= B.i32Sub mod p) >>= B.localSet mod 1
-  -- scratch[pos] := '0' + abs(n % 10)
-  storeDigit <- do
-    rem <- getN >>= \n -> B.i32Const mod 10 >>= B.i32RemS mod n
-    isNeg <- getN >>= \n -> B.i32Const mod 10 >>= B.i32RemS mod n >>= \r -> B.i32Const mod 0 >>= B.i32LtS mod r
-    negRem <- B.i32Const mod 0 >>= \z -> B.i32Sub mod z rem
-    remPos <- getN >>= \n -> B.i32Const mod 10 >>= B.i32RemS mod n
-    digit <- B.if_ mod isNeg negRem remPos
-    byte <- B.i32Const mod 48 >>= \z -> B.i32Add mod z digit
-    arr <- getScratch
-    pos <- getPos
-    B.arraySet mod arr pos byte
-  setDiv <- (getN >>= \n -> B.i32Const mod 10 >>= B.i32DivS mod n) >>= B.localSet mod 0
-  decThenStore <- decPos
-  cont <- getN >>= \n -> B.i32Const mod 0 >>= B.i32Ne mod n >>= B.brIf mod "show"
-  loopBody <- B.block mod [ decThenStore, storeDigit, setDiv, cont ] B.auto
-  loopE <- B.loop mod "show" loopBody
-  -- prepend '-' for a negative value
-  signDec <- decPos
-  signStore <- do
-    arr <- getScratch
-    pos <- getPos
-    B.i32Const mod 45 >>= B.arraySet mod arr pos
-  signNeg <- B.localGet mod 3 B.i32
-  signThen <- B.block mod [ signDec, signStore ] B.none
-  signElse <- B.block mod [] B.none
-  signBlock <- B.if_ mod signNeg signThen signElse
-  -- len := cap - pos ; result := copy scratch[pos .. cap)
-  setLen <- (B.i32Const mod cap >>= \c -> getPos >>= \p -> B.i32Sub mod c p) >>= B.localSet mod 4
-  setResult <- (B.i32Const mod 0 >>= \z -> B.localGet mod 4 B.i32 >>= \len -> B.arrayNew mod rt.bytesHt len z) >>= B.localSet mod 5
-  copy <- do
-    dest <- B.localGet mod 5 rt.refBytes
-    d0 <- B.i32Const mod 0
-    src <- getScratch
-    srcIdx <- getPos
-    len <- B.localGet mod 4 B.i32
-    B.arrayCopy mod dest d0 src srcIdx len
-  result <- B.localGet mod 5 rt.refBytes >>= \d -> B.structNew mod rt.strHt [ d ]
-  body <- B.block mod [ setNeg, setScratch, setPos, loopE, signBlock, setLen, setResult, copy, result ] B.eqref
-  _ <- B.addFunction mod showIntHelperName (B.createType [ B.i32 ]) B.eqref [ B.i32, rt.refBytes, B.i32, B.i32, rt.refBytes ] body
-  pure unit
-
--- | The Euclidean `Int` division family (`Data.EuclideanRing`'s `Int` instance),
--- | as three shared `i32 -> i32` helpers. They reproduce `Prelude`'s semantics —
--- | a **non-negative** remainder and a **zero guard** that returns 0 instead of
--- | trapping — which the raw `i32.div_s`/`i32.rem_s` (truncating, and trapping on
--- | a zero divisor) do not provide on their own.
--- |
--- | `intMod x y = ((x % |y|) + |y|) % |y|` (0 when `y = 0`). `intDiv` then reuses
--- | it: once `r = intMod x y` is the non-negative remainder, `x - r` is exactly
--- | divisible by `y`, so `intDiv x y = (x - r) / y` is a plain truncating divide
--- | that needs no sign correction. `intDegree x = min |x| maxInt` (`maxInt` only
--- | matters for `INT_MIN`, whose `i32` negation overflows back to `INT_MIN`).
-addIntEuclidHelpers :: Ctx -> Effect Unit
-addIntEuclidHelpers ctx = do
-  let mod = ctx.mod
-  -- abs of the i32 in `slot`: negate when it is signed-negative.
-  let
-    absOf slot = do
-      v <- B.localGet mod slot B.i32
-      isNeg <- B.localGet mod slot B.i32 >>= \x -> B.i32Const mod 0 >>= B.i32LtS mod x
-      neg <- B.i32Const mod 0 >>= \z -> B.localGet mod slot B.i32 >>= B.i32Sub mod z
-      B.if_ mod isNeg neg v
-  -- $rt.intMod(x = 0, y = 1) -> i32 ; yy = 2
-  do
-    yIsZero <- B.localGet mod 1 B.i32 >>= B.i32Eqz mod
-    setYY <- absOf 1 >>= B.localSet mod 2
-    -- ((x % yy) + yy) % yy
-    xRemYY <- do
-      x <- B.localGet mod 0 B.i32
-      yy <- B.localGet mod 2 B.i32
-      B.i32RemS mod x yy
-    plusYY <- B.localGet mod 2 B.i32 >>= B.i32Add mod xRemYY
-    nonNeg <- B.localGet mod 2 B.i32 >>= B.i32RemS mod plusYY
-    elseB <- B.block mod [ setYY, nonNeg ] B.auto
-    z <- B.i32Const mod 0
-    body <- B.if_ mod yIsZero z elseB
-    _ <- B.addFunction mod intModHelperName (B.createType [ B.i32, B.i32 ]) B.i32 [ B.i32 ] body
-    pure unit
-  -- $rt.intDiv(x = 0, y = 1) -> i32 ; (x - intMod x y) / y, 0 when y = 0
-  do
-    yIsZero <- B.localGet mod 1 B.i32 >>= B.i32Eqz mod
-    r <- do
-      x <- B.localGet mod 0 B.i32
-      y <- B.localGet mod 1 B.i32
-      B.call mod intModHelperName [ x, y ] B.i32
-    quotient <- do
-      x <- B.localGet mod 0 B.i32
-      numer <- B.i32Sub mod x r
-      y <- B.localGet mod 1 B.i32
-      B.i32DivS mod numer y
-    z <- B.i32Const mod 0
-    body <- B.if_ mod yIsZero z quotient
-    _ <- B.addFunction mod intDivHelperName (B.createType [ B.i32, B.i32 ]) B.i32 [] body
-    pure unit
-  -- $rt.intDegree(x = 0) -> i32 ; min |x| maxInt ; a = 1
-  do
-    setA <- absOf 0 >>= B.localSet mod 1
-    -- the only signed-negative abs is INT_MIN's overflow; clamp it to maxInt
-    aIsNeg <- B.localGet mod 1 B.i32 >>= \a -> B.i32Const mod 0 >>= B.i32LtS mod a
-    maxInt <- B.i32Const mod 2147483647
-    a <- B.localGet mod 1 B.i32
-    clamp <- B.if_ mod aIsNeg maxInt a
-    body <- B.block mod [ setA, clamp ] B.auto
-    _ <- B.addFunction mod intDegreeHelperName (B.createType [ B.i32 ]) B.i32 [ B.i32 ] body
-    pure unit
 
 -- | Encode a `String` to its UTF-8 bytes (the elements of a `$Bytes` literal).
 utf8Bytes :: String -> Array Int
