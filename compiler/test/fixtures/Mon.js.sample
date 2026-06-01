@@ -1,0 +1,2 @@
+export const lenS = (s) => s.length;
+export const lengthA = (xs) => xs.length;

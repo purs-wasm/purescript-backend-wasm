@@ -432,7 +432,26 @@ lowerCase env scrutinees alternatives = case scrutinees of
         { branches, dflt } <- lowerLitAlternatives env scrutAtom alternatives
         pure (LitSwitch scrutAtom branches dflt)
       KCatchAll -> lowerCatchAll env scrutAtom alternatives
+  -- A multi-scrutinee match with a *single* unguarded alternative (e.g. a binary
+  -- operator destructuring both operands, `\(Additive a) (Additive b) -> …`)
+  -- desugars to nested single-scrutinee cases — column `i` becomes
+  -- `case scrutᵢ of binderᵢ -> <rest>`, reusing the per-column lowering above.
+  -- Multi-*alternative* matches need real column-wise pattern compilation and
+  -- remain unsupported.
+  scruts
+    | [ { binders, result: Right body } ] <- alternatives
+    , Array.length scruts >= 2
+    , Array.length binders == Array.length scruts ->
+        lowerTail env (nestColumns scruts binders body)
   _ -> throw (UnsupportedExpr "only a single case scrutinee is supported")
+
+-- | Rewrite a single-alternative multi-scrutinee `case` into right-nested
+-- | single-scrutinee `case`s, one per (scrutinee, binder) column.
+nestColumns :: Array C.Expr -> Array C.Binder -> C.Expr -> C.Expr
+nestColumns scruts binders body =
+  foldr (\(Tuple s b) acc -> C.Case synthAnn [ s ] [ { binders: [ b ], result: Right acc } ])
+    body
+    (Array.zip scruts binders)
 
 -- | How a single-scrutinee `case` matches: on constructor tags, on literal
 -- | values, or a bare catch-all (`x ->` / `_ ->`). Determined by the binders.

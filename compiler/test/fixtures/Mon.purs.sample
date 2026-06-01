@@ -1,0 +1,35 @@
+module Mon where
+
+import Prelude
+import Data.Monoid (mempty)
+import Data.Monoid.Additive (Additive(..))
+import Data.Monoid.Multiplicative (Multiplicative(..))
+
+-- internal observation foreigns (StrLen / ArrayLength intrinsics)
+foreign import lenS :: String -> Int
+foreign import lengthA :: forall a. Array a -> Int
+
+-- Monoid String: mempty = "" (length 0), and the left-identity law mempty <> x = x
+memptyStrLen :: Int
+memptyStrLen = lenS (mempty :: String)
+
+memptyLeftId :: Int
+memptyLeftId = if (mempty <> "hi") == "hi" then 1 else 0
+
+-- Monoid Array: mempty = []
+memptyArrLen :: Int
+memptyArrLen = lengthA (mempty :: Array Int)
+
+-- Additive monoid (Semiring): <> = +, mempty = 0
+addM :: Int -> Int -> Int
+addM a b = case Additive a <> Additive b of Additive n -> n
+
+memptyAdd :: Int
+memptyAdd = case (mempty :: Additive Int) of Additive n -> n
+
+-- Multiplicative monoid (Semiring): <> = *, mempty = 1
+mulM :: Int -> Int -> Int
+mulM a b = case Multiplicative a <> Multiplicative b of Multiplicative n -> n
+
+memptyMul :: Int
+memptyMul = case (mempty :: Multiplicative Int) of Multiplicative n -> n

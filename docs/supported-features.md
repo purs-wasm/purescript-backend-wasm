@@ -588,6 +588,18 @@ halves in — the array *is* the value, so there is no wrapping struct. (The oth
 `Semigroup` instances — records, functions, `Unit`, the `Monoid` newtypes — are not
 exercised yet.)
 
+**`Data.Monoid`** (`mempty`) and the `Additive` / `Multiplicative` newtype monoids.
+`Data.Monoid` has no foreigns and needs no new machine op: `mempty` is a nullary
+class method projected from the `Monoid` dictionary — `""` for `String`, `[]` for
+`Array`, `Additive zero` / `Multiplicative one` for the Semiring-backed newtypes.
+The newtype wrappers erase, so `Additive a <> Additive b` reduces straight through
+the existing `Semigroup` / `Semiring` paths. Reaching this surfaced one new lowering
+capability: a binary operator that destructures *both* operands
+(`\(Additive a) (Additive b) -> …`) compiles to a **multi-scrutinee `case`**, which
+is now desugared into right-nested single-scrutinee `case`s (one per column),
+reusing the per-column lowering. (Multi-*alternative* multi-scrutinee matches still
+need real column-wise pattern compilation and remain unsupported.)
+
 `Show`, the `Boolean`/aggregate `Eq`/`Ord` instances, `Data.Int.round`/`floor`/`…`,
 and `Number`'s `Ord`, are not wired up yet.
 
