@@ -27,6 +27,18 @@ data Intrinsic
   -- | two `Int`s. Five operands — the three `Ordering` values and the two ints —
   -- | selected by a signed `i32` comparison.
   | OrdInt
+  -- | `Data.Eq`/`Data.Ord` on `Boolean` (`i31` bits) and `Number` (`$Num` f64).
+  -- | `BoolEq` is arity 2; `OrdBool`/`OrdNumber` are the same `lt eq gt x y`
+  -- | five-operand shape as `OrdInt`, differing only in unbox + compare.
+  | BoolEq
+  | OrdBool
+  | OrdNumber
+  | OrdString -- `lt eq gt x y` selecting on the `$rt.strCmp` lexicographic result
+  -- | `Data.Eq`/`Data.Ord` on `Array` (higher-order: the element eq/compare
+  -- | closure `f` is applied per element from the runtime). `ArrayEq` returns the
+  -- | Boolean; `ArrayOrd` returns the comparison delta the caller maps to `Ordering`.
+  | ArrayEq
+  | ArrayOrd
   | IntToNum -- Int -> Number (`f64.convert_i32_s`)
   | NumToInt -- Number -> Int (`i32.trunc_f64_s`)
   -- | `Data.EuclideanRing`'s `Int` instance: Euclidean division (non-negative
@@ -99,6 +111,14 @@ foreignIntrinsic = case _ of
   "ordIntImpl" -> Just (Tuple OrdInt 5)
   -- `Char` compares by code point, identical to `Int` (shared `i32` rep)
   "ordCharImpl" -> Just (Tuple OrdInt 5)
+  -- `Boolean` / `Number` equality and ordering
+  "eqBooleanImpl" -> Just (Tuple BoolEq 2)
+  "ordBooleanImpl" -> Just (Tuple OrdBool 5)
+  "ordNumberImpl" -> Just (Tuple OrdNumber 5)
+  "ordStringImpl" -> Just (Tuple OrdString 5)
+  -- `Array` equality / ordering (higher-order: element eq/compare closure + arrays)
+  "eqArrayImpl" -> Just (Tuple ArrayEq 3)
+  "ordArrayImpl" -> Just (Tuple ArrayOrd 3)
   -- `Data.HeytingAlgebra` Boolean algebra
   "boolConj" -> Just (Tuple BoolAnd 2)
   "boolDisj" -> Just (Tuple BoolOr 2)

@@ -45,6 +45,7 @@ module Binaryen
   , i32TruncF64S
   , f64Const
   , f64Eq
+  , f64Lt
   , f64Add
   , f64Sub
   , f64Mul
@@ -310,6 +311,12 @@ foreign import f64EqImpl :: Module -> Expression -> Expression -> Effect Express
 -- | `f64.eq`: 1 if the operands are equal, 0 otherwise.
 f64Eq :: Module -> Expression -> Expression -> Effect Expression
 f64Eq = f64EqImpl
+
+foreign import f64LtImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `f64.lt`: 1 if `left < right`, 0 otherwise.
+f64Lt :: Module -> Expression -> Expression -> Effect Expression
+f64Lt = f64LtImpl
 
 foreign import f64AddImpl :: Module -> Expression -> Expression -> Effect Expression
 foreign import f64SubImpl :: Module -> Expression -> Expression -> Effect Expression

@@ -632,8 +632,30 @@ need real column-wise pattern compilation and remain unsupported.)
   `f64` bit patterns** plus hand-picked edge cases (subnormals, `MAX_VALUE`,
   `5e-324`, powers of ten, `±0`, …) — currently bit-exact on every value.
 
-The `Boolean`/aggregate `Eq`/`Ord` instances, `Data.Int.round`/`floor`/`…`, and
-`Number`'s `Ord`, are not wired up yet.
+**Extended `Eq` / `Ord`.** Beyond `Int` (and `Char`, which shares its
+representation), equality and ordering now cover **`Boolean`** (`eqBooleanImpl` →
+compare the `i31` bits; `ordBooleanImpl`), **`Number`** (`ordNumberImpl` via `f64.lt`
+/ `f64.eq` — `Number`'s `Eq` was already wired), and **`String`** ordering
+(`ordStringImpl` via a new `$rt.strCmp` lexicographic byte comparison). The three
+`unsafeCompareImpl`-shaped foreigns (`ord{Int,Bool,Number,String}Impl`, the
+`lt eq gt x y` form) share one `ordSelect` lowering, differing only in how the
+operands are unboxed/compared. `String` order is by UTF-8 byte (= code-point order),
+which differs from JS's UTF-16 order only for astral-vs-`U+E000..U+FFFF` mixes (a
+documented consequence of the UTF-8 representation, ADR 0001). A `derive instance Eq`
+on a **single-constructor** type works (it lowers to the single-alternative
+two-scrutinee `case` of `nestColumns`, comparing each field with `&&`).
+
+**`Eq` / `Ord` on `Array`** are the higher-order `eqArrayImpl` / `ordArrayImpl`:
+they take the element eq/compare **closure** plus the two arrays, and the runtime
+(`$rt.arrayEq` / `$rt.arrayOrd`) applies that closure per element via a curried
+two-step `call_ref` (`$callClo2` — the first place the runtime makes a *curried
+multi-argument* call into generated code). `arrayEq` does the length check then the
+element-wise `&&`; `arrayOrd` returns the first non-zero element delta, else the
+length comparison, which the caller maps back to an `Ordering` (`compare 0 …`).
+
+*Derived* `Eq`/`Ord` on **multi-constructor** types (which need column-wise
+decision-tree pattern compilation) are not wired up yet; nor are
+`Data.Int.round`/`floor`/`…`.
 
 ## Records
 

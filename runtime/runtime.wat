@@ -18,6 +18,7 @@
   (type $Bytes (array (mut i32)))                                   ;; UTF-8 bytes, one per i32 lane (not packed)
   (type $Rec (struct (field (ref $LabelIds)) (field (ref $Vals))))  ;; parallel labels / values
   (type $Str (struct (field (ref $Bytes))))
+  (type $Int (struct (field i32)))                                  ;; boxed Int (also Char)
   (type $Clo (struct (field funcref) (field (ref $Vals))))          ;; closure: code + captured env
   (type $Code (func (param (ref $Clo) eqref) (result eqref)))       ;; lifted closure-body signature
 
@@ -68,6 +69,36 @@
   (func $strByteAt (export "strByteAt") (param $s eqref) (param $i i32) (result i32)
     (array.get $Bytes (struct.get $Str 0 (ref.cast (ref $Str) (local.get $s))) (local.get $i)))
 
+  ;; $rt.strCmp(a, b) -> i32 (-1 / 0 / 1): lexicographic byte comparison. On UTF-8
+  ;; bytes this is code-point order (UTF-8 preserves it); it diverges from JS's
+  ;; UTF-16 order only for strings mixing astral characters with U+E000..U+FFFF
+  ;; (a documented consequence of the UTF-8 string representation, ADR 0001).
+  (func $rt.strCmp (export "strCmp") (param $a eqref) (param $b eqref) (result i32)
+    (local $ba (ref $Bytes))
+    (local $bb (ref $Bytes))
+    (local $la i32)
+    (local $lb i32)
+    (local $i i32)
+    (local $ca i32)
+    (local $cb i32)
+    (local.set $ba (struct.get $Str 0 (ref.cast (ref $Str) (local.get $a))))
+    (local.set $bb (struct.get $Str 0 (ref.cast (ref $Str) (local.get $b))))
+    (local.set $la (array.len (local.get $ba)))
+    (local.set $lb (array.len (local.get $bb)))
+    (block $done (result i32)
+      (loop $loop
+        ;; one string exhausted: the shorter (prefix) is smaller
+        (if (i32.or (i32.ge_u (local.get $i) (local.get $la)) (i32.ge_u (local.get $i) (local.get $lb)))
+          (then (br $done
+            (if (result i32) (i32.lt_u (local.get $la) (local.get $lb)) (then (i32.const -1))
+              (else (if (result i32) (i32.gt_u (local.get $la) (local.get $lb)) (then (i32.const 1)) (else (i32.const 0))))))))
+        (local.set $ca (array.get $Bytes (local.get $ba) (local.get $i)))
+        (local.set $cb (array.get $Bytes (local.get $bb) (local.get $i)))
+        (if (i32.ne (local.get $ca) (local.get $cb))
+          (then (br $done (if (result i32) (i32.lt_u (local.get $ca) (local.get $cb)) (then (i32.const -1)) (else (i32.const 1))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop))))
+
   ;; $rt.strConcat(a, b) -> eqref : allocate a byte array of the combined length and
   ;; array.copy both halves in.
   (func $rt.strConcat (export "strConcat") (param $a eqref) (param $b eqref) (result eqref)
@@ -100,6 +131,67 @@
     (array.copy $Vals $Vals (local.get $dest) (i32.const 0) (local.get $va) (i32.const 0) (local.get $lenA))
     (array.copy $Vals $Vals (local.get $dest) (local.get $lenA) (local.get $vb) (i32.const 0) (array.len (local.get $vb)))
     (local.get $dest))
+
+  ;; Apply a curried two-argument closure: f(x)(y). `f` is an arity-1 $Clo whose
+  ;; result is itself an arity-1 $Clo (PureScript curries), so two call_ref steps.
+  (func $callClo2 (param $f eqref) (param $x eqref) (param $y eqref) (result eqref)
+    (local $c1 (ref $Clo))
+    (local $c2 (ref $Clo))
+    (local.set $c1 (ref.cast (ref $Clo) (local.get $f)))
+    (local.set $c2 (ref.cast (ref $Clo)
+      (call_ref $Code (local.get $c1) (local.get $x) (ref.cast (ref $Code) (struct.get $Clo 0 (local.get $c1))))))
+    (call_ref $Code (local.get $c2) (local.get $y) (ref.cast (ref $Code) (struct.get $Clo 0 (local.get $c2)))))
+
+  ;; $rt.arrayEq(f, xs, ys) -> i32 (Data.Eq's eqArrayImpl): unequal lengths are not
+  ;; equal; otherwise every element pair must satisfy the element-eq closure `f`.
+  (func $rt.arrayEq (export "arrayEq") (param $f eqref) (param $xs eqref) (param $ys eqref) (result i32)
+    (local $va (ref $Vals))
+    (local $vb (ref $Vals))
+    (local $n i32)
+    (local $i i32)
+    (local.set $va (ref.cast (ref $Vals) (local.get $xs)))
+    (local.set $vb (ref.cast (ref $Vals) (local.get $ys)))
+    (local.set $n (array.len (local.get $va)))
+    (if (i32.ne (local.get $n) (array.len (local.get $vb))) (then (return (i32.const 0))))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (if (i32.eqz (i31.get_s (ref.cast i31ref
+              (call $callClo2 (local.get $f)
+                (array.get $Vals (local.get $va) (local.get $i))
+                (array.get $Vals (local.get $vb) (local.get $i))))))
+          (then (return (i32.const 0))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 1))
+
+  ;; $rt.arrayOrd(f, xs, ys) -> i32 (Data.Ord's ordArrayImpl): the first non-zero
+  ;; element delta from `f` (a boxed Int), else the length comparison (the caller
+  ;; maps this i32 back to an Ordering via `compare 0`).
+  (func $rt.arrayOrd (export "arrayOrd") (param $f eqref) (param $xs eqref) (param $ys eqref) (result i32)
+    (local $va (ref $Vals))
+    (local $vb (ref $Vals))
+    (local $la i32)
+    (local $lb i32)
+    (local $i i32)
+    (local $o i32)
+    (local.set $va (ref.cast (ref $Vals) (local.get $xs)))
+    (local.set $vb (ref.cast (ref $Vals) (local.get $ys)))
+    (local.set $la (array.len (local.get $va)))
+    (local.set $lb (array.len (local.get $vb)))
+    (block $done (result i32)
+      (loop $loop
+        (if (i32.or (i32.ge_u (local.get $i) (local.get $la)) (i32.ge_u (local.get $i) (local.get $lb)))
+          (then (br $done
+            (if (result i32) (i32.eq (local.get $la) (local.get $lb)) (then (i32.const 0))
+              (else (if (result i32) (i32.gt_u (local.get $la) (local.get $lb)) (then (i32.const -1)) (else (i32.const 1))))))))
+        (local.set $o (struct.get $Int 0 (ref.cast (ref $Int)
+          (call $callClo2 (local.get $f)
+            (array.get $Vals (local.get $va) (local.get $i))
+            (array.get $Vals (local.get $vb) (local.get $i))))))
+        (if (i32.ne (local.get $o) (i32.const 0)) (then (br $done (local.get $o))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop))))
 
   ;; $rt.showInt(n) -> eqref ($Str) (Data.Show's showIntImpl): write the base-10
   ;; digits of `n` into an 11-byte scratch from the right, then copy the used suffix

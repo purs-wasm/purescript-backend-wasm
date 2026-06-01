@@ -95,8 +95,11 @@ importRuntime ctx = do
   let imp name base params result = B.addFunctionImport ctx.mod name runtimeModuleName base (B.createType params) result
   imp projHelperName "proj" [ B.eqref, B.i32 ] B.eqref
   imp strEqHelperName "strEq" [ B.eqref, B.eqref ] B.i32
+  imp strCmpHelperName "strCmp" [ B.eqref, B.eqref ] B.i32
   imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
   imp arrayConcatHelperName "arrayConcat" [ B.eqref, B.eqref ] B.eqref
+  imp arrayEqHelperName "arrayEq" [ B.eqref, B.eqref, B.eqref ] B.i32
+  imp arrayOrdHelperName "arrayOrd" [ B.eqref, B.eqref, B.eqref ] B.i32
   imp showIntHelperName "showInt" [ B.i32 ] B.eqref
   imp showCharHelperName "showChar" [ B.i32 ] B.eqref
   imp showStringHelperName "showString" [ B.eqref ] B.eqref
@@ -115,6 +118,10 @@ projHelperName = "$rt.proj"
 strEqHelperName :: String
 strEqHelperName = "$rt.strEq"
 
+-- | The shared lexicographic string comparison helper: returns `i32` `-1`/`0`/`1`.
+strCmpHelperName :: String
+strCmpHelperName = "$rt.strCmp"
+
 -- | The shared string concatenation helper (see `addStrConcatHelper`).
 strConcatHelperName :: String
 strConcatHelperName = "$rt.strConcat"
@@ -122,6 +129,13 @@ strConcatHelperName = "$rt.strConcat"
 -- | The shared array concatenation helper (see `addArrayConcatHelper`).
 arrayConcatHelperName :: String
 arrayConcatHelperName = "$rt.arrayConcat"
+
+-- | The shared higher-order `Array` equality / comparison helpers.
+arrayEqHelperName :: String
+arrayEqHelperName = "$rt.arrayEq"
+
+arrayOrdHelperName :: String
+arrayOrdHelperName = "$rt.arrayOrd"
 
 -- | The shared `Show` rendering helpers (defined in `runtime.wat`).
 showIntHelperName :: String
@@ -503,21 +517,36 @@ genPrim ctx intr args = case intr, args of
     ea <- unboxIntAtom ctx a
     eb <- unboxIntAtom ctx b
     B.i32Eq ctx.mod ea eb >>= B.i31New ctx.mod
-  -- ordIntImpl lt eq gt x y = if x < y then lt else if x == y then eq else gt
-  OrdInt, [ lt, eq, gt, x, y ] -> do
-    ltCond <- do
-      ex <- unboxIntAtom ctx x
-      ey <- unboxIntAtom ctx y
-      B.i32LtS ctx.mod ex ey
-    eqCond <- do
-      ex <- unboxIntAtom ctx x
-      ey <- unboxIntAtom ctx y
-      B.i32Eq ctx.mod ex ey
-    ltE <- genAtom ctx lt
-    eqE <- genAtom ctx eq
-    gtE <- genAtom ctx gt
-    inner <- B.if_ ctx.mod eqCond eqE gtE
-    B.if_ ctx.mod ltCond ltE inner
+  -- Boolean -> Boolean -> Boolean: compare the i31 bits, box as an i31 Boolean.
+  BoolEq, [ a, b ] -> do
+    ea <- genAtom ctx a >>= unboxBoolExpr ctx
+    eb <- genAtom ctx b >>= unboxBoolExpr ctx
+    B.i32Eq ctx.mod ea eb >>= B.i31New ctx.mod
+  -- unsafeCompareImpl lt eq gt x y = if x < y then lt else if x == y then eq else gt,
+  -- differing per type only in how the operands are unboxed and compared.
+  OrdInt, [ lt, eq, gt, x, y ] -> ordSelect unboxIntAtom' B.i32LtS B.i32Eq lt eq gt x y
+  OrdBool, [ lt, eq, gt, x, y ] -> ordSelect unboxBoolAtom B.i32LtS B.i32Eq lt eq gt x y
+  OrdNumber, [ lt, eq, gt, x, y ] -> ordSelect unboxNumAtom B.f64Lt B.f64Eq lt eq gt x y
+  -- ordStringImpl: select on the sign of the lexicographic comparison.
+  OrdString, [ lt, eq, gt, x, y ] ->
+    ordSelectC
+      (strCmpCond x y (\c -> B.i32Const ctx.mod 0 >>= B.i32LtS ctx.mod c))
+      (strCmpCond x y (\c -> B.i32Eqz ctx.mod c))
+      lt
+      eq
+      gt
+  -- Array equality / comparison: delegate to the higher-order runtime helpers,
+  -- which apply the element closure per element. Box the Boolean / Int result.
+  ArrayEq, [ f, xs, ys ] -> do
+    ef <- genAtom ctx f
+    exs <- genAtom ctx xs
+    eys <- genAtom ctx ys
+    B.call ctx.mod arrayEqHelperName [ ef, exs, eys ] B.i32 >>= B.i31New ctx.mod
+  ArrayOrd, [ f, xs, ys ] -> do
+    ef <- genAtom ctx f
+    exs <- genAtom ctx xs
+    eys <- genAtom ctx ys
+    B.call ctx.mod arrayOrdHelperName [ ef, exs, eys ] B.i32 >>= boxInt ctx
   -- Euclidean Int division/remainder/degree: unbox, delegate to the shared
   -- runtime helpers (zero guard + non-negative remainder), re-box the result.
   IntDiv, [ a, b ] -> intCall2 intDivHelperName a b
@@ -622,6 +651,34 @@ genPrim ctx intr args = case intr, args of
     ea <- genAtom ctx a >>= unboxNumExpr ctx
     eb <- genAtom ctx b >>= unboxNumExpr ctx
     op ctx.mod ea eb >>= boxNum ctx
+  -- per-type operand unboxing, used by `ordSelect`
+  unboxIntAtom' a = unboxIntAtom ctx a
+  unboxBoolAtom a = genAtom ctx a >>= unboxBoolExpr ctx
+  unboxNumAtom a = genAtom ctx a >>= unboxNumExpr ctx
+  -- `lt eq gt`: pick `lt`/`eq`/`gt` from the given `i32` conditions.
+  ordSelectC ltCondM eqCondM lt eq gt = do
+    ltCond <- ltCondM
+    eqCond <- eqCondM
+    ltE <- genAtom ctx lt
+    eqE <- genAtom ctx eq
+    gtE <- genAtom ctx gt
+    inner <- B.if_ ctx.mod eqCond eqE gtE
+    B.if_ ctx.mod ltCond ltE inner
+  -- ordSelectC specialised to unbox both operands and apply a primitive compare.
+  ordSelect unbox ltOp eqOp lt eq gt x y =
+    let
+      cmp2 op = do
+        ex <- unbox x
+        ey <- unbox y
+        op ctx.mod ex ey
+    in
+      ordSelectC (cmp2 ltOp) (cmp2 eqOp) lt eq gt
+  -- a condition derived from `$rt.strCmp x y` (e.g. `< 0`, `== 0`).
+  strCmpCond x y k = do
+    ex <- genAtom ctx x
+    ey <- genAtom ctx y
+    c <- B.call ctx.mod strCmpHelperName [ ex, ey ] B.i32
+    k c
 
 unboxIntAtom :: Ctx -> Atom -> Effect B.Expression
 unboxIntAtom ctx atom = genAtom ctx atom >>= unboxIntExpr ctx

@@ -26,6 +26,7 @@ import Test.E2E.PreludeBounded as PreludeBounded
 import Test.E2E.PreludeSemigroup as PreludeSemigroup
 import Test.E2E.PreludeMonoid as PreludeMonoid
 import Test.E2E.PreludeShow as PreludeShow
+import Test.E2E.PreludeEqOrd as PreludeEqOrd
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -51,3 +52,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeSemigroup.spec
   PreludeMonoid.spec
   PreludeShow.spec
+  PreludeEqOrd.spec
