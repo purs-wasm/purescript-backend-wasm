@@ -557,6 +557,15 @@ guard** (`x div 0 = x mod 0 = 0` instead of trapping). `intDiv` is then just
 `(x - intMod x y) / y` — once the remainder is removed, the quotient divides
 exactly, so no sign correction is needed.
 
+**`Number` as a `Field`** completes `Number`'s algebra (`Field` = `EuclideanRing`
++ `DivisionRing`, the top of the hierarchy). This needed *no* new machine op:
+`DivisionRing`'s `recip x = 1.0 / x` lowers through `Data.DivisionRing.div` — which
+is `Data.EuclideanRing.div` partially applied to `euclideanRingNumber` (a CAF) — to
+the existing `numDiv` (`f64.div`); and `Field` is law-only, its instance merely
+bundling the `EuclideanRing` and `DivisionRing` superclass dictionaries. A
+`Field`-constrained generic used at `Number` therefore links end-to-end through the
+already-supported partial-application, CAF, and superclass-thunk paths.
+
 `Show`, the `Boolean`/aggregate `Eq`/`Ord` instances, `Data.Int.round`/`floor`/`…`,
 and `Number`'s `Ord`, are not wired up yet.
 
