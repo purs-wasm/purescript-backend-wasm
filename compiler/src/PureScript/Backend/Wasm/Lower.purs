@@ -198,6 +198,10 @@ lowerArg env expr k = case expr of
   C.Accessor _ label record -> lowerArg env record \recAtom -> do
     labelId <- internLabel env label
     bindRhs (RProjLabel recAtom labelId) k
+  C.ObjectUpdate _ record copyFields updates -> lowerObjectUpdate env record copyFields updates k
+  -- A `let` in argument position (e.g. purs's `let v = p in v { … }` for a record
+  -- update): bind the groups, then reduce the body to an atom for `k`.
+  C.Let _ binds body -> lowerCoreLetK env binds body \env' body' -> lowerArg env' body' k
   C.App _ _ _ -> lowerApp env (collectApp expr) k
   C.Abs _ param body -> do
     { codeName, captures } <- liftLambda Nothing env param body
@@ -229,6 +233,35 @@ lowerFields env fields k = case Array.uncons fields of
 lowerRecord :: Env -> Array (Tuple String C.Expr) -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerRecord env fields k =
   lowerFields env fields \pairs -> bindRhs (RMkRecord (Array.sortWith fst pairs)) k
+
+-- | Lower a record update `record { l = v, … }` into a freshly-built record: the
+-- | updated fields take their new values, and the untouched fields (`copyFields`,
+-- | which lists exactly the other labels for a monomorphic record) are projected
+-- | out of the original. A polymorphic update (`copyFields = Nothing`, an open
+-- | row whose extra fields are unknown) needs a runtime copy and is not yet
+-- | supported.
+lowerObjectUpdate
+  :: Env -> C.Expr -> Maybe (Array String) -> Array (Tuple String C.Expr) -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
+lowerObjectUpdate env record copyFields updates k = case copyFields of
+  Nothing -> throw (UnsupportedExpr "polymorphic record update (open row) is not yet supported")
+  Just untouched ->
+    lowerArg env record \recAtom ->
+      lowerCopied recAtom untouched \copied ->
+        lowerUpdated updates \updated ->
+          bindRhs (RMkRecord (Array.sortWith fst (copied <> updated))) k
+  where
+  lowerCopied recAtom labels kk = case Array.uncons labels of
+    Nothing -> kk []
+    Just { head: label, tail } -> do
+      labelId <- internLabel env label
+      bindRhs (RProjLabel recAtom labelId) \atom ->
+        lowerCopied recAtom tail \rest -> kk (Array.cons (Tuple labelId atom) rest)
+  lowerUpdated ups kk = case Array.uncons ups of
+    Nothing -> kk []
+    Just { head: Tuple label expr, tail } -> do
+      labelId <- internLabel env label
+      lowerArg env expr \atom ->
+        lowerUpdated tail \rest -> kk (Array.cons (Tuple labelId atom) rest)
 
 -- | Lower an application spine. A known intrinsic / constructor / top-level
 -- | function dispatches on how the argument count compares to its arity:
@@ -338,16 +371,23 @@ lowerTail env = case _ of
 -- | recursion, compiled to a `LetRec` whose closures are allocated first and then
 -- | back-patched to refer to one another (knot-tying).
 lowerCoreLet :: Env -> Array Bind -> C.Expr -> Lower AnfExpr
-lowerCoreLet env binds body = case Array.uncons binds of
-  Nothing -> lowerTail env body
+lowerCoreLet env binds body = lowerCoreLetK env binds body lowerTail
+
+-- | The general form of `lowerCoreLet`: bind the groups, then hand the extended
+-- | environment and body to `finish`. A `let` in tail position finishes with
+-- | `lowerTail`; a `let` in argument position (e.g. the `let v = p in v { … }`
+-- | purs emits for a record update) finishes by reducing the body to an `Atom`.
+lowerCoreLetK :: Env -> Array Bind -> C.Expr -> (Env -> C.Expr -> Lower AnfExpr) -> Lower AnfExpr
+lowerCoreLetK env binds body finish = case Array.uncons binds of
+  Nothing -> finish env body
   Just { head: NonRec _ ident e, tail } ->
     lowerArg env e \atom ->
-      lowerCoreLet (env { locals = Object.insert ident atom env.locals }) tail body
+      lowerCoreLetK (env { locals = Object.insert ident atom env.locals }) tail body finish
   Just { head: Rec recBinds, tail } -> case recBinds of
     [ { ident, expr: C.Abs _ param recBody } ] -> do
       { codeName, captures } <- liftLambda (Just ident) env param recBody
       bindRhs (RMkClosure codeName captures) \fAtom ->
-        lowerCoreLet (env { locals = Object.insert ident fAtom env.locals }) tail body
+        lowerCoreLetK (env { locals = Object.insert ident fAtom env.locals }) tail body finish
     _ -> do
       -- Mutual recursion: pre-allocate a slot per binding so each member's
       -- closure can refer to its siblings (as forward references resolved by the
@@ -358,7 +398,7 @@ lowerCoreLet env binds body = case Array.uncons binds of
         env' = env
           { locals = foldl (\m (Tuple rb s) -> Object.insert rb.ident (AVar (Local s)) m) env.locals bound }
       recBindsIR <- traverse (lowerRecBind env') bound
-      rest <- lowerCoreLet env' tail body
+      rest <- lowerCoreLetK env' tail body finish
       pure (LetRec recBindsIR rest)
 
 -- | Lower one member of a mutually-recursive `let` group, given its
@@ -384,6 +424,11 @@ lowerCase env scrutinees alternatives = case scrutinees of
     | Just { var, body } <- newtypeAlternative alternatives ->
         lowerArg env scrutinee \scrutAtom ->
           lowerTail (bindNewtypeVar env var scrutAtom) body
+  -- A record pattern (`\{ x, y } -> …`) is a single destructuring alternative
+  -- that always matches: bind each field's sub-binder to a label projection.
+  [ scrutinee ]
+    | Just { fields, body } <- recordPatternAlternative alternatives ->
+        lowerArg env scrutinee \scrutAtom -> bindRecordFields env scrutAtom fields body
   [ scrutinee ] ->
     lowerArg env scrutinee \scrutAtom -> case caseKind alternatives of
       KConstructor -> do
@@ -414,6 +459,29 @@ caseKind alternatives =
   isLitBinder = case _ of
     C.LiteralBinder _ _ -> true
     _ -> false
+
+-- | Recognise a single record-pattern alternative `{ l: b, … } -> body` (a
+-- | `LiteralBinder` of an object literal). Records are products, so it is the
+-- | only alternative and always matches.
+recordPatternAlternative :: Array C.CaseAlternative -> Maybe { fields :: Array (Tuple String C.Binder), body :: C.Expr }
+recordPatternAlternative = case _ of
+  [ { binders: [ C.LiteralBinder _ (C.LitObject fields) ], result: Right body } ] -> Just { fields, body }
+  _ -> Nothing
+
+-- | Bind a record pattern's fields, each to a label projection out of the
+-- | scrutinee, then lower the body.
+bindRecordFields :: Env -> Atom -> Array (Tuple String C.Binder) -> C.Expr -> Lower AnfExpr
+bindRecordFields env scrutAtom fields body = case Array.uncons fields of
+  Nothing -> lowerTail env body
+  Just { head: Tuple label subBinder, tail } -> case subBinder of
+    C.NullBinder _ -> bindRecordFields env scrutAtom tail body
+    C.VarBinder _ name -> do
+      labelId <- internLabel env label
+      slot <- fresh
+      let env' = env { locals = Object.insert name (AVar (Local slot)) env.locals }
+      rest <- bindRecordFields env' scrutAtom tail body
+      pure (Let slot Boxed (RProjLabel scrutAtom labelId) rest)
+    _ -> throw (UnsupportedBinder "record pattern field: only var / wildcard sub-binders")
 
 -- | Lower literal-pattern alternatives into `LitBranch`es plus the catch-all
 -- | default. A var/wildcard binder is the default (binding the scrutinee for a
@@ -625,15 +693,25 @@ collectLabels modules =
     C.Literal _ _ -> []
     C.Constructor _ _ _ _ -> []
     C.Accessor _ l e -> Array.cons l (exprLabels e)
-    C.ObjectUpdate _ e _ kvs -> exprLabels e <> (kvs >>= \(Tuple l v) -> Array.cons l (exprLabels v))
+    C.ObjectUpdate _ e copyFields kvs ->
+      exprLabels e <> fromMaybe [] copyFields <> (kvs >>= \(Tuple l v) -> Array.cons l (exprLabels v))
     C.Abs _ _ b -> exprLabels b
     C.App _ f a -> exprLabels f <> exprLabels a
     C.Var _ _ -> []
     C.Case _ ss alts -> (ss >>= exprLabels) <> (alts >>= altLabels)
     C.Let _ binds b -> (binds >>= bindLabels) <> exprLabels b
-  altLabels alt = case alt.result of
-    Right e -> exprLabels e
-    Left guards -> guards >>= \g -> exprLabels g.guard <> exprLabels g.expression
+  altLabels alt =
+    (alt.binders >>= binderLabels)
+      <> case alt.result of
+        Right e -> exprLabels e
+        Left guards -> guards >>= \g -> exprLabels g.guard <> exprLabels g.expression
+  -- the labels a record pattern (`{ l: … }`) projects, recursing into nested binders
+  binderLabels = case _ of
+    C.LiteralBinder _ (C.LitObject fields) -> fields >>= \(Tuple l b) -> Array.cons l (binderLabels b)
+    C.LiteralBinder _ (C.LitArray bs) -> bs >>= binderLabels
+    C.ConstructorBinder _ _ _ bs -> bs >>= binderLabels
+    C.NamedBinder _ _ b -> binderLabels b
+    _ -> []
 
 -- | Link and lower several decoded CoreFn modules into one backend IR `Program`
 -- | (one wasm; ADR 0009). Symbol tables are built across **all** modules and keyed

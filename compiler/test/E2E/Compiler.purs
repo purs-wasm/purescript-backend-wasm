@@ -15,6 +15,7 @@ import Test.E2E.Slice4a as Slice4a
 import Test.E2E.Slice4b as Slice4b
 import Test.E2E.Slice4c as Slice4c
 import Test.E2E.Link as Link
+import Test.E2E.Records as Records
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -28,4 +29,5 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Slice4a.spec
   Slice4b.spec
   Slice4c.spec
+  Records.spec
   Link.spec

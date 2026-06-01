@@ -483,6 +483,43 @@ the dictionary and projection altogether — `add dict x y → intAdd x y` — i
 separate, further optimization of **ADR 0005** (dictionary elimination). Both are
 Proposed, not yet implemented.
 
+## Records
+
+```purs
+type Point = { x :: Int, y :: Int }
+
+mk :: Int -> Int -> Point
+mk x y = { x, y }                        -- construction
+
+getX :: Point -> Int
+getX p = p.x                             -- field access
+
+moveX :: Point -> Point
+moveX p = p { x = addI p.x 5 }           -- update
+
+patX :: Point -> Int
+patX { x } = x                           -- pattern destructuring
+```
+
+Ordinary records use the **same label-map** as type-class dictionaries (which are
+records in CoreFn) — there is no separate representation. So construction
+(`RMkRecord`) and field access (`RProjLabel`) already work from the dictionary
+support; records add two more forms:
+
+- **Update** `r { x = v }` rebuilds the record: updated fields take their new
+  values, and the untouched fields — which purs lists in the CoreFn `copy` set for
+  a monomorphic record — are projected out of the original and copied in. So it is
+  just an `RMkRecord` over `(updated value | RProjLabel original)` per label; no
+  new codegen.
+- **Patterns** `\{ x } -> …` are a single always-matching destructure: each field
+  sub-binder is bound to its `RProjLabel` of the scrutinee (no `Switch`).
+
+Not yet supported: the `Record.*` library's **dynamic-`String`-key** operations
+(`get`/`set`/`insert`/`delete` — they need a runtime string→label-id mapping, since
+labels are interned to `i32` ids at compile time), and **polymorphic update** of an
+open row (`copy` absent — the unknown extra fields need a runtime copy). Both are
+deferred to the `Prelude` / `Record`-module stage.
+
 ## Host interface
 
 Every exported function gets a thin `…$export` wrapper with the host-facing

@@ -83,6 +83,17 @@ litStr s = CF.Literal ann (CF.LitString s)
 litObj :: Array (Tuple String CF.Expr) -> CF.Expr
 litObj fields = CF.Literal ann (CF.LitObject fields)
 
+-- | A record update `record { l = v, … }`; `copyFields` are the untouched labels.
+objUpdate :: CF.Expr -> Array String -> Array (Tuple String CF.Expr) -> CF.Expr
+objUpdate record copyFields updates = CF.ObjectUpdate ann record (Just copyFields) updates
+
+-- | A record-pattern alternative `{ l: subBinder, … } -> body`.
+recAlt :: Array (Tuple String CF.Binder) -> CF.Expr -> CF.CaseAlternative
+recAlt fields body = { binders: [ CF.LiteralBinder ann (CF.LitObject fields) ], result: Right body }
+
+varBinder :: String -> CF.Binder
+varBinder = CF.VarBinder ann
+
 -- | `record.label`.
 accessor :: String -> CF.Expr -> CF.Expr
 accessor label record = CF.Accessor ann label record
@@ -417,6 +428,27 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Left err -> fail (show err)
         Right prog ->
           (projLabelIds <<< _.body <$> exported "get" prog) `shouldEqual` Just [ 0 ]
+
+    it "lowers a record update to a rebuilt record (updated + copied fields)" do
+      -- f r = r { a = 1 }  -- record is { a, b }, so b is copied; ids a=0, b=1
+      let f = def "f" (lam "r" (objUpdate (lv "r") [ "b" ] [ Tuple "a" (litInt 1) ]))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog -> do
+          (recordLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ [ 0, 1 ] ]
+          -- the untouched field b is projected out of the original record
+          (projLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ 1 ]
+
+    it "lowers a record pattern to label projections without a Switch" do
+      -- f r = case r of { a: x } -> x
+      let f = def "f" (lam "r" (caseOf (lv "r") [ recAlt [ Tuple "a" (varBinder "x") ] (lv "x") ]))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just fn -> do
+            hasSwitch fn.body `shouldEqual` false
+            projLabelIds fn.body `shouldEqual` [ 0 ]
 
     it "references a nullary top-level value as a (zero-argument) known call" do
       -- v = 1 ; w = v  -- the bare reference to the CAF v becomes RCallKnown v []

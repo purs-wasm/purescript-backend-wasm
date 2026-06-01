@@ -1,0 +1,28 @@
+module Records where
+
+foreign import addI :: Int -> Int -> Int
+
+type Point = { x :: Int, y :: Int }
+
+mk :: Int -> Int -> Point
+mk x y = { x, y }
+
+-- construction + field access
+getX :: Int -> Int
+getX n = (mk n (addI n n)).x
+
+-- two field accesses
+sumXY :: Int -> Int
+sumXY n = let p = mk n (addI n 1) in addI p.x p.y
+
+-- record update: the updated field
+updatedX :: Int -> Int
+updatedX n = let p = mk n 100 in (p { x = addI p.x 5 }).x
+
+-- record update: an untouched field is copied from the original
+keptY :: Int -> Int
+keptY n = let p = mk n 100 in (p { x = addI p.x 5 }).y
+
+-- record pattern destructuring
+patX :: Int -> Int
+patX n = (\{ x } -> x) (mk n 0)
