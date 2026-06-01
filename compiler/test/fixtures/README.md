@@ -16,6 +16,7 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Slice2b.corefn.json` | `Slice2b.purs.sample` | `Test.E2E.Slice2b`            | partial application; top-level mutual recursion; self-recursive `let` |
 | `Slice3.corefn.json`  | `Slice3.purs.sample`  | `Test.E2E.Slice3`             | type-class dictionaries: instance CAFs, method dispatch via label search |
 | `Slice3b.corefn.json` | `Slice3b.purs.sample` | `Test.E2E.Slice3`             | superclass dictionaries: thunked `<Class><n>` fields, one/two-level access |
+| `Slice4a.corefn.json` | `Slice4a.purs.sample` | `Test.E2E.Slice4a`            | scalar literals (`Char`/`Number`/`Boolean`) + literal-pattern matching (`if`, `case n of 0 ->`) |
 
 ## Regenerating
 

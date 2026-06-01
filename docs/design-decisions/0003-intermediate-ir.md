@@ -36,7 +36,7 @@ This maps directly onto wasm locals, makes free-variable computation (hence
 closure conversion) trivial, and gives a natural place to attach
 representation annotations. Sketch:
 
-```
+```purs
 Program  = { funcs :: Array IRFunc, values :: Array CAF, exports :: ... }
 IRFunc   = { name, params :: Array Slot, env :: Array Slot, body :: Block }
 

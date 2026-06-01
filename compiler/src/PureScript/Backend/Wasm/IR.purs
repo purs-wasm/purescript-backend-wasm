@@ -1,13 +1,6 @@
 -- | The backend intermediate representation: a thin, A-normal-form layer
 -- | between CoreFn and Binaryen. See `docs/design-decisions/0003-intermediate-ir.md`
 -- | for the rationale.
--- |
--- | This module starts at the **Slice 0** subset — the scalar `Int`-only world:
--- | top-level functions, saturated calls, integer literals, and inlined machine
--- | ops. It is deliberately minimal; later slices extend it where the lowering
--- | and code generator prove a need, rather than speculatively up front. Each
--- | place a later slice will grow is marked with a `Slice N:` note so the
--- | intended shape is visible without committing code to it yet.
 module PureScript.Backend.Wasm.IR where
 
 import Prelude
@@ -18,17 +11,14 @@ import Data.Show.Generic (genericShow)
 import Data.Tuple (Tuple)
 
 -- | The wasm-level representation chosen for a value.
--- |
--- | Why this exists: CoreFn is type-erased, but the code generator must commit
--- | to concrete wasm types. Instead of reconstructing PureScript types, we carry
--- | the representation we *chose* (per ADR 0001) on each binder and let codegen
--- | switch on it. Slice 0 only ever produces `I32`; `F64`/`Boxed` are declared
--- | now so the type is stable once later slices begin emitting them.
+-- | CoreFn is type-erased, but the code generator must commit to concrete wasm types. 
+-- | Instead of reconstructing PureScript types, we carry the representation we *chose* 
+-- | on each binder and let codegen switch on it.
 data Rep
-  = I32 -- Int (and, in monomorphic positions later, Char / Boolean)
+  = I32 -- Int, Char, Boolean
   | F64 -- Number
-  | Boxed -- the universal `eqref` box of ADR 0001 (Slice 1+)
-  | CloRef -- (ref $Clo): the closure parameter of a lifted code function (Slice 2)
+  | Boxed -- the universal `eqref` box
+  | CloRef -- (ref $Clo): the closure parameter of a lifted code function
 
 derive instance eqRep :: Eq Rep
 derive instance genericRep :: Generic Rep _
@@ -49,18 +39,12 @@ derive instance ordSlot :: Ord Slot
 instance showSlot :: Show Slot where
   show (Slot n) = "(Slot " <> show n <> ")"
 
--- | A variable reference that may appear inside an `Atom`.
--- |
--- | Slice 0 only needs `Local`; the constructors a later slice adds are noted
--- | rather than declared, to keep pattern matches in the lowering/codegen total
--- | over exactly what exists today.
+-- | A variable reference that may appear inside an `Atom`: a local slot, or — in
+-- | a lifted code function — a free variable captured in the enclosing closure's
+-- | environment array (read by index).
 data VarRef
   = Local Slot
-  -- | A captured free variable, read by index from the enclosing closure's
-  -- | environment array. Only appears inside a lifted code function (Slice 2).
   | EnvField Int
-
--- Slice 1: | Global FuncName  -- reference to a top-level value
 
 derive instance eqVarRef :: Eq VarRef
 derive instance genericVarRef :: Generic VarRef _
@@ -72,10 +56,12 @@ instance showVarRef :: Show VarRef where
 -- | so the code generator never has to sequence nested computations — that is
 -- | entirely the job of `Let` (below).
 data Atom
-  = ALitInt Int
+  = ALitInt Int -- also a `Char` (its code point); both box as `$Int = (struct i32)`
+  | ALitNumber Number -- boxes as `$Num = (struct f64)`
+  | ALitBoolean Boolean -- an `i31ref` (`true` = 1, `false` = 0), per ADR 0001
   | AVar VarRef
 
--- Slice with each literal kind: ALitNumber / ALitChar / ALitString / ALitBoolean
+-- Slice 4b: | ALitString String
 
 derive instance eqAtom :: Eq Atom
 derive instance genericAtom :: Generic Atom _
@@ -92,6 +78,9 @@ data Intrinsic
   = IntAdd
   | IntSub
   | IntMul
+  | IntEq -- Int -> Int -> Boolean (`i32.eq`, result boxed as an `i31` Boolean)
+  | IntToNum -- Int -> Number (`f64.convert_i32_s`)
+  | NumToInt -- Number -> Int (`i32.trunc_f64_s`)
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -168,6 +157,27 @@ data AnfExpr
   -- | refer to sibling group members are back-patched (knot-tying), since those
   -- | closures do not exist when the array is built. Bound for the continuation.
   | LetRec (Array RecBind) AnfExpr
+  -- | A compiled match on **literal** patterns: test the scrutinee for
+  -- | value-equality against each pattern in turn, branching to the first match.
+  -- | Unlike `Switch` (which reads an ADT constructor tag), each test unboxes the
+  -- | scrutinee and compares it to the literal. The optional default is the
+  -- | catch-all (`_`/var) arm; its absence with no match traps.
+  | LitSwitch Atom (Array LitBranch) (Maybe AnfExpr)
+
+-- | A literal pattern. A `Char` pattern is a `PInt` of its code point (same
+-- | runtime representation). `String` patterns arrive in Slice 4b.
+data LitPat
+  = PInt Int
+  | PNumber Number
+  | PBoolean Boolean
+
+derive instance eqLitPat :: Eq LitPat
+derive instance genericLitPat :: Generic LitPat _
+instance showLitPat :: Show LitPat where
+  show = genericShow
+
+-- | One arm of a `LitSwitch`: the literal it matches and the body to run.
+data LitBranch = LitBranch LitPat AnfExpr
 
 -- | One arm of a `Switch`: the constructor `tag` it matches, and the expression
 -- | to run when the scrutinee has that tag.
@@ -181,6 +191,9 @@ data RecBind = RecBind Slot FuncName (Array Atom)
 instance showBranch :: Show Branch where
   show (Branch tag body) = "(Branch " <> show tag <> " " <> show body <> ")"
 
+instance showLitBranch :: Show LitBranch where
+  show (LitBranch pat body) = "(LitBranch " <> show pat <> " " <> show body <> ")"
+
 instance showRecBind :: Show RecBind where
   show (RecBind slot name env) = "(RecBind " <> show slot <> " " <> show name <> " " <> show env <> ")"
 
@@ -190,13 +203,14 @@ instance showAnfExpr :: Show AnfExpr where
     Let s r rhs k -> "(Let " <> show s <> " " <> show r <> " " <> show rhs <> " " <> show k <> ")"
     Switch scrut branches dflt -> "(Switch " <> show scrut <> " " <> show branches <> " " <> show dflt <> ")"
     LetRec binds k -> "(LetRec " <> show binds <> " " <> show k <> ")"
+    LitSwitch scrut branches dflt -> "(LitSwitch " <> show scrut <> " " <> show branches <> " " <> show dflt <> ")"
 
 -- | A top-level function. `params` carries both the arity (its length) and the
 -- | representation of each parameter; parameters occupy slots
 -- | `0 .. length params - 1`, and `Let` bindings in `body` take the slots after
 -- | them. `export` is the external name when the function is exported from the
--- | module (Slice 0's observable surface is exported functions called by the
--- | host).
+-- | module — exported functions are the module's observable surface, called by
+-- | the host.
 type IRFunc =
   { name :: FuncName
   , params :: Array Rep
@@ -209,11 +223,10 @@ type IRFunc =
   , localCount :: Int
   }
 
--- | A whole compiled module.
--- |
--- | Slice 0 is just functions. Slice 1 adds top-level value bindings (CAFs) in
--- | initialization order; ADR 0002's tier-2 runtime functions also live here
--- | once strings/arrays arrive.
+-- | A whole compiled module: the top-level functions (including lifted code
+-- | functions and the nullary functions that top-level value bindings compile
+-- | to). ADR 0002's tier-2 runtime functions will join them once strings/arrays
+-- | arrive.
 type Program =
   { funcs :: Array IRFunc
   }

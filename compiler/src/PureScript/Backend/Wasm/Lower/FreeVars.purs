@@ -34,9 +34,10 @@ freeVars bound = Array.nub <<< goExpr bound
     C.App _ f a -> goExpr bnd f <> goExpr bnd a
     C.Case _ scruts alts -> (scruts >>= goExpr bnd) <> (alts >>= goAlt bnd)
     C.Let _ binds body ->
-      -- Conservative scoping (sufficient for Slice 2, whose lambda bodies have no
-      -- nested lets): treat every let-bound name as in scope for both the
-      -- right-hand sides and the body.
+      -- Conservative scoping: every let-bound name is treated as in scope for both
+      -- the right-hand sides and the body. Exact for recursive `let`; for a
+      -- non-recursive `let` it over-approximates the scope, which is safe unless a
+      -- right-hand side refers to an outer variable shadowed by a let-bound name.
       let
         bnd' = bnd <> (binds >>= bindNames)
       in

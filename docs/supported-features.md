@@ -126,6 +126,46 @@ A nullary constructor just has an empty field array (`None` is
 positions read the corresponding index — e.g. `case Triple a b c of Triple _ _ z`
 reads `z` with `(array.get $1 … (i32.const 2))`.
 
+## Scalar literals and literal patterns
+
+```purs
+classify :: Int -> Int
+classify n = case n of
+  0 -> 100
+  7 -> 700
+  _ -> 999
+
+isZero :: Int -> Int
+isZero n = if eqI n 0 then 10 else 20    -- eqI : Int -> Int -> Boolean (intrinsic)
+```
+
+Beyond `Int`, the scalar representations are: **`Char`** shares `Int`'s
+`(struct i32)` (its code point); **`Number`** is `$Num = (struct f64)`;
+**`Boolean`** is an **`i31ref`** (`true` = 1, `false` = 0 — no allocation),
+per ADR 0001. Matching on a **literal** (an `Int`/`Char`/`Number`/`Boolean`
+pattern, including the `case` an `if` desugars to) compiles to a decision tree of
+**value-equality tests** — not an ADT tag read: the scrutinee is unboxed and
+compared (`i32.eq` for `Int`/`Char`, `f64.eq` for `Number`, `i31.get_s` + `i32.eq`
+for `Boolean`). The catch-all (`_`/var) arm is the `else`; an exhausted match with
+no catch-all traps.
+
+```wat
+;; classify: a chain of `if (n == k) … else …`, the `_` arm as the final else
+(func $M.classify (param $0 eqref) (result eqref)   ;; n
+  (if (result eqref)
+   (i32.eq (struct.get $0 0 (ref.cast (ref $0) (local.get $0))) (i32.const 0))  ;; n == 0?
+   (then (struct.new $0 (i32.const 100)))
+   (else
+    (if (result eqref)
+     (i32.eq (struct.get $0 0 (ref.cast (ref $0) (local.get $0))) (i32.const 7)) ;; n == 7?
+     (then (struct.new $0 (i32.const 700)))
+     (else (struct.new $0 (i32.const 999)))))))                                  ;; _ -> 999
+```
+
+`isZero` produces a `Boolean` internally (`eqI` → `ref.i31` of an `i32.eq`) and
+matches it: each arm tests `(i32.eq (i31.get_s (ref.cast i31ref scrut)) k)`. A
+`Number` match tests `(f64.eq (struct.get $Num 0 (ref.cast (ref $Num) scrut)) k)`.
+
 ## Closures and higher-order functions
 
 ```purs

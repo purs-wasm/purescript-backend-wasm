@@ -1,11 +1,11 @@
--- | Lower the backend IR (`PureScript.Backend.Wasm.IR`) to a Binaryen module.
+-- | Lower the backend IR (`PureScript.Backend.Wasm.IR`) to a Binaryen module, on
+-- | the Wasm GC representation (ADR 0001) under the uniform `eqref` convention
+-- | (ADR 0004).
 -- |
--- | This is the **Slice 2** code generator: Slice 0/1 (scalar Int, ADTs,
--- | pattern matching) plus **closures**, on the Wasm GC representation
--- | (ADR 0001) under the uniform `eqref` convention (ADR 0004).
--- |
--- |   * `Int` boxes as `$Int = (struct i32)`; an ADT as
--- |     `$ADT = (struct i32 (ref $Vals))`, `$Vals = (array (mut eqref))`.
+-- |   * Scalars box as structs — `$Int = (struct i32)` (also `Char`),
+-- |     `$Num = (struct f64)` — while `Boolean` is an unboxed `i31ref`. An ADT is
+-- |     `$ADT = (struct i32 (ref $Vals))`, `$Vals = (array (mut eqref))`; a record
+-- |     (and so a type-class dictionary) is `$Rec = (struct (ref $LabelIds) (ref $Vals))`.
 -- |   * A closure is `$Clo = (struct funcref (ref $Vals))` — its code as a
 -- |     generic `funcref` plus a captured-environment array. The code's type
 -- |     `$Code = (func (ref $Clo) eqref -> eqref)` is built in its own recursion
@@ -29,7 +29,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 
 -- | The module's runtime heap types, plus the (non-null) reference value types
 -- | derived from them for `ref.cast` targets, field reads, and signatures.
@@ -40,6 +40,7 @@ type RuntimeTypes =
   , cloHt :: B.HeapType
   , labelIdsHt :: B.HeapType
   , recHt :: B.HeapType
+  , numHt :: B.HeapType
   , codeHt :: B.HeapType
   , refInt :: B.Type
   , refVals :: B.Type
@@ -47,6 +48,7 @@ type RuntimeTypes =
   , refClo :: B.Type
   , refLabelIds :: B.Type
   , refRec :: B.Type
+  , refNum :: B.Type
   , refCode :: B.Type
   }
 
@@ -55,7 +57,7 @@ type RuntimeTypes =
 -- | `(ref $Clo)`, not `eqref`).
 type Ctx = { mod :: B.Module, rt :: RuntimeTypes, params :: Array Rep }
 
--- | Build a Binaryen module from a Slice 2 IR `Program`: enable GC, build the
+-- | Build a Binaryen module from the IR `Program`: enable GC, build the
 -- | runtime type group, add every function (`eqref` calling convention; lifted
 -- | code functions take `(ref $Clo, eqref)`), then add an `i32` export wrapper
 -- | per exported function.
@@ -81,9 +83,9 @@ projHelperName = "$rt.proj"
 -- | matches `$Code` for `call_ref`.
 buildRuntimeTypes :: B.Module -> Effect RuntimeTypes
 buildRuntimeTypes _ = do
-  tb <- B.typeBuilderCreate 6
+  tb <- B.typeBuilderCreate 7
   B.typeBuilderSetArrayType tb 0 B.eqref true -- $Vals = (array (mut eqref))
-  B.typeBuilderSetStructType tb 1 [ { ty: B.i32, mutable: false } ] -- $Int
+  B.typeBuilderSetStructType tb 1 [ { ty: B.i32, mutable: false } ] -- $Int (also $Char)
   refValsTmp <- B.typeBuilderGetTempHeapType tb 0 >>= \h -> B.typeBuilderGetTempRefType tb h false
   B.typeBuilderSetStructType tb 2 [ { ty: B.i32, mutable: false }, { ty: refValsTmp, mutable: false } ] -- $ADT
   B.typeBuilderSetStructType tb 3 [ { ty: B.funcref, mutable: false }, { ty: refValsTmp, mutable: false } ] -- $Clo
@@ -91,9 +93,10 @@ buildRuntimeTypes _ = do
   refLabelIdsTmp <- B.typeBuilderGetTempHeapType tb 4 >>= \h -> B.typeBuilderGetTempRefType tb h false
   -- $Rec = (struct (ref $LabelIds) (ref $Vals)) — parallel label-id / value arrays
   B.typeBuilderSetStructType tb 5 [ { ty: refLabelIdsTmp, mutable: false }, { ty: refValsTmp, mutable: false } ]
-  main <- B.typeBuilderBuildAndDispose tb 6
+  B.typeBuilderSetStructType tb 6 [ { ty: B.f64, mutable: false } ] -- $Num = (struct f64)
+  main <- B.typeBuilderBuildAndDispose tb 7
   case main of
-    [ valsHt, intHt, adtHt, cloHt, labelIdsHt, recHt ] -> do
+    [ valsHt, intHt, adtHt, cloHt, labelIdsHt, recHt, numHt ] -> do
       let refClo = B.typeFromHeapType cloHt false
       tb2 <- B.typeBuilderCreate 1
       B.typeBuilderSetSignatureType tb2 0 (B.createType [ refClo, B.eqref ]) B.eqref
@@ -106,6 +109,7 @@ buildRuntimeTypes _ = do
           , cloHt
           , labelIdsHt
           , recHt
+          , numHt
           , codeHt
           , refInt: B.typeFromHeapType intHt false
           , refVals: B.typeFromHeapType valsHt false
@@ -113,6 +117,7 @@ buildRuntimeTypes _ = do
           , refClo
           , refLabelIds: B.typeFromHeapType labelIdsHt false
           , refRec: B.typeFromHeapType recHt false
+          , refNum: B.typeFromHeapType numHt false
           , refCode: B.typeFromHeapType codeHt false
           }
         _ -> throwException (error "Codegen: expected exactly 1 code heap type")
@@ -212,6 +217,27 @@ unboxIntExpr ctx e = do
   c <- B.refCast ctx.mod e ctx.rt.refInt
   B.structGet ctx.mod 0 c B.i32 false
 
+-- | Box an `f64` expression into an `eqref` (`struct.new $Num`).
+boxNum :: Ctx -> B.Expression -> Effect B.Expression
+boxNum ctx e = B.structNew ctx.mod ctx.rt.numHt [ e ]
+
+-- | Unbox an `eqref` expression to `f64` (`ref.cast $Num` then `struct.get 0`).
+unboxNumExpr :: Ctx -> B.Expression -> Effect B.Expression
+unboxNumExpr ctx e = do
+  c <- B.refCast ctx.mod e ctx.rt.refNum
+  B.structGet ctx.mod 0 c B.f64 false
+
+-- | Box a `Boolean` as an `i31ref` (`true` = 1, `false` = 0; ADR 0001).
+boxBool :: Ctx -> Boolean -> Effect B.Expression
+boxBool ctx b = B.i32Const ctx.mod (if b then 1 else 0) >>= B.i31New ctx.mod
+
+-- | Unbox an `eqref` known to hold an `i31` Boolean to its `i32` (`ref.cast`
+-- | `i31ref` then `i31.get_s`).
+unboxBoolExpr :: Ctx -> B.Expression -> Effect B.Expression
+unboxBoolExpr ctx e = do
+  c <- B.refCast ctx.mod e B.i31ref
+  B.i31GetS ctx.mod c
+
 -- | Generate a function body. `Let`s become `local.set` statements sequenced in
 -- | a `block` whose value is the tail (`Return` atom or `Switch`).
 genBody :: Ctx -> AnfExpr -> Effect B.Expression
@@ -220,6 +246,7 @@ genBody ctx = go []
   go statements = case _ of
     Return atom -> seal statements =<< genAtom ctx atom
     Switch scrutAtom branches dflt -> seal statements =<< genSwitch ctx scrutAtom branches dflt
+    LitSwitch scrutAtom branches dflt -> seal statements =<< genLitSwitch ctx scrutAtom branches dflt
     Let (Slot index) _ rhs k -> do
       e <- genRhs ctx rhs
       stmt <- B.localSet ctx.mod index e
@@ -291,6 +318,35 @@ genSwitch ctx scrutAtom branches dflt = chain branches
       elseE <- chain tail
       B.if_ ctx.mod cond thenE elseE
 
+-- | A `LitSwitch` becomes a chain of `if (scrutinee == literal) <branch> else …`.
+-- | The equality test unboxes the scrutinee per literal kind: `Int`/`Char` and
+-- | `Boolean` compare as `i32`, `Number` as `f64`.
+genLitSwitch :: Ctx -> Atom -> Array LitBranch -> Maybe AnfExpr -> Effect B.Expression
+genLitSwitch ctx scrutAtom branches dflt = chain branches
+  where
+  chain bs = case Array.uncons bs of
+    Nothing -> case dflt of
+      Just d -> genBody ctx d
+      Nothing -> B.unreachable ctx.mod
+    Just { head: LitBranch pat body, tail } -> do
+      cond <- litTest pat
+      thenE <- genBody ctx body
+      elseE <- chain tail
+      B.if_ ctx.mod cond thenE elseE
+  litTest = case _ of
+    PInt n -> do
+      s <- unboxIntAtom ctx scrutAtom
+      k <- B.i32Const ctx.mod n
+      B.i32Eq ctx.mod s k
+    PBoolean b -> do
+      s <- genAtom ctx scrutAtom >>= unboxBoolExpr ctx
+      k <- B.i32Const ctx.mod (if b then 1 else 0)
+      B.i32Eq ctx.mod s k
+    PNumber n -> do
+      s <- genAtom ctx scrutAtom >>= unboxNumExpr ctx
+      k <- B.f64Const ctx.mod n
+      B.f64Eq ctx.mod s k
+
 -- | The wasm type of local `i` in the current function: a parameter takes its
 -- | declared representation (local 0 of a code function is `(ref $Clo)`), while
 -- | `Let`-bound locals are always `eqref`.
@@ -302,6 +358,8 @@ localType ctx i = case Array.index ctx.params i of
 genAtom :: Ctx -> Atom -> Effect B.Expression
 genAtom ctx = case _ of
   ALitInt n -> B.i32Const ctx.mod n >>= boxInt ctx
+  ALitNumber n -> B.f64Const ctx.mod n >>= boxNum ctx
+  ALitBoolean b -> boxBool ctx b
   AVar (Local (Slot index)) -> B.localGet ctx.mod index (localType ctx index)
   -- A captured variable: read the env array from the closure (local 0, the only
   -- `(ref $Clo)`-typed local — `EnvField` appears only in lifted code functions)
@@ -360,19 +418,33 @@ genRhs ctx = case _ of
     argE <- genAtom ctx argAtom
     B.callRef ctx.mod codeF [ cloOperand, argE ] ctx.rt.codeHt
 
--- | Slice 0/1 intrinsics are all binary `i32` ops; operands are unboxed, the op
--- | applied, and the result re-boxed. The lowering guarantees the arity.
+-- | An intrinsic (ADR 0002 tier 1): unbox the operands, apply the machine op,
+-- | re-box the result. Operand and result boxing follow the intrinsic's types;
+-- | the lowering guarantees the arity.
 genPrim :: Ctx -> Intrinsic -> Array Atom -> Effect B.Expression
-genPrim ctx intr = case _ of
-  [ a, b ] -> do
+genPrim ctx intr args = case intr, args of
+  IntAdd, [ a, b ] -> intBinop B.i32Add a b
+  IntSub, [ a, b ] -> intBinop B.i32Sub a b
+  IntMul, [ a, b ] -> intBinop B.i32Mul a b
+  -- Int -> Int -> Boolean: compare as i32, box the result as an i31 Boolean.
+  IntEq, [ a, b ] -> do
     ea <- unboxIntAtom ctx a
     eb <- unboxIntAtom ctx b
-    r <- case intr of
-      IntAdd -> B.i32Add ctx.mod ea eb
-      IntSub -> B.i32Sub ctx.mod ea eb
-      IntMul -> B.i32Mul ctx.mod ea eb
-    boxInt ctx r
-  _ -> throwException (error "Codegen: binary intrinsic given a non-binary operand list")
+    B.i32Eq ctx.mod ea eb >>= B.i31New ctx.mod
+  -- Int -> Number
+  IntToNum, [ a ] -> do
+    ea <- unboxIntAtom ctx a
+    B.f64ConvertI32S ctx.mod ea >>= boxNum ctx
+  -- Number -> Int (truncating)
+  NumToInt, [ a ] -> do
+    ea <- genAtom ctx a >>= unboxNumExpr ctx
+    B.i32TruncF64S ctx.mod ea >>= boxInt ctx
+  _, _ -> throwException (error "Codegen: intrinsic given an operand list of the wrong arity")
+  where
+  intBinop op a b = do
+    ea <- unboxIntAtom ctx a
+    eb <- unboxIntAtom ctx b
+    op ctx.mod ea eb >>= boxInt ctx
 
 unboxIntAtom :: Ctx -> Atom -> Effect B.Expression
 unboxIntAtom ctx atom = genAtom ctx atom >>= unboxIntExpr ctx

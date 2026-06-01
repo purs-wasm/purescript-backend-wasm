@@ -9,11 +9,11 @@ import Prelude
 
 import Data.Array as Array
 import Data.Either (Either(..))
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower (LowerError, lowerModule)
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), IRFunc, Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
@@ -55,6 +55,22 @@ letRec2 n1 e1 n2 e2 body =
 
 litInt :: Int -> CF.Expr
 litInt n = CF.Literal ann (CF.LitInt n)
+
+-- | `case scrutinee of <alternatives>`.
+caseOf :: CF.Expr -> Array CF.CaseAlternative -> CF.Expr
+caseOf scrutinee alternatives = CF.Case ann [ scrutinee ] alternatives
+
+-- | An `Int`-literal alternative `n -> body`.
+intAlt :: Int -> CF.Expr -> CF.CaseAlternative
+intAlt n body = { binders: [ CF.LiteralBinder ann (CF.LitInt n) ], result: Right body }
+
+-- | A `Boolean`-literal alternative `b -> body`.
+boolAlt :: Boolean -> CF.Expr -> CF.CaseAlternative
+boolAlt b body = { binders: [ CF.LiteralBinder ann (CF.LitBoolean b) ], result: Right body }
+
+-- | A wildcard alternative `_ -> body`.
+wildAlt :: CF.Expr -> CF.CaseAlternative
+wildAlt body = { binders: [ CF.NullBinder ann ], result: Right body }
 
 -- | A record literal `{ label: expr, … }`.
 litObj :: Array (Tuple String CF.Expr) -> CF.Expr
@@ -109,6 +125,8 @@ allRhs = case _ of
   Let _ _ rhs k -> Array.cons rhs (allRhs k)
   Switch _ branches dflt ->
     (branches >>= \(Branch _ b) -> allRhs b) <> maybe [] allRhs dflt
+  LitSwitch _ branches dflt ->
+    (branches >>= \(LitBranch _ b) -> allRhs b) <> maybe [] allRhs dflt
   LetRec _ k -> allRhs k
 
 rhsAtoms :: Rhs -> Array Atom
@@ -130,6 +148,8 @@ blockAtoms = case _ of
   Let _ _ rhs k -> rhsAtoms rhs <> blockAtoms k
   Switch s branches dflt ->
     Array.cons s ((branches >>= \(Branch _ b) -> blockAtoms b) <> maybe [] blockAtoms dflt)
+  LitSwitch s branches dflt ->
+    Array.cons s ((branches >>= \(LitBranch _ b) -> blockAtoms b) <> maybe [] blockAtoms dflt)
   LetRec recBinds k -> (recBinds >>= \(RecBind _ _ env) -> env) <> blockAtoms k
 
 -- | The capture lists of every `RMkClosure` in a block.
@@ -172,9 +192,18 @@ callKnownArities b = Array.mapMaybe arityOf (allRhs b)
     RCallKnown _ args -> Just (Array.length args)
     _ -> Nothing
 
+-- | The first `LitSwitch` reachable along the `Let` spine: its patterns (in
+-- | order) and whether it has a default arm.
+litSwitchOf :: AnfExpr -> Maybe { pats :: Array LitPat, hasDefault :: Boolean }
+litSwitchOf = case _ of
+  LitSwitch _ branches dflt -> Just { pats: map (\(LitBranch p _) -> p) branches, hasDefault: isJust dflt }
+  Let _ _ _ k -> litSwitchOf k
+  _ -> Nothing
+
 hasSwitch :: AnfExpr -> Boolean
 hasSwitch = case _ of
   Switch _ _ _ -> true
+  LitSwitch _ _ _ -> true
   Let _ _ _ k -> hasSwitch k
   LetRec _ k -> hasSwitch k
   Return _ -> false
@@ -390,3 +419,31 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
           Just fn -> do
             hasSwitch fn.body `shouldEqual` false
             projLabelIds fn.body `shouldEqual` [ 0 ]
+
+  describe "literal pattern matching" do
+    it "compiles Int literal patterns with a catch-all to a LitSwitch" do
+      -- f n = case n of 0 -> 100; 7 -> 700; _ -> 999
+      let f = def "f" (lam "n" (caseOf (lv "n") [ intAlt 0 (litInt 100), intAlt 7 (litInt 700), wildAlt (litInt 999) ]))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog ->
+          (litSwitchOf <<< _.body <$> exported "f" prog)
+            `shouldEqual` Just (Just { pats: [ PInt 0, PInt 7 ], hasDefault: true })
+
+    it "compiles a Boolean match to a LitSwitch on i31 Booleans" do
+      -- f b = case b of true -> 1; false -> 0
+      let f = def "f" (lam "b" (caseOf (lv "b") [ boolAlt true (litInt 1), boolAlt false (litInt 0) ]))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog ->
+          (litSwitchOf <<< _.body <$> exported "f" prog)
+            `shouldEqual` Just (Just { pats: [ PBoolean true, PBoolean false ], hasDefault: false })
+
+    it "drops alternatives after a catch-all (they are unreachable)" do
+      -- f n = case n of 0 -> 1; _ -> 2; 5 -> 3   (the 5 arm is dead)
+      let f = def "f" (lam "n" (caseOf (lv "n") [ intAlt 0 (litInt 1), wildAlt (litInt 2), intAlt 5 (litInt 3) ]))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog ->
+          (litSwitchOf <<< _.body <$> exported "f" prog)
+            `shouldEqual` Just (Just { pats: [ PInt 0 ], hasDefault: true })

@@ -1,10 +1,6 @@
--- | Lower the CoreFn AST to the backend IR (`PureScript.Backend.Wasm.IR`).
--- |
--- | This is the **Slice 2** lowering: Slice 0/1 (scalar Int, ADTs, pattern
--- | matching) plus **closures**, under the uniform `eqref` convention
--- | (ADR 0004) and eval/apply (ADR 0003).
--- |
--- | The Slice 2 additions:
+-- | Lower the CoreFn AST to the backend IR (`PureScript.Backend.Wasm.IR`), under
+-- | the uniform `eqref` convention (ADR 0004) and eval/apply (ADR 0003). What the
+-- | lowering does:
 -- |
 -- |   * **Lambda lifting / closure conversion.** A `C.Abs` is lifted to a
 -- |     top-level code function `$codeN(closure, arg)`; its free local variables
@@ -25,6 +21,15 @@
 -- |     A mutually-recursive `let` group becomes a `LetRec`: the closures are
 -- |     allocated first and their sibling-referencing environment slots are then
 -- |     back-patched (knot-tying), since each refers to the others.
+-- |
+-- |   * **Pattern matching.** A `case` on constructors becomes a `Switch` on the
+-- |     ADT tag; a `case` on literals (and the `case` an `if` desugars to) becomes
+-- |     a `LitSwitch` of value-equality tests; a bare var/wildcard is a catch-all.
+-- |
+-- |   * **Records and type-class dictionaries.** Record literals become
+-- |     label-id-keyed records (`RMkRecord`) and accessors a runtime label search
+-- |     (`RProjLabel`); dictionaries are records, so their newtype constructors and
+-- |     accessors are erased to the same (ADR 0007).
 module PureScript.Backend.Wasm.Lower
   ( lowerModule
   , module ReExport
@@ -34,6 +39,7 @@ import Prelude
 
 import Control.Monad.State (gets, modify_, runStateT)
 import Data.Array as Array
+import Data.Char (toCharCode)
 import Data.Either (Either(..))
 import Data.Foldable (foldl, foldr)
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -45,7 +51,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.FreeVars (freeVars)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, Intrinsic(..), LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.CoreFn (Bind(..), Module, Qualified(..))
 import PureScript.CoreFn as C
 
@@ -58,7 +64,7 @@ type ModuleInfo =
   , moduleName :: Array String
   -- | Names of type-class dictionary constructors (decls tagged
   -- | `IsTypeClassConstructor`). They are newtype identities (`\x -> x`) wrapping
-  -- | the dictionary record, so their application is erased (Slice 3, ADR 0007).
+  -- | the dictionary record, so their application is erased (ADR 0007).
   , dictCtors :: Object Unit
   -- | Every record/dictionary label in the module, interned to a unique `i32`
   -- | id. Records carry these ids (not strings) so projection is a string-free
@@ -78,13 +84,16 @@ type Env =
   , labelIds :: Object Int
   }
 
--- | The Slice 0/1/2 foreign-primitive table (ADR 0002's `ForeignProvider`, hard
--- | coded for now): a module-local foreign identifier → its machine op + arity.
+-- | The foreign-primitive table (ADR 0002's `ForeignProvider`, hard-coded): a
+-- | module-local foreign identifier → its machine op + arity.
 foreignIntrinsic :: String -> Maybe (Tuple Intrinsic Int)
 foreignIntrinsic = case _ of
   "addI" -> Just (Tuple IntAdd 2)
   "mulI" -> Just (Tuple IntMul 2)
   "subI" -> Just (Tuple IntSub 2)
+  "eqI" -> Just (Tuple IntEq 2)
+  "intToNum" -> Just (Tuple IntToNum 1)
+  "numToInt" -> Just (Tuple NumToInt 1)
   _ -> Nothing
 
 qualifiedName :: forall a. Qualified a -> a
@@ -141,10 +150,14 @@ etaExpand callable arity = foldr (C.Abs synthAnn) saturatedBody params
 lowerArg :: Env -> C.Expr -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerArg env expr k = case expr of
   C.Literal _ (C.LitInt n) -> k (ALitInt n)
+  C.Literal _ (C.LitNumber n) -> k (ALitNumber n)
+  -- A `Char` shares `Int`'s representation; carry its code point.
+  C.Literal _ (C.LitChar c) -> k (ALitInt (toCharCode c))
+  C.Literal _ (C.LitBoolean b) -> k (ALitBoolean b)
   -- A record literal (and so a type-class dictionary, after its newtype
   -- constructor is erased) becomes a label-id-keyed record (ADR 0001 / 0007).
   C.Literal _ (C.LitObject fields) -> lowerRecord env fields k
-  C.Literal _ _ -> throw (UnsupportedExpr "non-Int literal")
+  C.Literal _ _ -> throw (UnsupportedExpr "unsupported literal (String / Array arrive in Slice 4b/4c)")
   -- `Prim.undefined` is the dummy argument applied to a superclass thunk; the
   -- thunk ignores it, so any boxed value will do.
   C.Var _ (Qualified (Just [ "Prim" ]) "undefined") -> k (ALitInt 0)
@@ -205,7 +218,7 @@ lowerRecord env fields k =
 lowerApp :: Env -> { head :: C.Expr, args :: Array C.Expr } -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerApp env { head, args } k = case head of
   -- A dictionary constructor is a newtype identity wrapping its record, so the
-  -- application `C$Dict rec` erases to `rec` (Slice 3, ADR 0007).
+  -- application `C$Dict rec` erases to `rec` (ADR 0007).
   C.Var _ (Qualified (Just _) ident)
     | Object.member ident env.dictCtors -> case args of
         [ rec ] -> lowerArg env rec k
@@ -300,8 +313,9 @@ lowerTail env = case _ of
 -- | A CoreFn `let`: bind each group, extending the local environment, then
 -- | lower the body. `NonRec` groups bind directly. A single-binding `Rec` group
 -- | is self-recursion — lifted with the recursive name bound to the closure's
--- | own parameter (see `liftLambda`). Mutually-recursive groups would need
--- | allocate-then-patch knot-tying and are not yet supported.
+-- | own parameter (see `liftLambda`). A multi-binding `Rec` group is mutual
+-- | recursion, compiled to a `LetRec` whose closures are allocated first and then
+-- | back-patched to refer to one another (knot-tying).
 lowerCoreLet :: Env -> Array Bind -> C.Expr -> Lower AnfExpr
 lowerCoreLet env binds body = case Array.uncons binds of
   Nothing -> lowerTail env body
@@ -350,10 +364,78 @@ lowerCase env scrutinees alternatives = case scrutinees of
         lowerArg env scrutinee \scrutAtom ->
           lowerTail (bindNewtypeVar env var scrutAtom) body
   [ scrutinee ] ->
-    lowerArg env scrutinee \scrutAtom -> do
-      branches <- traverse (lowerAlternative env scrutAtom) alternatives
-      pure (Switch scrutAtom branches Nothing)
-  _ -> throw (UnsupportedExpr "Slice 1 supports a single case scrutinee")
+    lowerArg env scrutinee \scrutAtom -> case caseKind alternatives of
+      KConstructor -> do
+        branches <- traverse (lowerAlternative env scrutAtom) alternatives
+        pure (Switch scrutAtom branches Nothing)
+      KLiteral -> do
+        { branches, dflt } <- lowerLitAlternatives env scrutAtom alternatives
+        pure (LitSwitch scrutAtom branches dflt)
+      KCatchAll -> lowerCatchAll env scrutAtom alternatives
+  _ -> throw (UnsupportedExpr "only a single case scrutinee is supported")
+
+-- | How a single-scrutinee `case` matches: on constructor tags, on literal
+-- | values, or a bare catch-all (`x ->` / `_ ->`). Determined by the binders.
+data CaseKind = KConstructor | KLiteral | KCatchAll
+
+caseKind :: Array C.CaseAlternative -> CaseKind
+caseKind alternatives =
+  if Array.any (firstBinder isCtorBinder) alternatives then KConstructor
+  else if Array.any (firstBinder isLitBinder) alternatives then KLiteral
+  else KCatchAll
+  where
+  firstBinder p alt = case Array.head alt.binders of
+    Just b -> p b
+    Nothing -> false
+  isCtorBinder = case _ of
+    C.ConstructorBinder _ _ _ _ -> true
+    _ -> false
+  isLitBinder = case _ of
+    C.LiteralBinder _ _ -> true
+    _ -> false
+
+-- | Lower literal-pattern alternatives into `LitBranch`es plus the catch-all
+-- | default. A var/wildcard binder is the default (binding the scrutinee for a
+-- | `VarBinder`); alternatives after it are unreachable and dropped.
+lowerLitAlternatives
+  :: Env -> Atom -> Array C.CaseAlternative -> Lower { branches :: Array LitBranch, dflt :: Maybe AnfExpr }
+lowerLitAlternatives env scrutAtom = go
+  where
+  go alternatives = case Array.uncons alternatives of
+    Nothing -> pure { branches: [], dflt: Nothing }
+    Just { head: alt, tail } -> case alt.result of
+      Left _ -> throw GuardedCaseUnsupported
+      Right body -> case alt.binders of
+        [ C.LiteralBinder _ lit ] -> do
+          pat <- litPat lit
+          bodyIR <- lowerTail env body
+          rest <- go tail
+          pure (rest { branches = Array.cons (LitBranch pat bodyIR) rest.branches })
+        [ C.NullBinder _ ] -> do
+          d <- lowerTail env body
+          pure { branches: [], dflt: Just d }
+        [ C.VarBinder _ name ] -> do
+          d <- lowerTail (env { locals = Object.insert name scrutAtom env.locals }) body
+          pure { branches: [], dflt: Just d }
+        _ -> throw (UnsupportedBinder "literal match: expected a literal or catch-all binder")
+
+-- | A bare catch-all `case` (no constructor or literal patterns): bind the
+-- | scrutinee if the binder names it, then lower the body.
+lowerCatchAll :: Env -> Atom -> Array C.CaseAlternative -> Lower AnfExpr
+lowerCatchAll env scrutAtom alternatives = case Array.head alternatives of
+  Just { binders: [ binder ], result: Right body } -> case binder of
+    C.NullBinder _ -> lowerTail env body
+    C.VarBinder _ name -> lowerTail (env { locals = Object.insert name scrutAtom env.locals }) body
+    _ -> throw (UnsupportedBinder "catch-all match expects a var or wildcard binder")
+  _ -> throw (UnsupportedBinder "unsupported catch-all alternative")
+
+litPat :: C.Literal C.Binder -> Lower LitPat
+litPat = case _ of
+  C.LitInt n -> pure (PInt n)
+  C.LitChar c -> pure (PInt (toCharCode c))
+  C.LitBoolean b -> pure (PBoolean b)
+  C.LitNumber n -> pure (PNumber n)
+  _ -> throw (UnsupportedBinder "literal pattern: only Int / Char / Boolean / Number (String in Slice 4b)")
 
 -- | Recognise a single, unguarded alternative whose binder is a newtype
 -- | constructor with one var / wildcard sub-binder, returning the bound name (if
@@ -384,8 +466,8 @@ lowerAlternative env scrutAtom alt = case alt.result of
         info <- requireCtor env (qualifiedName ctorNameQ)
         body' <- bindFields env scrutAtom 0 subBinders body
         pure (Branch info.tag body')
-      _ -> throw (UnsupportedBinder "Slice 1 expects a constructor binder")
-    _ -> throw (UnsupportedBinder "Slice 1 expects exactly one binder per alternative")
+      _ -> throw (UnsupportedBinder "expected a constructor binder")
+    _ -> throw (UnsupportedBinder "expected exactly one binder per alternative")
 
 -- | Bind a constructor's sub-binders to its fields by position.
 bindFields :: Env -> Atom -> Int -> Array C.Binder -> C.Expr -> Lower AnfExpr
@@ -398,7 +480,7 @@ bindFields env scrutAtom index subBinders body = case Array.uncons subBinders of
       let env' = env { locals = Object.insert name (AVar (Local slot)) env.locals }
       rest <- bindFields env' scrutAtom (index + 1) tail body
       pure (Let slot Boxed (RProjField scrutAtom index) rest)
-    _ -> throw (UnsupportedBinder "Slice 1 supports only var / wildcard sub-binders")
+    _ -> throw (UnsupportedBinder "constructor sub-binders must be var or wildcard")
 
 requireCtor :: Env -> String -> Lower CtorInfo
 requireCtor env ctorName = case Object.lookup ctorName env.ctors of
@@ -522,7 +604,7 @@ collectLabels decls =
     Right e -> exprLabels e
     Left guards -> guards >>= \g -> exprLabels g.guard <> exprLabels g.expression
 
--- | Lower a whole decoded CoreFn module to a Slice 2 IR `Program`. The lifted
+-- | Lower a whole decoded CoreFn module to the backend IR `Program`. The lifted
 -- | code functions accumulated during lowering are appended to the program's
 -- | functions.
 lowerModule :: Module -> Either LowerError Program
