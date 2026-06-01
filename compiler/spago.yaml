@@ -1,30 +1,32 @@
 package:
   name: compiler
   dependencies:
+    - aff
+    - argonaut-codecs
+    - argonaut-core
+    - arraybuffer-types
+    - arrays
+    - bifunctors
     - binaryen
     - console
-    - prelude
-    - effect
-    - argonaut-core
-    - argonaut-codecs
-    - arrays
-    - either
-    - maybe
-    - tuples
-    - foreign-object
-    - foldable-traversable
-    - strings
-    - foreign
-    - node-buffer
-    - aff
-    - js-promise-aff
-    - newtype
     - control
-    - transformers
+    - effect
+    - either
+    - exceptions
+    - filterable
+    - foldable-traversable
+    - foreign
+    - foreign-object
     - functions
     - identity
-    - bifunctors
-    - exceptions
+    - js-promise-aff
+    - maybe
+    - newtype
+    - node-buffer
+    - prelude
+    - strings
+    - transformers
+    - tuples
   test:
     main: Test.Unit.Compiler
     dependencies:

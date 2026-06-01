@@ -9,14 +9,26 @@ module PureScript.CoreFn where
 import Prelude
 
 import Data.Either (Either)
+import Data.Filterable (maybeBool)
 import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe)
 import Data.Show.Generic (genericShow)
+import Data.String (Pattern(..))
+import Data.String as Str
+import Data.String.Regex as Re
+import Data.String.Regex.Flags (unicode)
+import Data.String.Regex.Unsafe (unsafeRegex)
+import Data.Traversable (traverse)
 import Data.Tuple (Tuple)
 import Foreign.Object (Object)
 
 -- | A module name as its dot-separated parts, e.g. `["Data", "Maybe"]`.
 type ModuleName = Array String
+
+toModuleName :: String -> Maybe ModuleName
+toModuleName = Str.split (Pattern ".") >>> traverse (maybeBool (Re.test moduleNamePartRegex))
+  where
+  moduleNamePartRegex = unsafeRegex """[A-Z][a-zA-Z0-9_]*""" unicode
 
 -- | An identifier (value-level name).
 type Ident = String

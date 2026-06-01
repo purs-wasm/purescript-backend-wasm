@@ -1,11 +1,20 @@
 package:
   name: bin
   dependencies:
+    - aff
     - argparse-basic
+    - arrays
     - compiler
     - console
     - effect
+    - either
+    - exceptions
     - fmt
+    - foldable-traversable
+    - lists
+    - node-fs
     - node-path
     - node-process
     - prelude
+    - strings
+    - unsafe-coerce

@@ -5,14 +5,23 @@
         "path": "bin",
         "core": {
           "dependencies": [
+            "aff",
             "argparse-basic",
+            "arrays",
             "compiler",
             "console",
             "effect",
+            "either",
+            "exceptions",
             "fmt",
+            "foldable-traversable",
+            "lists",
+            "node-fs",
             "node-path",
             "node-process",
-            "prelude"
+            "prelude",
+            "strings",
+            "unsafe-coerce"
           ]
         },
         "test": {
@@ -45,6 +54,7 @@
             "aff",
             "argonaut-codecs",
             "argonaut-core",
+            "arraybuffer-types",
             "arrays",
             "bifunctors",
             "binaryen",
@@ -53,6 +63,7 @@
             "effect",
             "either",
             "exceptions",
+            "filterable",
             "foldable-traversable",
             "foreign",
             "foreign-object",
@@ -1037,6 +1048,25 @@
         "enums",
         "maybe",
         "prelude"
+      ]
+    },
+    "filterable": {
+      "type": "registry",
+      "version": "5.0.0",
+      "integrity": "sha256-be7ci1Bzwud2waqoCtNGsTBZbt7fi+gCLvGddQQRJ3A=",
+      "dependencies": [
+        "arrays",
+        "control",
+        "either",
+        "foldable-traversable",
+        "identity",
+        "lists",
+        "maybe",
+        "newtype",
+        "ordered-collections",
+        "prelude",
+        "st",
+        "tuples"
       ]
     },
     "fmt": {
