@@ -19,6 +19,8 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Slice4a.corefn.json` | `Slice4a.purs.sample` | `Test.E2E.Slice4a`            | scalar literals (`Char`/`Number`/`Boolean`) + literal-pattern matching (`if`, `case n of 0 ->`) |
 | `Slice4b.corefn.json` | `Slice4b.purs.sample` | `Test.E2E.Slice4b`            | strings: UTF-8 literals, concat / byte-length / equality runtime helpers, string literal patterns |
 | `Slice4c.corefn.json` | `Slice4c.purs.sample` | `Test.E2E.Slice4c`            | arrays: `$Vals` literals, `length`/`index` intrinsics, nested arrays |
+| `LinkA.corefn.json`   | `LinkA.purs.sample`   | `Test.E2E.Link`               | multi-module linking: `LinkA` imports `LinkB` (compiled together) |
+| `LinkB.corefn.json`   | `LinkB.purs.sample`   | `Test.E2E.Link`               | the imported module: a function + an ADT used across the boundary |
 
 ## Regenerating
 

@@ -6,6 +6,7 @@
 module Test.E2E.Wasm
   ( Instance
   , instantiateFixture
+  , instantiateLinked
   , callI32x0
   , callI32x1
   , callI32x2
@@ -22,23 +23,26 @@ import Data.Either (Either(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
 import PureScript.Backend.Wasm.Codegen (buildModule)
-import PureScript.Backend.Wasm.Lower (lowerModule)
+import Data.Traversable (traverse)
+import PureScript.Backend.Wasm.IR (Program)
+import PureScript.Backend.Wasm.Lower (lowerModule, lowerModules)
+import PureScript.CoreFn (Module)
 import PureScript.CoreFn.FromJSON (decodeModule)
 
--- | Decode the fixture, lower it to IR, generate a Binaryen module, and
--- | instantiate the emitted wasm. Any failure (parse / decode / lowering /
--- | validation) is raised with a useful message.
-instantiateFixture :: String -> Effect Instance
-instantiateFixture path = do
+-- | Decode a `corefn.json` fixture, raising parse/decode failures.
+decodeFixture :: String -> Effect Module
+decodeFixture path = do
   source <- readFixture path
-  m <- case jsonParser source of
+  case jsonParser source of
     Left parseErr -> throwException (error ("parse error: " <> parseErr))
     Right json -> case decodeModule json of
       Left decodeErr -> throwException (error (printJsonDecodeError decodeErr))
       Right m -> pure m
-  program <- case lowerModule m of
-    Left err -> throwException (error ("lowering failed: " <> show err))
-    Right program -> pure program
+
+-- | Generate a Binaryen module from an IR `Program`, validate it, and instantiate
+-- | the emitted wasm.
+instantiateProgram :: Program -> Effect Instance
+instantiateProgram program = do
   mod <- buildModule program
   ok <- B.validate mod
   when (not ok) do
@@ -47,6 +51,23 @@ instantiateFixture path = do
   binary <- B.emitBinary mod
   B.dispose mod
   instantiate binary
+
+-- | Decode a single fixture, lower it, and instantiate the emitted wasm.
+instantiateFixture :: String -> Effect Instance
+instantiateFixture path = do
+  m <- decodeFixture path
+  case lowerModule m of
+    Left err -> throwException (error ("lowering failed: " <> show err))
+    Right program -> instantiateProgram program
+
+-- | Decode several fixtures, **link** them into one wasm (`roots` are the modules
+-- | whose functions are exported), and instantiate it (ADR 0009).
+instantiateLinked :: Array (Array String) -> Array String -> Effect Instance
+instantiateLinked roots paths = do
+  modules <- traverse decodeFixture paths
+  case lowerModules roots modules of
+    Left err -> throwException (error ("linking failed: " <> show err))
+    Right program -> instantiateProgram program
 
 -- | A live `WebAssembly.Instance`.
 foreign import data Instance :: Type

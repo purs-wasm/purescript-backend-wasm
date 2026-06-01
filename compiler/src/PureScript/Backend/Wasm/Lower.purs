@@ -32,6 +32,7 @@
 -- |     accessors are erased to the same (ADR 0007).
 module PureScript.Backend.Wasm.Lower
   ( lowerModule
+  , lowerModules
   , module ReExport
   ) where
 
@@ -57,18 +58,18 @@ import PureScript.CoreFn as C
 
 type CtorInfo = { tag :: Int, arity :: Int }
 
--- | Read-only facts about the module being lowered.
+-- | Read-only facts about the whole program being lowered. All name-keyed
+-- | tables use the **module-qualified** name (`Module.ident`), so a reference can
+-- | resolve a callee in any linked module, not just its own (ADR 0009). `labelIds`
+-- | is interned once across every module so records built and projected in
+-- | different modules agree on a label's id.
 type ModuleInfo =
   { knownFuncs :: Object Int
   , ctors :: Object CtorInfo
-  , moduleName :: Array String
   -- | Names of type-class dictionary constructors (decls tagged
   -- | `IsTypeClassConstructor`). They are newtype identities (`\x -> x`) wrapping
   -- | the dictionary record, so their application is erased (ADR 0007).
   , dictCtors :: Object Unit
-  -- | Every record/dictionary label in the module, interned to a unique `i32`
-  -- | id. Records carry these ids (not strings) so projection is a string-free
-  -- | runtime search (ADR 0001 / 0007); the string runtime is deferred to Slice 4.
   , labelIds :: Object Int
   }
 
@@ -101,8 +102,22 @@ foreignIntrinsic = case _ of
   "indexA" -> Just (Tuple ArrayIndex 2)
   _ -> Nothing
 
-qualifiedName :: forall a. Qualified a -> a
-qualifiedName (Qualified _ a) = a
+-- | The globally-unique key/name for a module-qualified top-level identifier:
+-- | `Module.ident`. The same string is used as a symbol-table key and as the
+-- | emitted wasm function name, so cross-module references line up (ADR 0009).
+qualifiedKey :: Array String -> String -> String
+qualifiedKey moduleName ident = joinWith "." moduleName <> "." <> ident
+
+-- | The key for a `Qualified` reference. A `Nothing` module means a local, which
+-- | is never a top-level key; callers guard against that, but we fall back to the
+-- | bare name so the lookup simply misses.
+qualifiedKeyOf :: Qualified String -> String
+qualifiedKeyOf (Qualified mModule name) = case mModule of
+  Just moduleName -> qualifiedKey moduleName name
+  Nothing -> name
+
+qualifiedFuncName :: Qualified String -> FuncName
+qualifiedFuncName = FuncName <<< qualifiedKeyOf
 
 -- | Flatten a curried application spine: `App (App f a) b` → `f` with `[a, b]`.
 collectApp :: C.Expr -> { head :: C.Expr, args :: Array C.Expr }
@@ -171,15 +186,15 @@ lowerArg env expr k = case expr of
   -- A bare reference to a known callable becomes a closure value (eta-expanded);
   -- a nullary constructor is built directly; a nullary top-level value (a CAF —
   -- e.g. an instance dictionary) is *called* to produce its value.
-  C.Var _ (Qualified (Just _) ident)
+  C.Var _ q@(Qualified (Just _) ident)
     | Just (Tuple _ arity) <- foreignIntrinsic ident -> lowerArg env (etaExpand expr arity) k
-    | Just info <- Object.lookup ident env.ctors ->
+    | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors ->
         if info.arity == 0 then bindRhs (RMkData info.tag []) k
         else lowerArg env (etaExpand expr info.arity) k
-    | Just arity <- Object.lookup ident env.knownFuncs ->
-        if arity == 0 then bindRhs (RCallKnown (funcName env.moduleName ident) []) k
+    | Just arity <- Object.lookup (qualifiedKeyOf q) env.knownFuncs ->
+        if arity == 0 then bindRhs (RCallKnown (qualifiedFuncName q) []) k
         else lowerArg env (etaExpand expr arity) k
-    | otherwise -> throw (UnsupportedExpr ("unapplied top-level reference: " <> ident))
+    | otherwise -> throw (UnsupportedExpr ("unapplied top-level reference: " <> qualifiedKeyOf q))
   C.Accessor _ label record -> lowerArg env record \recAtom -> do
     labelId <- internLabel env label
     bindRhs (RProjLabel recAtom labelId) k
@@ -225,15 +240,15 @@ lowerApp :: Env -> { head :: C.Expr, args :: Array C.Expr } -> (Atom -> Lower An
 lowerApp env { head, args } k = case head of
   -- A dictionary constructor is a newtype identity wrapping its record, so the
   -- application `C$Dict rec` erases to `rec` (ADR 0007).
-  C.Var _ (Qualified (Just _) ident)
-    | Object.member ident env.dictCtors -> case args of
+  C.Var _ q@(Qualified (Just _) _)
+    | Object.member (qualifiedKeyOf q) env.dictCtors -> case args of
         [ rec ] -> lowerArg env rec k
         _ -> throw (UnsupportedExpr "dictionary constructor must take exactly one record")
-  C.Var _ (Qualified (Just _) ident)
+  C.Var _ q@(Qualified (Just _) ident)
     | Just (Tuple intr arity) <- foreignIntrinsic ident -> applyArity arity (RPrim intr)
-    | Just info <- Object.lookup ident env.ctors -> applyArity info.arity (RMkData info.tag)
-    | Just arity <- Object.lookup ident env.knownFuncs -> applyArity arity (RCallKnown (funcName env.moduleName ident))
-    | otherwise -> throw (UnsupportedExpr ("unknown callee: " <> ident))
+    | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors -> applyArity info.arity (RMkData info.tag)
+    | Just arity <- Object.lookup (qualifiedKeyOf q) env.knownFuncs -> applyArity arity (RCallKnown (qualifiedFuncName q))
+    | otherwise -> throw (UnsupportedExpr ("unknown callee: " <> qualifiedKeyOf q))
   _ ->
     lowerArg env head \fAtom ->
       lowerArgs env args \atoms ->
@@ -470,7 +485,7 @@ lowerAlternative env scrutAtom alt = case alt.result of
   Right body -> case alt.binders of
     [ binder ] -> case binder of
       C.ConstructorBinder _ _ ctorNameQ subBinders -> do
-        info <- requireCtor env (qualifiedName ctorNameQ)
+        info <- requireCtor env (qualifiedKeyOf ctorNameQ)
         body' <- bindFields env scrutAtom 0 subBinders body
         pure (Branch info.tag body')
       _ -> throw (UnsupportedBinder "expected a constructor binder")
@@ -496,11 +511,13 @@ requireCtor env ctorName = case Object.lookup ctorName env.ctors of
 
 -- | Qualify a top-level identifier into a globally-unique wasm function name.
 funcName :: Array String -> String -> FuncName
-funcName moduleName ident = FuncName (joinWith "." moduleName <> "." <> ident)
+funcName moduleName ident = FuncName (qualifiedKey moduleName ident)
 
--- | Lower one top-level function definition to an `IRFunc` (eqref convention).
-lowerTopFunc :: ModuleInfo -> Tuple String C.Expr -> Lower IRFunc
-lowerTopFunc info (Tuple ident expr) = do
+-- | Lower one top-level function definition to an `IRFunc` (eqref convention),
+-- | given its module and whether that module is a link root (only roots' names
+-- | are exported; everything else is internal and so DCE-eligible — ADR 0009).
+lowerTopFunc :: ModuleInfo -> Array String -> Boolean -> Tuple String C.Expr -> Lower IRFunc
+lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
   let { params, body } = peelAbs expr
   let locals = Object.fromFoldable (Array.mapWithIndex (\i p -> Tuple p (AVar (Local (Slot i)))) params)
   let
@@ -508,7 +525,7 @@ lowerTopFunc info (Tuple ident expr) = do
       { locals
       , knownFuncs: info.knownFuncs
       , ctors: info.ctors
-      , moduleName: info.moduleName
+      , moduleName
       , dictCtors: info.dictCtors
       , labelIds: info.labelIds
       }
@@ -516,29 +533,31 @@ lowerTopFunc info (Tuple ident expr) = do
   block <- lowerTail env body
   count <- gets _.slot
   pure
-    { name: funcName info.moduleName ident
+    { name: funcName moduleName ident
     , params: const Boxed <$> params
     , result: Boxed
     , body: block
-    , export: Just ident
+    , export: if isRoot then Just ident else Nothing
     , localCount: count
     }
 
--- | Collect the data constructors, assigning each a 0-based tag within its type.
-collectCtors :: Array Bind -> Object CtorInfo
-collectCtors decls = (foldl step { counts: Object.empty, out: Object.empty } raw).out
+-- | Collect the data constructors of every module, keyed by qualified name and
+-- | assigning each a 0-based tag within its (qualified) type.
+collectCtors :: Array Module -> Object CtorInfo
+collectCtors modules = (foldl perModule { counts: Object.empty, out: Object.empty } modules).out
   where
-  raw = Array.mapMaybe ctorOf decls
+  perModule acc m = foldl (step m.name) acc (Array.mapMaybe ctorOf m.decls)
   ctorOf = case _ of
     NonRec _ _ (C.Constructor _ typeName ctorName fieldNames) ->
       Just { typeName, ctorName, arity: Array.length fieldNames }
     _ -> Nothing
-  step { counts, out } { typeName, ctorName, arity } =
+  step moduleName { counts, out } { typeName, ctorName, arity } =
     let
-      tag = fromMaybe 0 (Object.lookup typeName counts)
+      typeKey = qualifiedKey moduleName typeName
+      tag = fromMaybe 0 (Object.lookup typeKey counts)
     in
-      { counts: Object.insert typeName (tag + 1) counts
-      , out: Object.insert ctorName { tag, arity } out
+      { counts: Object.insert typeKey (tag + 1) counts
+      , out: Object.insert (qualifiedKey moduleName ctorName) { tag, arity } out
       }
 
 -- | Flatten the top-level binding groups into `(ident, expr)` pairs. A `Rec`
@@ -552,45 +571,50 @@ topLevelBindings = (_ >>= flatten)
     NonRec _ ident expr -> [ Tuple ident expr ]
     Rec rs -> map (\r -> Tuple r.ident r.expr) rs
 
--- | The non-constructor top-level functions, mapped to their arity. Dictionary
--- | constructors are excluded: they are newtype identities, erased at their use
--- | sites rather than emitted (ADR 0007).
-collectFuncs :: Object Unit -> Array Bind -> Object Int
-collectFuncs dictCtors decls = Object.fromFoldable (Array.mapMaybe keep (topLevelBindings decls))
+-- | Every module's non-constructor top-level functions, keyed by qualified name
+-- | and mapped to arity. Dictionary constructors are excluded: they are newtype
+-- | identities, erased at their use sites rather than emitted (ADR 0007).
+collectFuncs :: Object Unit -> Array Module -> Object Int
+collectFuncs dictCtors modules = Object.fromFoldable (modules >>= moduleFuncs)
   where
-  keep (Tuple ident expr)
-    | isConstructor expr || Object.member ident dictCtors = Nothing
-    | otherwise = Just (Tuple ident (Array.length (peelAbs expr).params))
+  moduleFuncs m = Array.mapMaybe (keep m.name) (topLevelBindings m.decls)
+  keep moduleName (Tuple ident expr)
+    | isConstructor expr || Object.member (qualifiedKey moduleName ident) dictCtors = Nothing
+    | otherwise = Just (Tuple (qualifiedKey moduleName ident) (Array.length (peelAbs expr).params))
 
--- | Top-level definitions that become wasm functions: every binding (including
+-- | One module's definitions that become wasm functions: every binding (including
 -- | `Rec`-group members) that is neither a data constructor nor a (newtype-erased)
 -- | dictionary constructor.
-functionDecls :: Object Unit -> Array Bind -> Array (Tuple String C.Expr)
-functionDecls dictCtors =
-  Array.filter (\(Tuple ident expr) -> not (isConstructor expr) && not (Object.member ident dictCtors))
-    <<< topLevelBindings
+functionDecls :: Object Unit -> Module -> Array (Tuple String C.Expr)
+functionDecls dictCtors m =
+  Array.filter
+    (\(Tuple ident expr) -> not (isConstructor expr) && not (Object.member (qualifiedKey m.name ident) dictCtors))
+    (topLevelBindings m.decls)
 
 isConstructor :: C.Expr -> Boolean
 isConstructor = case _ of
   C.Constructor _ _ _ _ -> true
   _ -> false
 
--- | Type-class dictionary constructors: top-level bindings tagged
--- | `IsTypeClassConstructor`. Each is a newtype identity (`\x -> x`) wrapping the
--- | dictionary record, so its applications are erased (ADR 0007).
-collectDictCtors :: Array Bind -> Object Unit
-collectDictCtors decls = Object.fromFoldable (Array.mapMaybe dictCtorOf decls)
+-- | Every module's type-class dictionary constructors (decls tagged
+-- | `IsTypeClassConstructor`), keyed by qualified name. Each is a newtype identity
+-- | (`\x -> x`) wrapping the dictionary record, so its applications are erased
+-- | (ADR 0007).
+collectDictCtors :: Array Module -> Object Unit
+collectDictCtors modules = Object.fromFoldable (modules >>= moduleDictCtors)
   where
-  dictCtorOf = case _ of
-    NonRec ann ident _ | ann.meta == Just C.IsTypeClassConstructor -> Just (Tuple ident unit)
+  moduleDictCtors m = Array.mapMaybe (dictCtorOf m.name) m.decls
+  dictCtorOf moduleName = case _ of
+    NonRec ann ident _ | ann.meta == Just C.IsTypeClassConstructor -> Just (Tuple (qualifiedKey moduleName ident) unit)
     _ -> Nothing
 
--- | Intern every record/dictionary label in the module to a unique `i32` id,
--- | assigned by sorted label order so the mapping is deterministic across
--- | construction and projection sites.
-collectLabels :: Array Bind -> Object Int
-collectLabels decls =
-  Object.fromFoldable (Array.mapWithIndex (\i l -> Tuple l i) (Array.sort (Array.nub (decls >>= bindLabels))))
+-- | Intern every record/dictionary label across all modules to a unique `i32` id,
+-- | assigned by sorted label order so the mapping is deterministic and shared:
+-- | records built in one module and projected in another agree on a label's id.
+collectLabels :: Array Module -> Object Int
+collectLabels modules =
+  Object.fromFoldable
+    (Array.mapWithIndex (\i l -> Tuple l i) (Array.sort (Array.nub (modules >>= \m -> m.decls >>= bindLabels))))
   where
   bindLabels = case _ of
     NonRec _ _ e -> exprLabels e
@@ -611,21 +635,26 @@ collectLabels decls =
     Right e -> exprLabels e
     Left guards -> guards >>= \g -> exprLabels g.guard <> exprLabels g.expression
 
--- | Lower a whole decoded CoreFn module to the backend IR `Program`. The lifted
--- | code functions accumulated during lowering are appended to the program's
--- | functions.
-lowerModule :: Module -> Either LowerError Program
-lowerModule m = do
+-- | Link and lower several decoded CoreFn modules into one backend IR `Program`
+-- | (one wasm; ADR 0009). Symbol tables are built across **all** modules and keyed
+-- | by qualified name, so cross-module references resolve; only the `roots`
+-- | modules' functions are exported (the rest are internal, hence DCE-eligible).
+lowerModules :: Array (Array String) -> Array Module -> Either LowerError Program
+lowerModules roots modules = do
   let
-    dictCtors = collectDictCtors m.decls
+    dictCtors = collectDictCtors modules
     info =
-      { knownFuncs: collectFuncs dictCtors m.decls
-      , ctors: collectCtors m.decls
-      , moduleName: m.name
+      { knownFuncs: collectFuncs dictCtors modules
+      , ctors: collectCtors modules
       , dictCtors
-      , labelIds: collectLabels m.decls
+      , labelIds: collectLabels modules
       }
-  Tuple funcs st <- runStateT
-    (traverse (lowerTopFunc info) (functionDecls dictCtors m.decls))
-    { slot: 0, lifted: [], nextCode: 0 }
-  pure { funcs: funcs <> st.lifted }
+    lowerOneModule m =
+      traverse (lowerTopFunc info m.name (Array.elem m.name roots)) (functionDecls dictCtors m)
+  Tuple funcss st <- runStateT (traverse lowerOneModule modules) { slot: 0, lifted: [], nextCode: 0 }
+  pure { funcs: Array.concat funcss <> st.lifted }
+
+-- | Lower a single decoded CoreFn module to a backend IR `Program`, exporting its
+-- | top-level functions (the single-module case of `lowerModules`).
+lowerModule :: Module -> Either LowerError Program
+lowerModule m = lowerModules [ m.name ] [ m ]

@@ -12,8 +12,8 @@ import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Lower (LowerError, lowerModule)
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower (LowerError, lowerModule, lowerModules)
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
@@ -111,10 +111,15 @@ newtypeCase ctorName scrutinee var body =
       }
     ]
 
-lower :: Array CF.Bind -> Either LowerError Program
-lower decls = lowerModule
-  { name: [ "T" ]
-  , path: "T.purs"
+-- | A reference qualified to another module (`Mod.ident`).
+qvIn :: String -> String -> CF.Expr
+qvIn modName x = CF.Var ann (CF.Qualified (Just [ modName ]) x)
+
+-- | A CoreFn module with the given name and decls.
+moduleNamed :: Array String -> Array CF.Bind -> CF.Module
+moduleNamed name decls =
+  { name
+  , path: "Module.purs"
   , builtWith: "0.15.16"
   , imports: []
   , exports: []
@@ -122,6 +127,9 @@ lower decls = lowerModule
   , foreignNames: []
   , decls
   }
+
+lower :: Array CF.Bind -> Either LowerError Program
+lower decls = lowerModule (moduleNamed [ "T" ] decls)
 
 -- --- IR inspection helpers --------------------------------------------------
 
@@ -207,6 +215,17 @@ callKnownArities b = Array.mapMaybe arityOf (allRhs b)
   arityOf = case _ of
     RCallKnown _ args -> Just (Array.length args)
     _ -> Nothing
+
+-- | The (qualified) names called by every `RCallKnown` in a block.
+callKnownNames :: AnfExpr -> Array String
+callKnownNames b = Array.mapMaybe nameOf (allRhs b)
+  where
+  nameOf = case _ of
+    RCallKnown (FuncName name) _ -> Just name
+    _ -> Nothing
+
+exportOf :: String -> Program -> Maybe (Maybe String)
+exportOf name prog = _.export <$> Array.find (\fn -> fn.name == FuncName name) prog.funcs
 
 -- | The first `LitSwitch` reachable along the `Let` spine: its patterns (in
 -- | order) and whether it has a default arm.
@@ -489,3 +508,19 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Left err -> fail (show err)
         Right prog ->
           (arrayLengths <<< _.body <$> exported "f" prog) `shouldEqual` Just [ 3 ]
+
+  describe "linking" do
+    it "resolves a cross-module call by qualified name and exports only roots" do
+      -- module B: foo x = addI x x ; module A: f x = B.foo x  (root = A)
+      let
+        modB = moduleNamed [ "B" ] [ def "foo" (lam "x" (appE (appE (qvIn "B" "addI") (lv "x")) (lv "x"))) ]
+        modA = moduleNamed [ "A" ] [ def "f" (lam "x" (appE (qvIn "B" "foo") (lv "x"))) ]
+      case lowerModules [ [ "A" ] ] [ modA, modB ] of
+        Left err -> fail (show err)
+        Right prog -> do
+          -- A.f is exported; B.foo is internal (DCE-eligible)
+          exportOf "A.f" prog `shouldEqual` Just (Just "f")
+          exportOf "B.foo" prog `shouldEqual` Just Nothing
+          -- A.f calls B.foo by its qualified name
+          (callKnownNames <<< _.body <$> Array.find (\fn -> fn.name == FuncName "A.f") prog.funcs)
+            `shouldEqual` Just [ "B.foo" ]
