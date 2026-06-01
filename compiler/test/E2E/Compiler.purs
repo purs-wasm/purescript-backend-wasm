@@ -18,6 +18,7 @@ import Test.E2E.Link as Link
 import Test.E2E.Records as Records
 import Test.E2E.PreludeArith as PreludeArith
 import Test.E2E.PreludeCompare as PreludeCompare
+import Test.E2E.PreludeBool as PreludeBool
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -35,3 +36,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Link.spec
   PreludeArith.spec
   PreludeCompare.spec
+  PreludeBool.spec

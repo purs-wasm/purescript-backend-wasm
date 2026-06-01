@@ -30,6 +30,8 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Data.Eq.corefn.json`       | (real Prelude) | `Test.E2E.PreludeCompare`     | linked for `eqInt` / `eqIntImpl` |
 | `Data.Ord.corefn.json`      | (real Prelude) | `Test.E2E.PreludeCompare`     | linked for `ordInt` / `compare` / `lessThan` / `ordIntImpl` |
 | `Data.Ordering.corefn.json` | (real Prelude) | `Test.E2E.PreludeCompare`     | the `Ordering` ADT (`LT`/`EQ`/`GT`) |
+| `Bool.corefn.json`    | `Bool.purs.sample`    | `Test.E2E.PreludeBool`        | real Prelude `&&` / `\|\|` / `not` (HeytingAlgebra) |
+| `Data.HeytingAlgebra.corefn.json` | (real Prelude) | `Test.E2E.PreludeBool`   | linked for `heytingAlgebraBoolean` / `conj` / `disj` / `not` / `boolConj` … |
 
 `Data.Semiring` / `Data.Ring` / `Data.Eq` / `Data.Ord` / `Data.Ordering` are
 **real `purs`-compiled Prelude output** (copied verbatim from a build's

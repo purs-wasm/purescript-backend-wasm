@@ -36,6 +36,9 @@ module Binaryen
   , i32Ne
   , i32LtU
   , i32LtS
+  , i32And
+  , i32Or
+  , i32Eqz
   , i32Const
   , i32TruncF64S
   , f64Const
@@ -231,6 +234,24 @@ foreign import i32LtSImpl :: Module -> Expression -> Expression -> Effect Expres
 -- | `i32.lt_s`: 1 if `left < right` as signed, 0 otherwise.
 i32LtS :: Module -> Expression -> Expression -> Effect Expression
 i32LtS = i32LtSImpl
+
+foreign import i32AndImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.and`: bitwise AND.
+i32And :: Module -> Expression -> Expression -> Effect Expression
+i32And = i32AndImpl
+
+foreign import i32OrImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.or`: bitwise OR.
+i32Or :: Module -> Expression -> Expression -> Effect Expression
+i32Or = i32OrImpl
+
+foreign import i32EqzImpl :: Module -> Expression -> Effect Expression
+
+-- | `i32.eqz`: 1 if the operand is 0, 0 otherwise (logical NOT of a 0/1 value).
+i32Eqz :: Module -> Expression -> Effect Expression
+i32Eqz = i32EqzImpl
 
 foreign import ifImpl :: Module -> Expression -> Expression -> Expression -> Effect Expression
 

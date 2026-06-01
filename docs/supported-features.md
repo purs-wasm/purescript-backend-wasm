@@ -14,6 +14,7 @@ not a design decision.
 - [Function application, partial and over](#function-application-partial-and-over)
 - [Recursive Let-bindings](#recursive-let-bindings)
 - [Typeclasses (Not optimized!)](#typeclass-dictionaries-not-optimized)
+- [Real Prelude operations (Semiring/Ring, Eq/Ord, HeytingAlgebra)](#real-prelude-operations-semiringring-eqord-heytingalgebra)
 - [Records](#records)
 - [Host Interface](#host-interface)
 
@@ -496,7 +497,7 @@ the dictionary and projection altogether — `add dict x y → intAdd x y` — i
 separate, further optimization of **ADR 0005** (dictionary elimination). Both are
 Proposed, not yet implemented.
 
-## Real `Prelude` arithmetic and comparison (`Semiring`/`Ring`, `Eq`/`Ord`)
+## Real `Prelude` operations (`Semiring`/`Ring`, `Eq`/`Ord`, `HeytingAlgebra`)
 
 ```purs
 import Prelude
@@ -532,6 +533,12 @@ Two pieces of the build make this practical (ADR 0009):
 selects the `Ordering` ADT (`LT`/`EQ`/`GT`, an ordinary data type) by a signed
 `i32` comparison; `<` / `>` / `<=` derive from `compare` via a constructor match
 (which is why a `case` on constructors now also takes a catch-all `_` default).
+
+**Boolean algebra** (`HeytingAlgebra`) is the same once more: `&&` / `||` / `not`
+are the `conj` / `disj` / `not` accessors on `heytingAlgebraBoolean`, whose fields
+are the `boolConj` / `boolDisj` / `boolNot` foreigns — `i32.and` / `i32.or` /
+`i32.eqz` on the unboxed `i31` Boolean bits. (`&&` and `||` are the strict Prelude
+operators, so both operands are evaluated — no short-circuiting.)
 
 `Number` arithmetic, the `Boolean`/aggregate `Eq`/`Ord` instances, `Show`, and the
 rest of the numeric hierarchy (`EuclideanRing` `/`, `DivisionRing`, …), are not

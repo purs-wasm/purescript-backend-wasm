@@ -84,6 +84,9 @@ data Intrinsic
   | OrdInt
   | IntToNum -- Int -> Number (`f64.convert_i32_s`)
   | NumToInt -- Number -> Int (`i32.trunc_f64_s`)
+  | BoolAnd -- Boolean -> Boolean -> Boolean (`i32.and` on the i31 bits)
+  | BoolOr -- Boolean -> Boolean -> Boolean (`i32.or`)
+  | BoolNot -- Boolean -> Boolean (`i32.eqz`)
   | StrLen -- String -> Int (UTF-8 byte length, `array.len`)
   | StrConcat -- String -> String -> String (allocate + copy both byte arrays)
   | StrEq -- String -> String -> Boolean (length then byte-by-byte compare)

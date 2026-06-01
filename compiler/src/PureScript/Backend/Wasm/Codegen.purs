@@ -588,6 +588,12 @@ genPrim ctx intr args = case intr, args of
   NumToInt, [ a ] -> do
     ea <- genAtom ctx a >>= unboxNumExpr ctx
     B.i32TruncF64S ctx.mod ea >>= boxInt ctx
+  -- Boolean algebra on the unboxed i31 bits, re-boxed as an i31 Boolean
+  BoolAnd, [ a, b ] -> boolBinop B.i32And a b
+  BoolOr, [ a, b ] -> boolBinop B.i32Or a b
+  BoolNot, [ a ] -> do
+    ea <- genAtom ctx a >>= unboxBoolExpr ctx
+    B.i32Eqz ctx.mod ea >>= B.i31New ctx.mod
   -- String -> Int: the UTF-8 byte length
   StrLen, [ a ] -> do
     bytes <- strBytes ctx a
@@ -616,6 +622,10 @@ genPrim ctx intr args = case intr, args of
     ea <- unboxIntAtom ctx a
     eb <- unboxIntAtom ctx b
     op ctx.mod ea eb >>= boxInt ctx
+  boolBinop op a b = do
+    ea <- genAtom ctx a >>= unboxBoolExpr ctx
+    eb <- genAtom ctx b >>= unboxBoolExpr ctx
+    op ctx.mod ea eb >>= B.i31New ctx.mod
 
 unboxIntAtom :: Ctx -> Atom -> Effect B.Expression
 unboxIntAtom ctx atom = genAtom ctx atom >>= unboxIntExpr ctx

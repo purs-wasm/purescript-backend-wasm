@@ -112,6 +112,10 @@ foreignIntrinsic = case _ of
   "eqCharImpl" -> Just (Tuple IntEq 2)
   "eqStringImpl" -> Just (Tuple StrEq 2)
   "ordIntImpl" -> Just (Tuple OrdInt 5)
+  -- real Prelude: `Data.HeytingAlgebra` Boolean algebra
+  "boolConj" -> Just (Tuple BoolAnd 2)
+  "boolDisj" -> Just (Tuple BoolOr 2)
+  "boolNot" -> Just (Tuple BoolNot 1)
   _ -> Nothing
 
 -- | The globally-unique key/name for a module-qualified top-level identifier:
