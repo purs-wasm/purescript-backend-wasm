@@ -166,6 +166,47 @@ no catch-all traps.
 matches it: each arm tests `(i32.eq (i31.get_s (ref.cast i31ref scrut)) k)`. A
 `Number` match tests `(f64.eq (struct.get $Num 0 (ref.cast (ref $Num) scrut)) k)`.
 
+## Strings
+
+```purs
+foreign import concatS :: String -> String -> String   -- mapped to the StrConcat intrinsic
+foreign import lenS :: String -> Int                    -- StrLen
+foreign import eqS :: String -> String -> Boolean       -- StrEq
+
+greetingLen :: Int -> Int
+greetingLen _ = lenS (concatS "Hello, " "world!")       -- 13
+
+matchHi :: Int -> Int
+matchHi _ = case concatS "h" "i" of { "hi" -> 1; _ -> 0 }   -- 1
+```
+
+A `String` is `$Str = (struct (ref $Bytes))` with `$Bytes = (array (mut i8))`,
+holding the string's **UTF-8** bytes (ADR 0001). A literal is built by
+`array.new_fixed` of its bytes wrapped in a `struct.new $Str`; the encoder runs at
+compile time, so a multibyte code point becomes its several bytes (and `lenS`
+counts *bytes*, not UTF-16 code units — the documented divergence from
+`Data.String.CodeUnits`). The string operations are ADR 0002 tier-2 runtime
+functions, shared and emitted once:
+
+- **`lenS`** (`StrLen`) is inline: `(array.len (struct.get $Str 0 (ref.cast (ref $Str) s)))`, boxed.
+- **`concatS`** (`StrConcat`) calls `$rt.strConcat`, which `array.new`s a byte
+  array of the combined length and `array.copy`s both halves in.
+- **`eqS`** (`StrEq`) and **string literal patterns** both call `$rt.strEq`, a
+  length check followed by a byte-by-byte compare returning an `i32` `1`/`0`
+  (`eqS` boxes it as an `i31` Boolean; a pattern uses it directly as the `if`
+  condition).
+
+```wat
+;; types: $Bytes = (array (mut i8))   $Str = (struct (ref $Bytes))
+;; "hi" literal:
+(struct.new $Str (array.new_fixed $Bytes 2 (i32.const 104) (i32.const 105)))
+;; lenS s:
+(struct.new $Int (array.len (struct.get $Str 0 (ref.cast (ref $Str) <s>))))
+;; concatS a b  /  eqS a b:
+(call $rt.strConcat <a> <b>)
+(ref.i31 (call $rt.strEq <a> <b>))             ;; the i32 0/1 boxed as an i31 Boolean
+```
+
 ## Closures and higher-order functions
 
 ```purs

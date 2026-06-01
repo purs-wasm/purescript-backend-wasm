@@ -59,9 +59,8 @@ data Atom
   = ALitInt Int -- also a `Char` (its code point); both box as `$Int = (struct i32)`
   | ALitNumber Number -- boxes as `$Num = (struct f64)`
   | ALitBoolean Boolean -- an `i31ref` (`true` = 1, `false` = 0), per ADR 0001
+  | ALitString String -- a UTF-8 `$Str = (struct (ref (array i8)))`, per ADR 0001
   | AVar VarRef
-
--- Slice 4b: | ALitString String
 
 derive instance eqAtom :: Eq Atom
 derive instance genericAtom :: Generic Atom _
@@ -81,6 +80,9 @@ data Intrinsic
   | IntEq -- Int -> Int -> Boolean (`i32.eq`, result boxed as an `i31` Boolean)
   | IntToNum -- Int -> Number (`f64.convert_i32_s`)
   | NumToInt -- Number -> Int (`i32.trunc_f64_s`)
+  | StrLen -- String -> Int (UTF-8 byte length, `array.len`)
+  | StrConcat -- String -> String -> String (allocate + copy both byte arrays)
+  | StrEq -- String -> String -> Boolean (length then byte-by-byte compare)
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -165,11 +167,13 @@ data AnfExpr
   | LitSwitch Atom (Array LitBranch) (Maybe AnfExpr)
 
 -- | A literal pattern. A `Char` pattern is a `PInt` of its code point (same
--- | runtime representation). `String` patterns arrive in Slice 4b.
+-- | runtime representation); a `String` pattern compares by the runtime
+-- | byte-equality helper.
 data LitPat
   = PInt Int
   | PNumber Number
   | PBoolean Boolean
+  | PString String
 
 derive instance eqLitPat :: Eq LitPat
 derive instance genericLitPat :: Generic LitPat _

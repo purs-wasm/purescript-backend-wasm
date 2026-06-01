@@ -23,8 +23,11 @@ import Prelude
 
 import Binaryen as B
 import Data.Array as Array
+import Data.Enum (fromEnum)
 import Data.Foldable (traverse_)
+import Data.Int.Bits (and, shr)
 import Data.Maybe (Maybe(..))
+import Data.String.CodePoints (toCodePointArray)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -41,6 +44,8 @@ type RuntimeTypes =
   , labelIdsHt :: B.HeapType
   , recHt :: B.HeapType
   , numHt :: B.HeapType
+  , bytesHt :: B.HeapType
+  , strHt :: B.HeapType
   , codeHt :: B.HeapType
   , refInt :: B.Type
   , refVals :: B.Type
@@ -49,6 +54,8 @@ type RuntimeTypes =
   , refLabelIds :: B.Type
   , refRec :: B.Type
   , refNum :: B.Type
+  , refBytes :: B.Type
+  , refStr :: B.Type
   , refCode :: B.Type
   }
 
@@ -68,6 +75,8 @@ buildModule prog = do
   rt <- buildRuntimeTypes mod
   let ctx = { mod, rt, params: [] }
   addProjHelper ctx
+  addStrEqHelper ctx
+  addStrConcatHelper ctx
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx) prog.funcs
   pure mod
@@ -76,6 +85,15 @@ buildModule prog = do
 projHelperName :: String
 projHelperName = "$rt.proj"
 
+-- | The shared string byte-equality helper (see `addStrEqHelper`): returns `i32`
+-- | `1`/`0`.
+strEqHelperName :: String
+strEqHelperName = "$rt.strEq"
+
+-- | The shared string concatenation helper (see `addStrConcatHelper`).
+strConcatHelperName :: String
+strConcatHelperName = "$rt.strConcat"
+
 -- | Build the value type group (`$Vals` / `$Int` / `$ADT` / `$Clo`) and, in a
 -- | separate recursion group, the closure code signature `$Code`. `$Clo` holds
 -- | its code as a generic `funcref` (not `(ref $Code)`), which keeps `$Code` out
@@ -83,7 +101,7 @@ projHelperName = "$rt.proj"
 -- | matches `$Code` for `call_ref`.
 buildRuntimeTypes :: B.Module -> Effect RuntimeTypes
 buildRuntimeTypes _ = do
-  tb <- B.typeBuilderCreate 7
+  tb <- B.typeBuilderCreate 9
   B.typeBuilderSetArrayType tb 0 B.eqref true -- $Vals = (array (mut eqref))
   B.typeBuilderSetStructType tb 1 [ { ty: B.i32, mutable: false } ] -- $Int (also $Char)
   refValsTmp <- B.typeBuilderGetTempHeapType tb 0 >>= \h -> B.typeBuilderGetTempRefType tb h false
@@ -94,9 +112,12 @@ buildRuntimeTypes _ = do
   -- $Rec = (struct (ref $LabelIds) (ref $Vals)) — parallel label-id / value arrays
   B.typeBuilderSetStructType tb 5 [ { ty: refLabelIdsTmp, mutable: false }, { ty: refValsTmp, mutable: false } ]
   B.typeBuilderSetStructType tb 6 [ { ty: B.f64, mutable: false } ] -- $Num = (struct f64)
-  main <- B.typeBuilderBuildAndDispose tb 7
+  B.typeBuilderSetArrayType tb 7 B.i32 true -- $Bytes = (array (mut i8)); built with i32 operands
+  refBytesTmp <- B.typeBuilderGetTempHeapType tb 7 >>= \h -> B.typeBuilderGetTempRefType tb h false
+  B.typeBuilderSetStructType tb 8 [ { ty: refBytesTmp, mutable: false } ] -- $Str = (struct (ref $Bytes))
+  main <- B.typeBuilderBuildAndDispose tb 9
   case main of
-    [ valsHt, intHt, adtHt, cloHt, labelIdsHt, recHt, numHt ] -> do
+    [ valsHt, intHt, adtHt, cloHt, labelIdsHt, recHt, numHt, bytesHt, strHt ] -> do
       let refClo = B.typeFromHeapType cloHt false
       tb2 <- B.typeBuilderCreate 1
       B.typeBuilderSetSignatureType tb2 0 (B.createType [ refClo, B.eqref ]) B.eqref
@@ -110,6 +131,8 @@ buildRuntimeTypes _ = do
           , labelIdsHt
           , recHt
           , numHt
+          , bytesHt
+          , strHt
           , codeHt
           , refInt: B.typeFromHeapType intHt false
           , refVals: B.typeFromHeapType valsHt false
@@ -118,10 +141,12 @@ buildRuntimeTypes _ = do
           , refLabelIds: B.typeFromHeapType labelIdsHt false
           , refRec: B.typeFromHeapType recHt false
           , refNum: B.typeFromHeapType numHt false
+          , refBytes: B.typeFromHeapType bytesHt false
+          , refStr: B.typeFromHeapType strHt false
           , refCode: B.typeFromHeapType codeHt false
           }
         _ -> throwException (error "Codegen: expected exactly 1 code heap type")
-    _ -> throwException (error "Codegen: expected exactly 6 runtime heap types")
+    _ -> throwException (error "Codegen: expected exactly 9 runtime heap types")
 
 -- | The wasm value type for an IR representation.
 repType :: Ctx -> Rep -> B.Type
@@ -206,6 +231,101 @@ addProjHelper ctx = do
   found <- B.blockNamed mod "found" [ setI0, loopE, trapEnd ] B.eqref
   _ <- B.addFunction mod projHelperName (B.createType [ B.eqref, B.i32 ]) B.eqref [ B.i32 ] found
   pure unit
+
+-- | The `(ref $Bytes)` byte array of a `String` atom (`ref.cast $Str` then
+-- | `struct.get 0`).
+strBytes :: Ctx -> Atom -> Effect B.Expression
+strBytes ctx atom = do
+  s <- genAtom ctx atom >>= \e -> B.refCast ctx.mod e ctx.rt.refStr
+  B.structGet ctx.mod 0 s ctx.rt.refBytes false
+
+-- | Add the shared string byte-equality helper
+-- | `$rt.strEq(a : eqref, b : eqref) -> i32` (1 if equal): compare lengths, then
+-- | bytes left to right. Locals: 2/3 the two byte arrays, 4 their (shared)
+-- | length, 5 the index.
+addStrEqHelper :: Ctx -> Effect Unit
+addStrEqHelper ctx = do
+  let mod = ctx.mod
+  let rt = ctx.rt
+  let bytesOf p = B.localGet mod p B.eqref >>= \e -> B.refCast mod e rt.refStr >>= \s -> B.structGet mod 0 s rt.refBytes false
+  setA <- bytesOf 0 >>= B.localSet mod 2
+  setB <- bytesOf 1 >>= B.localSet mod 3
+  setLen <- (B.localGet mod 2 rt.refBytes >>= B.arrayLen mod) >>= B.localSet mod 4
+  -- if lengths differ, not equal
+  lenB <- B.localGet mod 3 rt.refBytes >>= B.arrayLen mod
+  lenMismatch <- B.localGet mod 4 B.i32 >>= \la -> B.i32Ne mod la lenB
+  ret0a <- B.i32Const mod 0 >>= B.brWithValue mod "ret"
+  guardLen <- B.if_ mod lenMismatch ret0a =<< B.block mod [] B.none
+  setI0 <- B.i32Const mod 0 >>= B.localSet mod 5
+  -- if i == len, all bytes matched
+  iEqLen <- (Tuple <$> B.localGet mod 5 B.i32 <*> B.localGet mod 4 B.i32) >>= \(Tuple i l) -> B.i32Eq mod i l
+  ret1 <- B.i32Const mod 1 >>= B.brWithValue mod "ret"
+  doneCheck <- B.if_ mod iEqLen ret1 =<< B.block mod [] B.none
+  -- if bytesA[i] != bytesB[i], not equal
+  aI <- (Tuple <$> B.localGet mod 2 rt.refBytes <*> B.localGet mod 5 B.i32) >>= \(Tuple arr i) -> B.arrayGet mod arr i B.i32 false
+  bI <- (Tuple <$> B.localGet mod 3 rt.refBytes <*> B.localGet mod 5 B.i32) >>= \(Tuple arr i) -> B.arrayGet mod arr i B.i32 false
+  byteMismatch <- B.i32Ne mod aI bI
+  ret0b <- B.i32Const mod 0 >>= B.brWithValue mod "ret"
+  diffCheck <- B.if_ mod byteMismatch ret0b =<< B.block mod [] B.none
+  incI <- (B.localGet mod 5 B.i32 >>= \i -> B.i32Const mod 1 >>= B.i32Add mod i) >>= B.localSet mod 5
+  backedge <- B.br mod "loop"
+  loopBody <- B.block mod [ doneCheck, diffCheck, incI, backedge ] B.auto
+  loopE <- B.loop mod "loop" loopBody
+  trapEnd <- B.unreachable mod
+  body <- B.blockNamed mod "ret" [ setA, setB, setLen, guardLen, setI0, loopE, trapEnd ] B.i32
+  _ <- B.addFunction mod strEqHelperName (B.createType [ B.eqref, B.eqref ]) B.i32 [ rt.refBytes, rt.refBytes, B.i32, B.i32 ] body
+  pure unit
+
+-- | Add the shared string concatenation helper
+-- | `$rt.strConcat(a : eqref, b : eqref) -> eqref`: allocate a byte array of the
+-- | combined length and `array.copy` both halves in. Locals: 2/3 the byte arrays,
+-- | 4 the length of `a`, 5 the destination array.
+addStrConcatHelper :: Ctx -> Effect Unit
+addStrConcatHelper ctx = do
+  let mod = ctx.mod
+  let rt = ctx.rt
+  let bytesOf p = B.localGet mod p B.eqref >>= \e -> B.refCast mod e rt.refStr >>= \s -> B.structGet mod 0 s rt.refBytes false
+  setA <- bytesOf 0 >>= B.localSet mod 2
+  setB <- bytesOf 1 >>= B.localSet mod 3
+  setLenA <- (B.localGet mod 2 rt.refBytes >>= B.arrayLen mod) >>= B.localSet mod 4
+  -- dest = new (mut i8) array of length lenA + lenB, zero-initialised
+  lenB <- B.localGet mod 3 rt.refBytes >>= B.arrayLen mod
+  total <- B.localGet mod 4 B.i32 >>= \la -> B.i32Add mod la lenB
+  zero <- B.i32Const mod 0
+  setDest <- B.arrayNew mod rt.bytesHt total zero >>= B.localSet mod 5
+  -- copy a into [0, lenA), then b into [lenA, lenA + lenB)
+  d0 <- B.i32Const mod 0
+  s0 <- B.i32Const mod 0
+  copyA <- do
+    dest <- B.localGet mod 5 rt.refBytes
+    src <- B.localGet mod 2 rt.refBytes
+    len <- B.localGet mod 4 B.i32
+    B.arrayCopy mod dest d0 src s0 len
+  copyB <- do
+    dest <- B.localGet mod 5 rt.refBytes
+    destIdx <- B.localGet mod 4 B.i32
+    src <- B.localGet mod 3 rt.refBytes
+    srcIdx <- B.i32Const mod 0
+    len <- B.localGet mod 3 rt.refBytes >>= B.arrayLen mod
+    B.arrayCopy mod dest destIdx src srcIdx len
+  result <- B.localGet mod 5 rt.refBytes >>= \d -> B.structNew mod rt.strHt [ d ]
+  body <- B.block mod [ setA, setB, setLenA, setDest, copyA, copyB, result ] B.eqref
+  _ <- B.addFunction mod strConcatHelperName (B.createType [ B.eqref, B.eqref ]) B.eqref [ rt.refBytes, rt.refBytes, B.i32, rt.refBytes ] body
+  pure unit
+
+-- | Encode a `String` to its UTF-8 bytes (the elements of a `$Bytes` literal).
+utf8Bytes :: String -> Array Int
+utf8Bytes = toCodePointArray >=> (encode <<< fromEnum)
+  where
+  encode cp
+    | cp < 0x80 = [ cp ]
+    | cp < 0x800 =
+        [ 0xC0 + shr cp 6, cont cp 0 ]
+    | cp < 0x10000 =
+        [ 0xE0 + shr cp 12, cont cp 6, cont cp 0 ]
+    | otherwise =
+        [ 0xF0 + shr cp 18, cont cp 12, cont cp 6, cont cp 0 ]
+  cont cp n = 0x80 + (and (shr cp n) 0x3F)
 
 -- | Box an `i32` expression into an `eqref` (`struct.new $Int`).
 boxInt :: Ctx -> B.Expression -> Effect B.Expression
@@ -346,6 +466,12 @@ genLitSwitch ctx scrutAtom branches dflt = chain branches
       s <- genAtom ctx scrutAtom >>= unboxNumExpr ctx
       k <- B.f64Const ctx.mod n
       B.f64Eq ctx.mod s k
+    -- the scrutinee equals the literal string iff the byte-equality helper says
+    -- so (a non-zero `i32`), which serves directly as the `if` condition
+    PString str -> do
+      s <- genAtom ctx scrutAtom
+      lit <- genAtom ctx (ALitString str)
+      B.call ctx.mod strEqHelperName [ s, lit ] B.i32
 
 -- | The wasm type of local `i` in the current function: a parameter takes its
 -- | declared representation (local 0 of a code function is `(ref $Clo)`), while
@@ -360,6 +486,10 @@ genAtom ctx = case _ of
   ALitInt n -> B.i32Const ctx.mod n >>= boxInt ctx
   ALitNumber n -> B.f64Const ctx.mod n >>= boxNum ctx
   ALitBoolean b -> boxBool ctx b
+  ALitString s -> do
+    byteEs <- traverse (B.i32Const ctx.mod) (utf8Bytes s)
+    bytes <- B.arrayNewFixed ctx.mod ctx.rt.bytesHt byteEs
+    B.structNew ctx.mod ctx.rt.strHt [ bytes ]
   AVar (Local (Slot index)) -> B.localGet ctx.mod index (localType ctx index)
   -- A captured variable: read the env array from the closure (local 0, the only
   -- `(ref $Clo)`-typed local — `EnvField` appears only in lifted code functions)
@@ -439,6 +569,19 @@ genPrim ctx intr args = case intr, args of
   NumToInt, [ a ] -> do
     ea <- genAtom ctx a >>= unboxNumExpr ctx
     B.i32TruncF64S ctx.mod ea >>= boxInt ctx
+  -- String -> Int: the UTF-8 byte length
+  StrLen, [ a ] -> do
+    bytes <- strBytes ctx a
+    B.arrayLen ctx.mod bytes >>= boxInt ctx
+  -- String -> String -> String / Boolean: delegate to the shared runtime helpers
+  StrConcat, [ a, b ] -> do
+    ea <- genAtom ctx a
+    eb <- genAtom ctx b
+    B.call ctx.mod strConcatHelperName [ ea, eb ] B.eqref
+  StrEq, [ a, b ] -> do
+    ea <- genAtom ctx a
+    eb <- genAtom ctx b
+    B.call ctx.mod strEqHelperName [ ea, eb ] B.i32 >>= B.i31New ctx.mod
   _, _ -> throwException (error "Codegen: intrinsic given an operand list of the wrong arity")
   where
   intBinop op a b = do

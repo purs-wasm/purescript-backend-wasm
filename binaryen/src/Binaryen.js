@@ -69,6 +69,9 @@ export const i32EqImpl = (mod) => (left) => (right) => () =>
 export const i32LtUImpl = (mod) => (left) => (right) => () =>
   mod.i32.lt_u(left, right);
 
+export const i32NeImpl = (mod) => (left) => (right) => () =>
+  mod.i32.ne(left, right);
+
 export const ifImpl = (mod) => (cond) => (ifTrue) => (ifFalse) => () =>
   mod.if(cond, ifTrue, ifFalse);
 
@@ -184,6 +187,9 @@ export const structNew = (mod) => (ht) => (operands) => () => {
 export const structGet = (mod) => (index) => (ref) => (ty) => (signed) => () =>
   binaryen._BinaryenStructGet(mod.ptr, index, ref, ty, signed ? 1 : 0);
 
+export const arrayNew = (mod) => (ht) => (size) => (init) => () =>
+  binaryen._BinaryenArrayNew(mod.ptr, ht, size, init);
+
 export const arrayNewFixed = (mod) => (ht) => (values) => () => {
   const ptr = mallocI32(values);
   const expr = binaryen._BinaryenArrayNewFixed(mod.ptr, ht, ptr, values.length);
@@ -199,6 +205,9 @@ export const arraySet = (mod) => (ref) => (index) => (value) => () =>
 
 export const arrayLen = (mod) => (ref) => () =>
   binaryen._BinaryenArrayLen(mod.ptr, ref);
+
+export const arrayCopy = (mod) => (dest) => (destIndex) => (src) => (srcIndex) => (length) => () =>
+  binaryen._BinaryenArrayCopy(mod.ptr, dest, destIndex, src, srcIndex, length);
 
 export const refCast = (mod) => (ref) => (ty) => () =>
   binaryen._BinaryenRefCast(mod.ptr, ref, ty);

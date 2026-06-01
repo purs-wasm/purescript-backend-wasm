@@ -1,0 +1,3 @@
+export const concatS = a => b => a + b;
+export const lenS = s => s.length;
+export const eqS = a => b => a === b;

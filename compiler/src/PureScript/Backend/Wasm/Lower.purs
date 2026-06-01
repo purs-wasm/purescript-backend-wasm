@@ -94,6 +94,9 @@ foreignIntrinsic = case _ of
   "eqI" -> Just (Tuple IntEq 2)
   "intToNum" -> Just (Tuple IntToNum 1)
   "numToInt" -> Just (Tuple NumToInt 1)
+  "lenS" -> Just (Tuple StrLen 1)
+  "concatS" -> Just (Tuple StrConcat 2)
+  "eqS" -> Just (Tuple StrEq 2)
   _ -> Nothing
 
 qualifiedName :: forall a. Qualified a -> a
@@ -154,10 +157,11 @@ lowerArg env expr k = case expr of
   -- A `Char` shares `Int`'s representation; carry its code point.
   C.Literal _ (C.LitChar c) -> k (ALitInt (toCharCode c))
   C.Literal _ (C.LitBoolean b) -> k (ALitBoolean b)
+  C.Literal _ (C.LitString s) -> k (ALitString s)
   -- A record literal (and so a type-class dictionary, after its newtype
   -- constructor is erased) becomes a label-id-keyed record (ADR 0001 / 0007).
   C.Literal _ (C.LitObject fields) -> lowerRecord env fields k
-  C.Literal _ _ -> throw (UnsupportedExpr "unsupported literal (String / Array arrive in Slice 4b/4c)")
+  C.Literal _ _ -> throw (UnsupportedExpr "unsupported literal (Array arrives in Slice 4c)")
   -- `Prim.undefined` is the dummy argument applied to a superclass thunk; the
   -- thunk ignores it, so any boxed value will do.
   C.Var _ (Qualified (Just [ "Prim" ]) "undefined") -> k (ALitInt 0)
@@ -435,7 +439,8 @@ litPat = case _ of
   C.LitChar c -> pure (PInt (toCharCode c))
   C.LitBoolean b -> pure (PBoolean b)
   C.LitNumber n -> pure (PNumber n)
-  _ -> throw (UnsupportedBinder "literal pattern: only Int / Char / Boolean / Number (String in Slice 4b)")
+  C.LitString s -> pure (PString s)
+  _ -> throw (UnsupportedBinder "literal pattern: only Int / Char / Boolean / Number / String")
 
 -- | Recognise a single, unguarded alternative whose binder is a newtype
 -- | constructor with one var / wildcard sub-binder, returning the bound name (if

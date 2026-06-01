@@ -17,6 +17,7 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Slice3.corefn.json`  | `Slice3.purs.sample`  | `Test.E2E.Slice3`             | type-class dictionaries: instance CAFs, method dispatch via label search |
 | `Slice3b.corefn.json` | `Slice3b.purs.sample` | `Test.E2E.Slice3`             | superclass dictionaries: thunked `<Class><n>` fields, one/two-level access |
 | `Slice4a.corefn.json` | `Slice4a.purs.sample` | `Test.E2E.Slice4a`            | scalar literals (`Char`/`Number`/`Boolean`) + literal-pattern matching (`if`, `case n of 0 ->`) |
+| `Slice4b.corefn.json` | `Slice4b.purs.sample` | `Test.E2E.Slice4b`            | strings: UTF-8 literals, concat / byte-length / equality runtime helpers, string literal patterns |
 
 ## Regenerating
 

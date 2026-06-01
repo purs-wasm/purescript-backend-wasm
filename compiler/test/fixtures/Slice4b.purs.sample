@@ -1,0 +1,27 @@
+module Slice4b where
+
+foreign import concatS :: String -> String -> String
+foreign import lenS :: String -> Int
+foreign import eqS :: String -> String -> Boolean
+
+-- string literal + concat + UTF-8 byte length (built internally, length returned)
+greetingLen :: Int -> Int
+greetingLen _ = lenS (concatS "Hello, " "world!")
+
+-- string equality (equal / unequal)
+eqYes :: Int -> Int
+eqYes _ = if eqS "abc" "abc" then 1 else 0
+
+eqNo :: Int -> Int
+eqNo _ = if eqS "abc" "abd" then 1 else 0
+
+-- string literal pattern match on an internally-built string
+matchHi :: Int -> Int
+matchHi _ = case concatS "h" "i" of
+  "hi" -> 1
+  "ho" -> 2
+  _ -> 0
+
+-- multibyte (UTF-8): "é" is 2 bytes, so length 3 for "aéb"
+multibyteLen :: Int -> Int
+multibyteLen _ = lenS "aéb"

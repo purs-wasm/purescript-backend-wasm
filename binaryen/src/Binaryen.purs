@@ -33,6 +33,7 @@ module Binaryen
   , i32Sub
   , i32Mul
   , i32Eq
+  , i32Ne
   , i32LtU
   , i32Const
   , i32TruncF64S
@@ -66,10 +67,12 @@ module Binaryen
   , typeFromHeapType
   , structNew
   , structGet
+  , arrayNew
   , arrayNewFixed
   , arrayGet
   , arraySet
   , arrayLen
+  , arrayCopy
   , refCast
   , refFunc
   , callRef
@@ -210,6 +213,12 @@ foreign import i32EqImpl :: Module -> Expression -> Expression -> Effect Express
 i32Eq :: Module -> Expression -> Expression -> Effect Expression
 i32Eq = i32EqImpl
 
+foreign import i32NeImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.ne`: 1 if the operands differ, 0 otherwise.
+i32Ne :: Module -> Expression -> Expression -> Effect Expression
+i32Ne = i32NeImpl
+
 foreign import i32LtUImpl :: Module -> Expression -> Expression -> Effect Expression
 
 -- | `i32.lt_u`: 1 if `left < right` as unsigned, 0 otherwise.
@@ -339,6 +348,10 @@ foreign import structNew :: Module -> HeapType -> Array Expression -> Effect Exp
 -- | The boolean is the sign extension, relevant only for packed fields.
 foreign import structGet :: Module -> Int -> Expression -> Type -> Boolean -> Effect Expression
 
+-- | `array.new`: allocate an array of the heap type with `size` elements, each
+-- | initialised to `init`.
+foreign import arrayNew :: Module -> HeapType -> Expression -> Expression -> Effect Expression
+
 -- | `array.new_fixed`: allocate an array of the heap type from the given
 -- | elements.
 foreign import arrayNewFixed :: Module -> HeapType -> Array Expression -> Effect Expression
@@ -353,6 +366,11 @@ foreign import arraySet :: Module -> Expression -> Expression -> Expression -> E
 
 -- | `array.len`: the element count of array `ref`, as an `i32`.
 foreign import arrayLen :: Module -> Expression -> Effect Expression
+
+-- | `array.copy`: copy `length` elements from `src` (at `srcIndex`) into `dest`
+-- | (at `destIndex`). `dest` must be a mutable array.
+foreign import arrayCopy
+  :: Module -> Expression -> Expression -> Expression -> Expression -> Expression -> Effect Expression
 
 -- | `ref.cast`: narrow `ref` to value type `ty` (traps on mismatch).
 foreign import refCast :: Module -> Expression -> Type -> Effect Expression

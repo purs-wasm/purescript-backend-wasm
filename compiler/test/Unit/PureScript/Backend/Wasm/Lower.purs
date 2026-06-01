@@ -68,9 +68,16 @@ intAlt n body = { binders: [ CF.LiteralBinder ann (CF.LitInt n) ], result: Right
 boolAlt :: Boolean -> CF.Expr -> CF.CaseAlternative
 boolAlt b body = { binders: [ CF.LiteralBinder ann (CF.LitBoolean b) ], result: Right body }
 
+-- | A `String`-literal alternative `"s" -> body`.
+strAlt :: String -> CF.Expr -> CF.CaseAlternative
+strAlt s body = { binders: [ CF.LiteralBinder ann (CF.LitString s) ], result: Right body }
+
 -- | A wildcard alternative `_ -> body`.
 wildAlt :: CF.Expr -> CF.CaseAlternative
 wildAlt body = { binders: [ CF.NullBinder ann ], result: Right body }
+
+litStr :: String -> CF.Expr
+litStr s = CF.Literal ann (CF.LitString s)
 
 -- | A record literal `{ label: expr, … }`.
 litObj :: Array (Tuple String CF.Expr) -> CF.Expr
@@ -447,3 +454,21 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Right prog ->
           (litSwitchOf <<< _.body <$> exported "f" prog)
             `shouldEqual` Just (Just { pats: [ PInt 0 ], hasDefault: true })
+
+    it "compiles String literal patterns to a LitSwitch on PString" do
+      -- f s = case s of "hi" -> 1; "ho" -> 2; _ -> 0
+      let f = def "f" (lam "s" (caseOf (lv "s") [ strAlt "hi" (litInt 1), strAlt "ho" (litInt 2), wildAlt (litInt 0) ]))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog ->
+          (litSwitchOf <<< _.body <$> exported "f" prog)
+            `shouldEqual` Just (Just { pats: [ PString "hi", PString "ho" ], hasDefault: true })
+
+    it "lowers a foreign string concat to a primitive" do
+      -- f = concatS "a" "b"
+      let f = def "f" (appE (appE (qv "concatS") (litStr "a")) (litStr "b"))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just fn -> Array.any isPrim (allRhs fn.body) `shouldEqual` true
