@@ -711,6 +711,14 @@ genPrim ctx intr args = case intr, args of
     arr <- genAtom ctx a >>= \e -> B.refCast ctx.mod e ctx.rt.refVals
     idx <- unboxIntAtom ctx i
     B.arrayGet ctx.mod arr idx B.eqref false
+  -- Data.Bounded constants: Int/Char as boxed `$Int`, Number's ±Infinity as `$Num`.
+  -- The Int min cannot be written as a literal (out of `Int` range), so build it.
+  TopInt, [] -> B.i32Const ctx.mod 2147483647 >>= boxInt ctx
+  BottomInt, [] -> B.i32Const ctx.mod (-2147483647 - 1) >>= boxInt ctx
+  TopChar, [] -> B.i32Const ctx.mod 65535 >>= boxInt ctx
+  BottomChar, [] -> B.i32Const ctx.mod 0 >>= boxInt ctx
+  TopNumber, [] -> B.f64Const ctx.mod (1.0 / 0.0) >>= boxNum ctx
+  BottomNumber, [] -> B.f64Const ctx.mod (-1.0 / 0.0) >>= boxNum ctx
   _, _ -> throwException (error "Codegen: intrinsic given an operand list of the wrong arity")
   where
   intBinop op a b = do

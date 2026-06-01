@@ -566,6 +566,20 @@ bundling the `EuclideanRing` and `DivisionRing` superclass dictionaries. A
 `Field`-constrained generic used at `Number` therefore links end-to-end through the
 already-supported partial-application, CAF, and superclass-thunk paths.
 
+**`Data.Bounded`** (`top` / `bottom`) for `Int` and `Char`. Unlike every class
+above, these foreigns are *nullary values*, not functions — `topInt` / `bottomInt`
+are the `i32` extremes (`2147483647` / `-2147483648`) and `topChar` / `bottomChar`
+the code points `0xFFFF` / `0`, each boxed as `$Int`. A nullary foreign is
+materialized directly (an arity-0 `RPrim`) instead of being eta-expanded to a
+closure. `Bounded`'s `Ord` superclass drives comparisons; `Char` compares by code
+point, identical to `Int`, so it reuses `OrdInt`. (`Number`'s `Bounded` is the two
+`±Infinity` constants — implemented but not yet linkable until `Number`'s `Ord`
+lands.) One subtlety this surfaced: the foreign-intrinsic table is keyed by *bare*
+identifier, which collides with instance names like `topInt`; a defined top-level
+binding (constructor / function / instance dictionary) therefore now **shadows** the
+intrinsic table, and `foreignIntrinsic` is consulted only as a fallback (real
+foreigns have no declaration body, so they are never shadowed).
+
 `Show`, the `Boolean`/aggregate `Eq`/`Ord` instances, `Data.Int.round`/`floor`/`…`,
 and `Number`'s `Ord`, are not wired up yet.
 

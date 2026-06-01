@@ -47,6 +47,14 @@ data Intrinsic
   | StrEq -- String -> String -> Boolean (length then byte-by-byte compare)
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
+  -- | `Data.Bounded`'s `top` / `bottom` for `Int` / `Char` / `Number`: nullary
+  -- | constant values (the foreign is a bare value, not a function — arity 0).
+  | TopInt -- maxBound Int (`i32.const 2147483647`)
+  | BottomInt -- minBound Int (`i32.const -2147483648`)
+  | TopChar -- maxBound Char, code point 0xFFFF (`Int`-rep)
+  | BottomChar -- minBound Char, code point 0 (`Int`-rep)
+  | TopNumber -- `+Infinity` (`$Num` f64)
+  | BottomNumber -- `-Infinity` (`$Num` f64)
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -73,9 +81,18 @@ foreignIntrinsic = case _ of
   "intDegree" -> Just (Tuple IntDegree 1)
   -- `Data.Eq` / `Data.Ord` on Int (and Char, which shares its representation)
   "eqIntImpl" -> Just (Tuple IntEq 2)
+  -- `Data.Bounded` top/bottom (nullary constant values, arity 0)
+  "topInt" -> Just (Tuple TopInt 0)
+  "bottomInt" -> Just (Tuple BottomInt 0)
+  "topChar" -> Just (Tuple TopChar 0)
+  "bottomChar" -> Just (Tuple BottomChar 0)
+  "topNumber" -> Just (Tuple TopNumber 0)
+  "bottomNumber" -> Just (Tuple BottomNumber 0)
   "eqCharImpl" -> Just (Tuple IntEq 2)
   "eqStringImpl" -> Just (Tuple StrEq 2)
   "ordIntImpl" -> Just (Tuple OrdInt 5)
+  -- `Char` compares by code point, identical to `Int` (shared `i32` rep)
+  "ordCharImpl" -> Just (Tuple OrdInt 5)
   -- `Data.HeytingAlgebra` Boolean algebra
   "boolConj" -> Just (Tuple BoolAnd 2)
   "boolDisj" -> Just (Tuple BoolOr 2)

@@ -170,13 +170,21 @@ lowerArg env expr k = case expr of
   -- A bare reference to a known callable becomes a closure value (eta-expanded);
   -- a nullary constructor is built directly; a nullary top-level value (a CAF —
   -- e.g. an instance dictionary) is *called* to produce its value.
+  -- A defined top-level binding (constructor or function/CAF) shadows the
+  -- intrinsic table: instance names like `topInt` collide with foreign idents
+  -- (`Data.Bounded.topInt`), but real foreigns have no decl body so they are
+  -- never `ctors`/`knownFuncs` — so `foreignIntrinsic` is only the fallback.
   C.Var _ q@(Qualified (Just _) ident)
-    | Just (Tuple _ arity) <- foreignIntrinsic ident -> lowerArg env (etaExpand expr arity) k
     | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors ->
         if info.arity == 0 then bindRhs (RMkData info.tag []) k
         else lowerArg env (etaExpand expr info.arity) k
     | Just arity <- Object.lookup (qualifiedKeyOf q) env.knownFuncs ->
         if arity == 0 then bindRhs (RCallKnown (qualifiedFuncName q) []) k
+        else lowerArg env (etaExpand expr arity) k
+    -- A nullary foreign (e.g. `Data.Bounded.topInt`) is a constant value, not a
+    -- callable, so it materializes directly rather than eta-expanding.
+    | Just (Tuple intr arity) <- foreignIntrinsic ident ->
+        if arity == 0 then bindRhs (RPrim intr []) k
         else lowerArg env (etaExpand expr arity) k
     | otherwise -> throw (UnsupportedExpr ("unapplied top-level reference: " <> qualifiedKeyOf q))
   C.Accessor _ label record -> lowerArg env record \recAtom -> do
@@ -261,10 +269,12 @@ lowerApp env { head, args } k = case head of
     | Object.member (qualifiedKeyOf q) env.dictCtors -> case args of
         [ rec ] -> lowerArg env rec k
         _ -> throw (UnsupportedExpr "dictionary constructor must take exactly one record")
+  -- See `lowerArg`: a defined binding (ctor/knownFunc) shadows the intrinsic
+  -- table, so `foreignIntrinsic` is the fallback (foreigns have no decl body).
   C.Var _ q@(Qualified (Just _) ident)
-    | Just (Tuple intr arity) <- foreignIntrinsic ident -> applyArity arity (RPrim intr)
     | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors -> applyArity info.arity (RMkData info.tag)
     | Just arity <- Object.lookup (qualifiedKeyOf q) env.knownFuncs -> applyArity arity (RCallKnown (qualifiedFuncName q))
+    | Just (Tuple intr arity) <- foreignIntrinsic ident -> applyArity arity (RPrim intr)
     | otherwise -> throw (UnsupportedExpr ("unknown callee: " <> qualifiedKeyOf q))
   _ ->
     lowerArg env head \fAtom ->
