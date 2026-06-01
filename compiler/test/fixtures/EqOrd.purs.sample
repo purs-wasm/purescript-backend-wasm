@@ -79,3 +79,38 @@ arrGe = if [ 1, 2, 3 ] >= [ 1, 2, 3 ] then 1 else 0
 
 arrGt :: Int
 arrGt = if [ 2 ] > [ 1, 9, 9 ] then 1 else 0
+
+-- multi-constructor derived Eq / Ord (the decision-tree path)
+data Color = Red | Green | Blue
+
+derive instance eqColor :: Eq Color
+derive instance ordColor :: Ord Color
+
+colorEq :: Int
+colorEq = if Red == Red then 1 else 0
+
+colorNeq :: Int
+colorNeq = if Red == Green then 1 else 0
+
+colorLt :: Int
+colorLt = if Red < Blue then 1 else 0
+
+colorGt :: Int
+colorGt = if Blue > Green then 1 else 0
+
+-- multiple constructors, some with fields
+data Shape = Circle Int | Rect Int Int
+
+derive instance eqShape :: Eq Shape
+
+shapeEqC :: Int
+shapeEqC = if Circle 3 == Circle 3 then 1 else 0
+
+shapeNeqArg :: Int
+shapeNeqArg = if Circle 3 == Circle 4 then 1 else 0
+
+shapeNeqCtor :: Int
+shapeNeqCtor = if Circle 3 == Rect 3 3 then 1 else 0
+
+shapeEqR :: Int
+shapeEqR = if Rect 2 3 == Rect 2 3 then 1 else 0

@@ -84,6 +84,22 @@ ctorAlt name subBinders body =
 wildAlt :: CF.Expr -> CF.CaseAlternative
 wildAlt body = { binders: [ CF.NullBinder ann ], result: Right body }
 
+-- | `case s1, s2 of <alternatives>` — a two-scrutinee match.
+case2 :: CF.Expr -> CF.Expr -> Array CF.CaseAlternative -> CF.Expr
+case2 s1 s2 alternatives = CF.Case ann [ s1, s2 ] alternatives
+
+-- | A constructor binder `Ctor sub…` (type `Ty`, module `T`).
+ctorBinder :: String -> Array CF.Binder -> CF.Binder
+ctorBinder name subBinders =
+  CF.ConstructorBinder ann (CF.Qualified (Just [ "T" ]) "Ty") (CF.Qualified (Just [ "T" ]) name) subBinders
+
+-- | A two-binder alternative `b1, b2 -> body`.
+alt2 :: CF.Binder -> CF.Binder -> CF.Expr -> CF.CaseAlternative
+alt2 b1 b2 body = { binders: [ b1, b2 ], result: Right body }
+
+nullBinder :: CF.Binder
+nullBinder = CF.NullBinder ann
+
 litStr :: String -> CF.Expr
 litStr s = CF.Literal ann (CF.LitString s)
 
@@ -270,6 +286,19 @@ hasSwitch = case _ of
   LetRec _ k -> hasSwitch k
   Return _ -> false
 
+-- | The scrutinee atom of every `Switch` / `LitSwitch` in the tree (one per
+-- | decision node). Its length is the number of tag/value tests, and how often a
+-- | given atom appears is how many times that scrutinee is examined.
+switchScrutinees :: AnfExpr -> Array Atom
+switchScrutinees = case _ of
+  Return _ -> []
+  Let _ _ _ k -> switchScrutinees k
+  Switch s branches dflt ->
+    Array.cons s ((branches >>= \(Branch _ b) -> switchScrutinees b) <> maybe [] switchScrutinees dflt)
+  LitSwitch s branches dflt ->
+    Array.cons s ((branches >>= \(LitBranch _ b) -> switchScrutinees b) <> maybe [] switchScrutinees dflt)
+  LetRec _ k -> switchScrutinees k
+
 isApply :: Rhs -> Boolean
 isApply = case _ of
   RApply _ _ -> true
@@ -441,6 +470,48 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Right prog ->
           (switchOf <<< _.body <$> exported "f" prog)
             `shouldEqual` Just (Just { tags: [ 0 ], hasDefault: true })
+
+    it "compiles overlapping multi-scrutinee patterns to a decision tree that tests each scrutinee at most once" do
+      -- A deliberately redundant match: the constructor `A` heads three of the five
+      -- alternatives. A naive backtracking compiler would re-test `x == A` once per
+      -- such row; a decision tree groups them and tests `x` a single time.
+      --
+      -- data Ty = A | B | C
+      -- f x y = case x, y of
+      --   A, A -> 1 ; A, B -> 2 ; A, C -> 3 ; B, _ -> 4 ; C, _ -> 5
+      let
+        decls =
+          [ ctor "Ty" "A" []
+          , ctor "Ty" "B" []
+          , ctor "Ty" "C" []
+          , def "f"
+              ( lam "x"
+                  ( lam "y"
+                      ( case2 (lv "x") (lv "y")
+                          [ alt2 (ctorBinder "A" []) (ctorBinder "A" []) (litInt 1)
+                          , alt2 (ctorBinder "A" []) (ctorBinder "B" []) (litInt 2)
+                          , alt2 (ctorBinder "A" []) (ctorBinder "C" []) (litInt 3)
+                          , alt2 (ctorBinder "B" []) nullBinder (litInt 4)
+                          , alt2 (ctorBinder "C" []) nullBinder (litInt 5)
+                          ]
+                      )
+                  )
+              )
+          ]
+      case lower decls of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just fn -> do
+            let scruts = switchScrutinees fn.body
+            -- Exactly two decision nodes: one on `x` (A | B | C) and one on `y`
+            -- (inside the `x = A` branch) — not one test per alternative row.
+            Array.length scruts `shouldEqual` 2
+            -- The outer scrutinee `x` is examined exactly once, despite `A` heading
+            -- three alternatives.
+            case Array.head scruts of
+              Nothing -> fail "expected at least one Switch"
+              Just x -> Array.length (Array.filter (_ == x) scruts) `shouldEqual` 1
 
   describe "records and dictionaries" do
     it "lowers a record literal to RMkRecord with label ids sorted" do

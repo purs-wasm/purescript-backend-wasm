@@ -50,10 +50,11 @@ import Data.Tuple (Tuple(..), fst)
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.FreeVars (freeVars)
+import PureScript.Backend.Wasm.Lower.Match (compileMatch)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
 import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic)
-import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.IR (Atom(..), AnfExpr(..), FuncName(..), IRFunc, Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.CoreFn (Bind(..), Module, Qualified(..))
 import PureScript.CoreFn as C
 
@@ -414,64 +415,26 @@ lowerRecBind env (Tuple rb slot) = case rb.expr of
 -- | the sub-binder is bound directly to the scrutinee, with no `Switch`.
 lowerCase :: Env -> Array C.Expr -> Array C.CaseAlternative -> Lower AnfExpr
 lowerCase env scrutinees alternatives = case scrutinees of
-  [ scrutinee ]
-    | Just { var, body } <- newtypeAlternative alternatives ->
-        lowerArg env scrutinee \scrutAtom ->
-          lowerTail (bindNewtypeVar env var scrutAtom) body
-  -- A record pattern (`\{ x, y } -> …`) is a single destructuring alternative
-  -- that always matches: bind each field's sub-binder to a label projection.
+  -- A record pattern (`\{ x, y } -> …`) is a single destructuring alternative that
+  -- always matches: bind each field's sub-binder to a label projection. (Record
+  -- binders are the one shape `Lower.Match` does not handle.)
   [ scrutinee ]
     | Just { fields, body } <- recordPatternAlternative alternatives ->
         lowerArg env scrutinee \scrutAtom -> bindRecordFields env scrutAtom fields body
-  [ scrutinee ] ->
-    lowerArg env scrutinee \scrutAtom -> case caseKind alternatives of
-      KConstructor -> do
-        { branches, dflt } <- lowerCtorAlternatives env scrutAtom alternatives
-        pure (Switch scrutAtom branches dflt)
-      KLiteral -> do
-        { branches, dflt } <- lowerLitAlternatives env scrutAtom alternatives
-        pure (LitSwitch scrutAtom branches dflt)
-      KCatchAll -> lowerCatchAll env scrutAtom alternatives
-  -- A multi-scrutinee match with a *single* unguarded alternative (e.g. a binary
-  -- operator destructuring both operands, `\(Additive a) (Additive b) -> …`)
-  -- desugars to nested single-scrutinee cases — column `i` becomes
-  -- `case scrutᵢ of binderᵢ -> <rest>`, reusing the per-column lowering above.
-  -- Multi-*alternative* matches need real column-wise pattern compilation and
-  -- remain unsupported.
-  scruts
-    | [ { binders, result: Right body } ] <- alternatives
-    , Array.length scruts >= 2
-    , Array.length binders == Array.length scruts ->
-        lowerTail env (nestColumns scruts binders body)
-  _ -> throw (UnsupportedExpr "only a single case scrutinee is supported")
+  -- Everything else — constructor / literal / variable / wildcard / newtype /
+  -- nested patterns, one or many scrutinees — compiles to a decision tree
+  -- (`Lower.Match`). Scrutinees are lowered to occurrence atoms first.
+  scruts ->
+    lowerArgs env scruts \atoms -> compileMatch (matchOps env) env atoms alternatives
 
--- | Rewrite a single-alternative multi-scrutinee `case` into right-nested
--- | single-scrutinee `case`s, one per (scrutinee, binder) column.
-nestColumns :: Array C.Expr -> Array C.Binder -> C.Expr -> C.Expr
-nestColumns scruts binders body =
-  foldr (\(Tuple s b) acc -> C.Case synthAnn [ s ] [ { binders: [ b ], result: Right acc } ])
-    body
-    (Array.zip scruts binders)
-
--- | How a single-scrutinee `case` matches: on constructor tags, on literal
--- | values, or a bare catch-all (`x ->` / `_ ->`). Determined by the binders.
-data CaseKind = KConstructor | KLiteral | KCatchAll
-
-caseKind :: Array C.CaseAlternative -> CaseKind
-caseKind alternatives =
-  if Array.any (firstBinder isCtorBinder) alternatives then KConstructor
-  else if Array.any (firstBinder isLitBinder) alternatives then KLiteral
-  else KCatchAll
-  where
-  firstBinder p alt = case Array.head alt.binders of
-    Just b -> p b
-    Nothing -> false
-  isCtorBinder = case _ of
-    C.ConstructorBinder _ _ _ _ -> true
-    _ -> false
-  isLitBinder = case _ of
-    C.LiteralBinder _ _ -> true
-    _ -> false
+-- | The `Lower`-specific operations the decision-tree compiler needs, so it can
+-- | stay an independent leaf module (see `Lower.Match`).
+matchOps :: Env -> { lowerBody :: Env -> C.Expr -> Lower AnfExpr, bindLocal :: String -> Atom -> Env -> Env, lookupCtor :: Qualified String -> Lower CtorInfo }
+matchOps env =
+  { lowerBody: lowerTail
+  , bindLocal: \name atom e -> e { locals = Object.insert name atom e.locals }
+  , lookupCtor: \q -> requireCtor env (qualifiedKeyOf q)
+  }
 
 -- | Recognise a single record-pattern alternative `{ l: b, … } -> body` (a
 -- | `LiteralBinder` of an object literal). Records are products, so it is the
@@ -495,107 +458,6 @@ bindRecordFields env scrutAtom fields body = case Array.uncons fields of
       rest <- bindRecordFields env' scrutAtom tail body
       pure (Let slot Boxed (RProjLabel scrutAtom labelId) rest)
     _ -> throw (UnsupportedBinder "record pattern field: only var / wildcard sub-binders")
-
--- | Lower literal-pattern alternatives into `LitBranch`es plus the catch-all
--- | default. A var/wildcard binder is the default (binding the scrutinee for a
--- | `VarBinder`); alternatives after it are unreachable and dropped.
-lowerLitAlternatives
-  :: Env -> Atom -> Array C.CaseAlternative -> Lower { branches :: Array LitBranch, dflt :: Maybe AnfExpr }
-lowerLitAlternatives env scrutAtom = go
-  where
-  go alternatives = case Array.uncons alternatives of
-    Nothing -> pure { branches: [], dflt: Nothing }
-    Just { head: alt, tail } -> case alt.result of
-      Left _ -> throw GuardedCaseUnsupported
-      Right body -> case alt.binders of
-        [ C.LiteralBinder _ lit ] -> do
-          pat <- litPat lit
-          bodyIR <- lowerTail env body
-          rest <- go tail
-          pure (rest { branches = Array.cons (LitBranch pat bodyIR) rest.branches })
-        [ C.NullBinder _ ] -> do
-          d <- lowerTail env body
-          pure { branches: [], dflt: Just d }
-        [ C.VarBinder _ name ] -> do
-          d <- lowerTail (env { locals = Object.insert name scrutAtom env.locals }) body
-          pure { branches: [], dflt: Just d }
-        _ -> throw (UnsupportedBinder "literal match: expected a literal or catch-all binder")
-
--- | A bare catch-all `case` (no constructor or literal patterns): bind the
--- | scrutinee if the binder names it, then lower the body.
-lowerCatchAll :: Env -> Atom -> Array C.CaseAlternative -> Lower AnfExpr
-lowerCatchAll env scrutAtom alternatives = case Array.head alternatives of
-  Just { binders: [ binder ], result: Right body } -> case binder of
-    C.NullBinder _ -> lowerTail env body
-    C.VarBinder _ name -> lowerTail (env { locals = Object.insert name scrutAtom env.locals }) body
-    _ -> throw (UnsupportedBinder "catch-all match expects a var or wildcard binder")
-  _ -> throw (UnsupportedBinder "unsupported catch-all alternative")
-
-litPat :: C.Literal C.Binder -> Lower LitPat
-litPat = case _ of
-  C.LitInt n -> pure (PInt n)
-  C.LitChar c -> pure (PInt (toCharCode c))
-  C.LitBoolean b -> pure (PBoolean b)
-  C.LitNumber n -> pure (PNumber n)
-  C.LitString s -> pure (PString s)
-  _ -> throw (UnsupportedBinder "literal pattern: only Int / Char / Boolean / Number / String")
-
--- | Recognise a single, unguarded alternative whose binder is a newtype
--- | constructor with one var / wildcard sub-binder, returning the bound name (if
--- | any) and the body. Newtype-ness is the `IsNewtype` meta the CoreFn binder
--- | carries.
-newtypeAlternative :: Array C.CaseAlternative -> Maybe { var :: Maybe String, body :: C.Expr }
-newtypeAlternative = case _ of
-  [ { binders: [ C.ConstructorBinder ann _ _ subBinders ], result: Right body } ]
-    | ann.meta == Just C.IsNewtype -> case subBinders of
-        [ C.VarBinder _ name ] -> Just { var: Just name, body }
-        [ C.NullBinder _ ] -> Just { var: Nothing, body }
-        _ -> Nothing
-  _ -> Nothing
-
-bindNewtypeVar :: Env -> Maybe String -> Atom -> Env
-bindNewtypeVar env var scrutAtom = case var of
-  Just name -> env { locals = Object.insert name scrutAtom env.locals }
-  Nothing -> env
-
--- | Lower constructor-match alternatives into `Branch`es plus the catch-all
--- | default. Each `ConstructorBinder` becomes a `Branch` (its sub-binders bound as
--- | field projections in the body); a trailing var/wildcard binder is the default
--- | (`case x of Ctor -> …; _ -> …`), binding the scrutinee for a `VarBinder`.
-lowerCtorAlternatives
-  :: Env -> Atom -> Array C.CaseAlternative -> Lower { branches :: Array Branch, dflt :: Maybe AnfExpr }
-lowerCtorAlternatives env scrutAtom = go
-  where
-  go alternatives = case Array.uncons alternatives of
-    Nothing -> pure { branches: [], dflt: Nothing }
-    Just { head: alt, tail } -> case alt.result of
-      Left _ -> throw GuardedCaseUnsupported
-      Right body -> case alt.binders of
-        [ C.ConstructorBinder _ _ ctorNameQ subBinders ] -> do
-          info <- requireCtor env (qualifiedKeyOf ctorNameQ)
-          branchBody <- bindFields env scrutAtom 0 subBinders body
-          rest <- go tail
-          pure (rest { branches = Array.cons (Branch info.tag branchBody) rest.branches })
-        [ C.NullBinder _ ] -> do
-          d <- lowerTail env body
-          pure { branches: [], dflt: Just d }
-        [ C.VarBinder _ name ] -> do
-          d <- lowerTail (env { locals = Object.insert name scrutAtom env.locals }) body
-          pure { branches: [], dflt: Just d }
-        _ -> throw (UnsupportedBinder "case alternative: expected a constructor or catch-all binder")
-
--- | Bind a constructor's sub-binders to its fields by position.
-bindFields :: Env -> Atom -> Int -> Array C.Binder -> C.Expr -> Lower AnfExpr
-bindFields env scrutAtom index subBinders body = case Array.uncons subBinders of
-  Nothing -> lowerTail env body
-  Just { head: b, tail } -> case b of
-    C.NullBinder _ -> bindFields env scrutAtom (index + 1) tail body
-    C.VarBinder _ name -> do
-      slot <- fresh
-      let env' = env { locals = Object.insert name (AVar (Local slot)) env.locals }
-      rest <- bindFields env' scrutAtom (index + 1) tail body
-      pure (Let slot Boxed (RProjField scrutAtom index) rest)
-    _ -> throw (UnsupportedBinder "constructor sub-binders must be var or wildcard")
 
 requireCtor :: Env -> String -> Lower CtorInfo
 requireCtor env ctorName = case Object.lookup ctorName env.ctors of

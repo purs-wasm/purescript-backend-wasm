@@ -54,14 +54,25 @@ spec =
           ge <- liftEffect (callI32x0 inst "strGe")
           [ lt, pre, ge ] `shouldEqual` [ 1, 1, 1 ]
 
-        -- A single-constructor `derive instance Eq` compiles to a single-alternative
-        -- two-scrutinee `case` (the `nestColumns` path), comparing each field. (A
-        -- *multi*-constructor derived Eq/Ord needs column-wise decision-tree pattern
-        -- compilation, which is a separate, not-yet-implemented feature.)
         it "derived Eq on a single-constructor ADT compares its fields" \inst -> do
           peq <- liftEffect (callI32x0 inst "pairEq")
           pneq <- liftEffect (callI32x0 inst "pairNeq")
           [ peq, pneq ] `shouldEqual` [ 1, 0 ]
+
+        -- These compile a flat multi-scrutinee `case x, y of …` to a decision tree.
+        it "derived Eq/Ord on a multi-constructor nullary ADT" \inst -> do
+          eq <- liftEffect (callI32x0 inst "colorEq")
+          neq <- liftEffect (callI32x0 inst "colorNeq")
+          lt <- liftEffect (callI32x0 inst "colorLt")
+          gt <- liftEffect (callI32x0 inst "colorGt")
+          [ eq, neq, lt, gt ] `shouldEqual` [ 1, 0, 1, 1 ]
+
+        it "derived Eq on a multi-constructor ADT with fields" \inst -> do
+          eqc <- liftEffect (callI32x0 inst "shapeEqC")
+          neqArg <- liftEffect (callI32x0 inst "shapeNeqArg")
+          neqCtor <- liftEffect (callI32x0 inst "shapeNeqCtor")
+          eqr <- liftEffect (callI32x0 inst "shapeEqR")
+          [ eqc, neqArg, neqCtor, eqr ] `shouldEqual` [ 1, 0, 0, 1 ]
 
         it "Array equality (length check + element-wise, Int and String)" \inst -> do
           eq <- liftEffect (callI32x0 inst "arrEq")

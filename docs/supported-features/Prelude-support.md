@@ -271,6 +271,20 @@ nested `bind` / `pure` / `discard`, so the backend only ever sees those applicat
 (`Effect` / `ST` `do`, which sequence side effects, are a separate item that does
 need dedicated compiler support.)
 
-*Derived* `Eq`/`Ord` on **multi-constructor** types (which need column-wise
-decision-tree pattern compilation) are not wired up yet; nor are
-`Data.Int.round`/`floor`/`…`.
+**General pattern matching → decision trees.** A `case` over one *or many*
+scrutinees with multiple constructor / literal / nested alternatives compiles to a
+**decision tree** of `Switch` / `LitSwitch` nodes (`Lower.Match`, the classic
+column-wise algorithm: pick a column, switch on its constructors with the fields
+projected into each branch, recurse on the default matrix; newtype constructors are
+erased onto the same occurrence). This unlocks:
+
+- *Derived* `Eq` / `Ord` on **multi-constructor** types (`derive instance Eq Color`,
+  `data Shape = Circle Int | Rect Int Int`) — the flat `case x, y of C1, C1 → …`
+  purs generates.
+- **`Generic`-based deriving** — `derive instance Generic` + `genericEq` works:
+  `from` both values and compare their representations
+  (`Sum`/`Product`/`Inl`/`Inr`/`Constructor`/`Argument`), which is exactly such a
+  multi-scrutinee match over the rep.
+
+Case **guards** (`| cond`) are still rejected, and `Data.Int.round`/`floor`/`…` are
+not wired up.

@@ -30,6 +30,7 @@ import Test.E2E.PreludeEqOrd as PreludeEqOrd
 import Test.E2E.PreludeFunctor as PreludeFunctor
 import Test.E2E.PreludeMonad as PreludeMonad
 import Test.E2E.PreludeFnInstance as PreludeFnInstance
+import Test.E2E.PreludeGeneric as PreludeGeneric
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -59,3 +60,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeFunctor.spec
   PreludeMonad.spec
   PreludeFnInstance.spec
+  PreludeGeneric.spec
