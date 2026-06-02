@@ -13,7 +13,6 @@ import Effect.Class (liftEffect)
 import PureScript.Backend.Wasm.Compiler (parseModule)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind, translExpr, translModule)
-import PureScript.Backend.Wasm.MiddleEnd.Untransl (untranslBind)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
 import Test.Unit.PureScript.Backend.Wasm.Lower.Common (appE, def, lam, litInt, lv, qv)
@@ -45,20 +44,6 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Transl (CoreFn -> MIR)" do
       case parseModule source of
         Left err -> fail (name <> ": " <> err)
         Right m -> Array.length (translModule m).decls `shouldEqual` Array.length m.decls
-
-  -- The round trip used to wire the MIR into the pipeline must be the identity on
-  -- the MIR, so `untransl` is a faithful inverse of `transl`: transl ∘ untransl ∘
-  -- transl = transl. (Spans differ after a round trip, so we compare on the MIR,
-  -- which carries none, rather than on CoreFn.)
-  it "untransl faithfully inverts transl over the corpus" do
-    for_ corpus \name -> do
-      let path = "compiler/test/fixtures/" <> name <> ".corefn.json"
-      source <- liftEffect (readFixture path)
-      case parseModule source of
-        Left err -> fail (name <> ": " <> err)
-        Right m -> do
-          let mir = map translBind m.decls
-          map (translBind <<< untranslBind) mir `shouldEqual` mir
 
 -- A spread of fixtures: every CoreFn node kind (Sample), ADTs (Slice1), arrays
 -- (Slice4c), records (Records), dictionaries (Cmp), generics (Gen, GenSC), and an

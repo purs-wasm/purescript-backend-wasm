@@ -8,9 +8,9 @@ import Effect (Effect)
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 import Test.Unit.PureScript.Backend.Wasm.Lower as Lower
-import Test.Unit.PureScript.Backend.Wasm.Lower.FreeVars as FreeVars
 import Test.Unit.PureScript.Backend.Wasm.Lower.Match as Match
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift as LambdaLift
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.FreeVars as FreeVars
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify as Simplify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Transl as Transl
 import Test.Unit.PureScript.CoreFn as CoreFn

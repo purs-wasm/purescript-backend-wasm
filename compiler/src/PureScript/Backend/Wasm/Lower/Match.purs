@@ -37,17 +37,18 @@ import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.Lower.IR (AnfExpr(..), Atom(..), Branch(..), LitBranch(..), LitPat(..), Rep(..), Rhs(..), Slot, VarRef(..))
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(ArrayIndex, ArrayLength))
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
-import PureScript.CoreFn (Guard, Qualified)
+import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.CoreFn (Qualified)
 import PureScript.CoreFn as C
 
 -- | The lowering capabilities the decision-tree compiler needs, injected so this
 -- | module stays independent of `Lower`. `env` is the lowering environment,
 -- | threaded as pattern variables are bound.
 type MatchOps env =
-  { lowerBody :: env -> C.Expr -> Lower AnfExpr
+  { lowerBody :: env -> M.Expr -> Lower AnfExpr
   -- | Lower a (boolean) guard expression to an `Atom` and continue; the result is
   -- | the conditional built around that atom. (Concretely the caller's `lowerArg`.)
-  , lowerCond :: env -> C.Expr -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
+  , lowerCond :: env -> M.Expr -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
   , bindLocal :: String -> Atom -> env -> env
   , lookupCtor :: Qualified String -> Lower { tag :: Int, arity :: Int }
   }
@@ -58,12 +59,12 @@ type MatchOps env =
 type Clause =
   { pats :: Array C.Binder
   , binds :: Array (Tuple String Atom)
-  , result :: Either (Array Guard) C.Expr
+  , result :: Either (Array M.Guard) M.Expr
   }
 
 -- | Compile `case occs… of alternatives…`, where `occs` are the already-lowered
 -- | scrutinee atoms, into a decision tree.
-compileMatch :: forall env. MatchOps env -> env -> Array Atom -> Array C.CaseAlternative -> Lower AnfExpr
+compileMatch :: forall env. MatchOps env -> env -> Array Atom -> Array M.Alt -> Lower AnfExpr
 compileMatch ops env occs alternatives = do
   rows <- traverse toRow alternatives
   compile ops env occs rows
@@ -115,7 +116,7 @@ matchRow ops env occs row rest = do
 -- | Build a boolean-test chain `if g1 then e1 else if g2 … else <fallthrough>`.
 -- | With no fallthrough the final `else` is absent, so an all-guards-fail value
 -- | traps at runtime (a partial match), mirroring `Switch _ _ Nothing`.
-guardChain :: forall env. MatchOps env -> env -> Array Guard -> Maybe AnfExpr -> Lower (Maybe AnfExpr)
+guardChain :: forall env. MatchOps env -> env -> Array M.Guard -> Maybe AnfExpr -> Lower (Maybe AnfExpr)
 guardChain ops env guards fallthrough = case Array.uncons guards of
   Nothing -> pure fallthrough
   Just { head: g, tail } -> map Just $

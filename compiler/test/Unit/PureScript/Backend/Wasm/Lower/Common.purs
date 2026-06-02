@@ -13,6 +13,7 @@ import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat, Program, RecBind(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower (LowerError, lowerModule, lowerModules)
+import PureScript.Backend.Wasm.MiddleEnd.Transl (translModule)
 import PureScript.CoreFn as CF
 
 -- --- CoreFn builders (zero annotation) --------------------------------------
@@ -176,11 +177,13 @@ moduleNamed name decls =
   , decls
   }
 
+-- The lowering now consumes the MIR, so the test helpers translate their hand-built
+-- CoreFn to MIR first (without the optimization passes — these test lowering alone).
 lower :: Array CF.Bind -> Either LowerError Program
-lower decls = lowerModule (moduleNamed [ "T" ] decls)
+lower decls = lowerModule (translModule (moduleNamed [ "T" ] decls))
 
 lowerMany :: Array (Array String) -> Array CF.Module -> Either LowerError Program
-lowerMany = lowerModules
+lowerMany roots modules = lowerModules roots (map translModule modules)
 
 -- --- IR inspection helpers --------------------------------------------------
 

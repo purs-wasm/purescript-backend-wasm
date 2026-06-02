@@ -1,6 +1,6 @@
 -- | The lowering subsystem's shared vocabulary: the read-only fact tables
 -- | (`CtorInfo` / `ModuleInfo` / `Env`), the module-qualified name encoding that
--- | keys those tables and the emitted wasm functions, and the one CoreFn-spine
+-- | keys those tables and the emitted wasm functions, and the one MIR-spine
 -- | utility (`peelAbs`) used by both the link-time collection pass and the lowering
 -- | itself.
 module PureScript.Backend.Wasm.Lower.Types
@@ -14,13 +14,12 @@ module PureScript.Backend.Wasm.Lower.Types
 
 import Prelude
 
-import Data.Array as Array
 import Data.Maybe (Maybe(..))
 import Data.String (joinWith)
 import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Lower.IR (FuncName(..))
+import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn (Qualified(..))
-import PureScript.CoreFn as C
 
 type CtorInfo = { tag :: Int, arity :: Int }
 
@@ -56,10 +55,12 @@ qualifiedKeyOf (Qualified mModule name) = case mModule of
 qualifiedFuncName :: Qualified String -> FuncName
 qualifiedFuncName = FuncName <<< qualifiedKeyOf
 
--- | Peel leading lambdas into the parameter idents (outermost first) and body.
-peelAbs :: C.Expr -> { params :: Array String, body :: C.Expr }
+-- | Peel leading (uncurried) lambdas into the parameter idents (outermost first)
+-- | and body. The MIR already groups a lambda's parameters into one list, but a
+-- | pass may leave a residual nested `Abs`, so this still flattens.
+peelAbs :: M.Expr -> { params :: Array String, body :: M.Expr }
 peelAbs = go []
   where
   go acc = case _ of
-    C.Abs _ p b -> go (Array.snoc acc p) b
+    M.Abs ps b -> go (acc <> ps) b
     body -> { params: acc, body }

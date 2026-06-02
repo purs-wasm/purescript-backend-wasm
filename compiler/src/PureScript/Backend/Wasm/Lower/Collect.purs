@@ -1,7 +1,7 @@
--- | The lowering's link-time pre-pass: pure scans over every decoded CoreFn module
--- | that build the symbol tables the lowering reads (`ModuleInfo`) and decide which
--- | functions are reachable from the entry roots (the tree-shaking, ADR 0009).
--- | Nothing here lowers anything — these are the facts gathered *before* lowering.
+-- | The lowering's link-time pre-pass: pure scans over every MIR module that build
+-- | the symbol tables the lowering reads (`ModuleInfo`) and decide which functions
+-- | are reachable from the entry roots (the tree-shaking, ADR 0009). Nothing here
+-- | lowers anything — these are the facts gathered *before* lowering.
 module PureScript.Backend.Wasm.Lower.Collect
   ( collectCtors
   , collectFuncs
@@ -24,8 +24,9 @@ import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo, peelAbs, qualifiedKey)
-import PureScript.CoreFn (Bind(..), Module, Qualified(..))
-import PureScript.CoreFn as C
+import PureScript.Backend.Wasm.MiddleEnd.IR (Bind(..), Module)
+import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.CoreFn (Binder(..), Literal(..), Meta(..), Qualified(..))
 
 -- | Collect the data constructors of every module, keyed by qualified name and
 -- | assigning each a 0-based tag within its (qualified) type.
@@ -34,7 +35,7 @@ collectCtors modules = (foldl perModule { counts: Object.empty, out: Object.empt
   where
   perModule acc m = foldl (step m.name) acc (Array.mapMaybe ctorOf m.decls)
   ctorOf = case _ of
-    NonRec _ _ (C.Constructor _ typeName ctorName fieldNames) ->
+    NonRec _ _ (M.Constructor typeName ctorName fieldNames) ->
       Just { typeName, ctorName, arity: Array.length fieldNames }
     _ -> Nothing
   step moduleName { counts, out } { typeName, ctorName, arity } =
@@ -50,7 +51,7 @@ collectCtors modules = (foldl perModule { counts: Object.empty, out: Object.empt
 -- | group is mutual recursion between top-level functions; since each becomes a
 -- | module function called by name (`RCallKnown`), the recursion needs no
 -- | special handling beyond compiling every member.
-topLevelBindings :: Array Bind -> Array (Tuple String C.Expr)
+topLevelBindings :: Array Bind -> Array (Tuple String M.Expr)
 topLevelBindings = (_ >>= flatten)
   where
   flatten = case _ of
@@ -71,15 +72,15 @@ collectFuncs dictCtors modules = Object.fromFoldable (modules >>= moduleFuncs)
 -- | One module's definitions that become wasm functions: every binding (including
 -- | `Rec`-group members) that is neither a data constructor nor a (newtype-erased)
 -- | dictionary constructor.
-functionDecls :: Object Unit -> Module -> Array (Tuple String C.Expr)
+functionDecls :: Object Unit -> Module -> Array (Tuple String M.Expr)
 functionDecls dictCtors m =
   Array.filter
     (\(Tuple ident expr) -> not (isConstructor expr) && not (Object.member (qualifiedKey m.name ident) dictCtors))
     (topLevelBindings m.decls)
 
-isConstructor :: C.Expr -> Boolean
+isConstructor :: M.Expr -> Boolean
 isConstructor = case _ of
-  C.Constructor _ _ _ _ -> true
+  M.Constructor _ _ _ -> true
   _ -> false
 
 -- | Every module's type-class dictionary constructors (decls tagged
@@ -91,7 +92,7 @@ collectDictCtors modules = Object.fromFoldable (modules >>= moduleDictCtors)
   where
   moduleDictCtors m = Array.mapMaybe (dictCtorOf m.name) m.decls
   dictCtorOf moduleName = case _ of
-    NonRec ann ident _ | ann.meta == Just C.IsTypeClassConstructor -> Just (Tuple (qualifiedKey moduleName ident) unit)
+    NonRec (Just IsTypeClassConstructor) ident _ -> Just (Tuple (qualifiedKey moduleName ident) unit)
     _ -> Nothing
 
 -- | Intern every record/dictionary label across all modules to a unique `i32` id,
@@ -106,18 +107,18 @@ collectLabels modules =
     NonRec _ _ e -> exprLabels e
     Rec rs -> rs >>= \r -> exprLabels r.expr
   exprLabels = case _ of
-    C.Literal _ (C.LitObject kvs) -> kvs >>= \(Tuple l v) -> Array.cons l (exprLabels v)
-    C.Literal _ (C.LitArray es) -> es >>= exprLabels
-    C.Literal _ _ -> []
-    C.Constructor _ _ _ _ -> []
-    C.Accessor _ l e -> Array.cons l (exprLabels e)
-    C.ObjectUpdate _ e copyFields kvs ->
+    M.Lit (LitObject kvs) -> kvs >>= \(Tuple l v) -> Array.cons l (exprLabels v)
+    M.Lit (LitArray es) -> es >>= exprLabels
+    M.Lit _ -> []
+    M.Constructor _ _ _ -> []
+    M.Accessor l e -> Array.cons l (exprLabels e)
+    M.Update e copyFields kvs ->
       exprLabels e <> fromMaybe [] copyFields <> (kvs >>= \(Tuple l v) -> Array.cons l (exprLabels v))
-    C.Abs _ _ b -> exprLabels b
-    C.App _ f a -> exprLabels f <> exprLabels a
-    C.Var _ _ -> []
-    C.Case _ ss alts -> (ss >>= exprLabels) <> (alts >>= altLabels)
-    C.Let _ binds b -> (binds >>= bindLabels) <> exprLabels b
+    M.Abs _ b -> exprLabels b
+    M.App f args -> exprLabels f <> (args >>= exprLabels)
+    M.Var _ -> []
+    M.Case ss alts -> (ss >>= exprLabels) <> (alts >>= altLabels)
+    M.Let binds b -> (binds >>= bindLabels) <> exprLabels b
   altLabels alt =
     (alt.binders >>= binderLabels)
       <> case alt.result of
@@ -125,30 +126,30 @@ collectLabels modules =
         Left guards -> guards >>= \g -> exprLabels g.guard <> exprLabels g.expression
   -- the labels a record pattern (`{ l: … }`) projects, recursing into nested binders
   binderLabels = case _ of
-    C.LiteralBinder _ (C.LitObject fields) -> fields >>= \(Tuple l b) -> Array.cons l (binderLabels b)
-    C.LiteralBinder _ (C.LitArray bs) -> bs >>= binderLabels
-    C.ConstructorBinder _ _ _ bs -> bs >>= binderLabels
-    C.NamedBinder _ _ b -> binderLabels b
+    LiteralBinder _ (LitObject fields) -> fields >>= \(Tuple l b) -> Array.cons l (binderLabels b)
+    LiteralBinder _ (LitArray bs) -> bs >>= binderLabels
+    ConstructorBinder _ _ _ bs -> bs >>= binderLabels
+    NamedBinder _ _ b -> binderLabels b
     _ -> []
 
 -- | The module-qualified names of the top-level bindings an expression references
 -- | (`Qualified (Just module) ident` `Var`s), used for reachability.
-qualifiedRefs :: C.Expr -> Array String
+qualifiedRefs :: M.Expr -> Array String
 qualifiedRefs = go
   where
   go = case _ of
-    C.Var _ (Qualified (Just m) ident) -> [ qualifiedKey m ident ]
-    C.Var _ _ -> []
-    C.Literal _ (C.LitArray es) -> es >>= go
-    C.Literal _ (C.LitObject kvs) -> kvs >>= \(Tuple _ v) -> go v
-    C.Literal _ _ -> []
-    C.Constructor _ _ _ _ -> []
-    C.Accessor _ _ e -> go e
-    C.ObjectUpdate _ e _ kvs -> go e <> (kvs >>= \(Tuple _ v) -> go v)
-    C.Abs _ _ b -> go b
-    C.App _ f a -> go f <> go a
-    C.Case _ ss alts -> (ss >>= go) <> (alts >>= altRefs)
-    C.Let _ binds b -> (binds >>= bindRefs) <> go b
+    M.Var (Qualified (Just m) ident) -> [ qualifiedKey m ident ]
+    M.Var _ -> []
+    M.Lit (LitArray es) -> es >>= go
+    M.Lit (LitObject kvs) -> kvs >>= \(Tuple _ v) -> go v
+    M.Lit _ -> []
+    M.Constructor _ _ _ -> []
+    M.Accessor _ e -> go e
+    M.Update e _ kvs -> go e <> (kvs >>= \(Tuple _ v) -> go v)
+    M.Abs _ b -> go b
+    M.App f args -> go f <> (args >>= go)
+    M.Case ss alts -> (ss >>= go) <> (alts >>= altRefs)
+    M.Let binds b -> (binds >>= bindRefs) <> go b
   altRefs alt = case alt.result of
     Right e -> go e
     Left guards -> guards >>= \g -> go g.guard <> go g.expression
@@ -162,7 +163,7 @@ qualifiedRefs = go
 -- | since those are not lowered as functions. This is the tree-shaking that lets a
 -- | few `Prelude` functions be lowered without dragging in (and failing on) the
 -- | rest of a module (ADR 0009).
-reachableFunctions :: Object C.Expr -> Array String -> Object Unit
+reachableFunctions :: Object M.Expr -> Array String -> Object Unit
 reachableFunctions functions roots = go (Object.fromFoldable (map (\k -> Tuple k unit) roots)) roots
   where
   go seen frontier = case Array.uncons frontier of
