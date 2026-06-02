@@ -36,7 +36,7 @@ import Effect (Effect)
 import PureScript.Backend.Wasm.Codegen.Imports (importRuntime, internStrName, projHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, buildRuntimeTypes, repType)
-import PureScript.Backend.Wasm.Codegen.Value (atomRep, boxInt, coerce, genAtom, genAtomAs, slotRep, unboxBoolExpr, unboxIntExpr)
+import PureScript.Backend.Wasm.Codegen.Value (atomRep, boxInt, coerce, genAtom, genAtomAs, slotRep, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower.Reps (primRep)
 
@@ -49,7 +49,8 @@ buildModule prog = do
   mod <- B.createModule
   B.setFeaturesGC mod
   rt <- buildRuntimeTypes mod
-  let ctx = { mod, rt, params: [], localReps: [] }
+  let sigs = Map.fromFoldable (map (\fn -> Tuple fn.name { params: fn.params, result: fn.result }) prog.funcs)
+  let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, sigs }
   importRuntime ctx
   addInternStr ctx prog.labels
   traverse_ (addFunc ctx) prog.funcs
@@ -86,12 +87,12 @@ funcNameStr (FuncName n) = n
 addFunc :: Ctx -> IRFunc -> Effect Unit
 addFunc ctx0 fn = do
   let localReps = buildLocalReps fn
-  let ctx = ctx0 { params = fn.params, localReps = localReps }
+  let ctx = ctx0 { params = fn.params, localReps = localReps, funcResult = fn.result }
   body <- genBody ctx fn.body
   let params = B.createType (repType ctx <$> fn.params)
   -- `Let`-bound locals (the slots after the parameters) take their chosen rep
   let varTypes = repType ctx <$> Array.drop (Array.length fn.params) localReps
-  _ <- B.addFunction ctx.mod (funcNameStr fn.name) params B.eqref varTypes body
+  _ <- B.addFunction ctx.mod (funcNameStr fn.name) params (repType ctx fn.result) varTypes body
   pure unit
 
 -- | The representation of every local slot: a parameter takes its declared rep, a
@@ -122,13 +123,16 @@ addExportWrapper :: Ctx -> IRFunc -> Effect Unit
 addExportWrapper ctx fn = case fn.export of
   Nothing -> pure unit
   Just external -> do
-    let indices = Array.mapWithIndex (\i _ -> i) fn.params
-    boxedArgs <- traverse (\i -> B.localGet ctx.mod i B.i32 >>= boxInt ctx) indices
-    result <- B.call ctx.mod (funcNameStr fn.name) boxedArgs B.eqref
-    unboxed <- unboxIntExpr ctx result
+    -- the host ABI is `i32`; coerce each `i32` argument to the internal function's
+    -- parameter rep, and the result back from its result rep to `i32` (ADR 0011).
+    args <- traverse
+      (\(Tuple i rep) -> B.localGet ctx.mod i B.i32 >>= coerce ctx I32 rep)
+      (Array.mapWithIndex Tuple fn.params)
+    result <- B.call ctx.mod (funcNameStr fn.name) args (repType ctx fn.result)
+    ret <- coerce ctx fn.result I32 result
     let params = B.createType (const B.i32 <$> fn.params)
     let wrapperName = funcNameStr fn.name <> "$export"
-    _ <- B.addFunction ctx.mod wrapperName params B.i32 [] unboxed
+    _ <- B.addFunction ctx.mod wrapperName params B.i32 [] ret
     _ <- B.addFunctionExport ctx.mod wrapperName external
     pure unit
 
@@ -138,19 +142,21 @@ genBody :: Ctx -> AnfExpr -> Effect B.Expression
 genBody ctx = go []
   where
   go statements = case _ of
-    -- The function returns `eqref` (the calling convention is unchanged), so a
-    -- returned atom is coerced (boxed) to `Boxed`.
-    Return atom -> seal statements =<< genAtomAs ctx Boxed atom
+    -- A returned atom is coerced to the function's result representation.
+    Return atom -> seal statements =<< genAtomAs ctx ctx.funcResult atom
     Switch scrutAtom branches dflt -> seal statements =<< genSwitch ctx scrutAtom branches dflt
     LitSwitch scrutAtom branches dflt -> seal statements =<< genLitSwitch ctx scrutAtom branches dflt
     -- A direct call whose result is immediately returned is a *tail* call: emit
-    -- `return_call` so a tail-recursive chain runs in constant stack (the frame is
-    -- replaced, not grown). Closure tail calls (`RApply`) are not covered here —
-    -- `return_call_ref` is not exposed by binaryen.js (see the TCE notes).
+    -- `return_call` so a tail-recursive chain runs in constant stack. Only valid when
+    -- the callee's result rep matches this function's (the frame is replaced, so no
+    -- coercion can sit between the call and the return); otherwise fall through to a
+    -- normal call. Closure tail calls (`RApply`) are not covered here.
     Let (Slot index) _ (RCallKnown name args) (Return (AVar (Local (Slot retIndex))))
-      | index == retIndex -> do
-          operands <- traverse (genAtomAs ctx Boxed) args
-          seal statements =<< B.returnCall ctx.mod (funcNameStr name) operands B.eqref
+      | index == retIndex
+      , Just sig <- Map.lookup name ctx.sigs
+      , sig.result == ctx.funcResult -> do
+          operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)
+          seal statements =<< B.returnCall ctx.mod (funcNameStr name) operands (repType ctx sig.result)
     -- Store the rhs into its slot, boxing/unboxing if the slot's chosen rep differs
     -- from the rhs's natural rep.
     Let (Slot index) _ rhs k -> do
@@ -162,9 +168,10 @@ genBody ctx = go []
       allocs <- traverse (allocRecClosure ctx groupSlots) recBinds
       patches <- traverse (patchRecClosure ctx groupSlots) recBinds
       go (statements <> allocs <> Array.concat patches) k
+  -- the body / branch block produces the function's result (a tail position)
   seal statements value =
     if Array.null statements then pure value
-    else B.block ctx.mod (Array.snoc statements value) B.eqref
+    else B.block ctx.mod (Array.snoc statements value) (repType ctx ctx.funcResult)
 
 -- | Is this captured atom a forward reference to another member of the same
 -- | `LetRec` group (and thus a slot to back-patch)?
@@ -266,6 +273,7 @@ rhsRep :: Ctx -> Rhs -> Rep
 rhsRep ctx = case _ of
   RAtom atom -> atomRep ctx atom
   RPrim intr _ -> primRep intr
+  RCallKnown name _ -> maybe Boxed _.result (Map.lookup name ctx.sigs)
   _ -> Boxed
 
 genRhs :: Ctx -> Rhs -> Effect B.Expression
@@ -273,8 +281,9 @@ genRhs ctx = case _ of
   RAtom atom -> genAtom ctx atom
   RPrim intr args -> genPrim ctx intr args
   RCallKnown name args -> do
-    operands <- traverse (genAtomAs ctx Boxed) args
-    B.call ctx.mod (funcNameStr name) operands B.eqref
+    let sig = fromMaybe { params: const Boxed <$> args, result: Boxed } (Map.lookup name ctx.sigs)
+    operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)
+    B.call ctx.mod (funcNameStr name) operands (repType ctx sig.result)
   RMkData tag fields -> do
     fieldEs <- traverse (genAtomAs ctx Boxed) fields
     vals <- B.arrayNewFixed ctx.mod ctx.rt.valsHt fieldEs

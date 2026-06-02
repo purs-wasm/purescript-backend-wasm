@@ -5,6 +5,7 @@
 module PureScript.Backend.Wasm.Codegen.RuntimeTypes
   ( RuntimeTypes
   , Ctx
+  , Sig
   , buildRuntimeTypes
   , repType
   ) where
@@ -12,9 +13,14 @@ module PureScript.Backend.Wasm.Codegen.RuntimeTypes
 import Prelude
 
 import Binaryen as B
+import Data.Map (Map)
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Lower.IR (Rep(..))
+import PureScript.Backend.Wasm.Lower.IR (FuncName, Rep(..))
+
+-- | A function's parameter and result representations, so a call site can box /
+-- | unbox its arguments and result to match the callee's (possibly unboxed) ABI.
+type Sig = { params :: Array Rep, result :: Rep }
 
 -- | The module's runtime heap types, plus the (non-null) reference value types
 -- | derived from them for `ref.cast` targets, field reads, and signatures.
@@ -52,6 +58,11 @@ type Ctx =
   -- | temporaries), so codegen can declare and read each local at its chosen wasm
   -- | type and box/unbox only at representation boundaries.
   , localReps :: Array Rep
+  -- | The current function's result representation (what `Return` coerces to).
+  , funcResult :: Rep
+  -- | Every function's signature, keyed by name, so a call coerces its arguments to
+  -- | the callee's parameter reps and reads the result at the callee's result rep.
+  , sigs :: Map FuncName Sig
   }
 
 -- | Build the value type group (`$Vals` / `$Int` / `$ADT` / `$Clo`) and, in a

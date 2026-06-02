@@ -55,7 +55,7 @@ import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo, ModuleInfo, peelAbs, qualifiedFuncName, qualifiedKey, qualifiedKeyOf)
-import PureScript.Backend.Wasm.Lower.Unbox (assignReps)
+import PureScript.Backend.Wasm.Lower.Unbox (assignProgramReps)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (freeVars)
 import PureScript.Backend.Wasm.MiddleEnd.IR (Bind(..), Module)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
@@ -495,7 +495,7 @@ lowerModules optimize roots modules = do
   let allFuncs = funcs <> st.lifted
   -- representation analysis (ADR 0013): unbox `Int`/`Number` where it avoids boxing
   pure
-    { funcs: if optimize then map assignReps allFuncs else allFuncs
+    { funcs: if optimize then assignProgramReps allFuncs else allFuncs
     , labels: Object.toUnfoldable info.labelIds
     }
 

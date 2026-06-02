@@ -105,8 +105,18 @@ that changes per-function param/result reps via a whole-program fixpoint.
   dictionary elimination — fib 1.28→2.12×, sumLoop 1.93→2.65×, qsort 0.88→**1.32×**
   (the regression cleared), nqueens 2.45→3.26×, bintreeDfs 9.5→12.6×; `bintreeBfs`
   unchanged (its cost is the queue's structural allocation, not arithmetic).
-- **U3 — front A, function ABI (next):** unbox monomorphic-`Int` function parameters
-  and results (so a tail loop runs entirely in `i32`) via a whole-program fixpoint
-  over the call graph.
+- **U3 — front A, function ABI (done):** the analysis became whole-program. Function
+  parameter / result *types* are inferred by a fixpoint over the type lattice
+  (`⊤ ⊐ {I32, F64} ⊐ Boxed`): a parameter's type is the join of every argument passed
+  to it, a result's the join of every value returned, a call result takes the
+  callee's result type. Functions then take/return unboxed scalars; codegen coerces
+  arguments to the callee's parameter reps and reads results at the callee's result
+  rep (a `Sig` map in `Ctx`). Constraints that keep the wasm valid: a lifted **code
+  function** keeps the fixed `$Code` ABI `(ref $Clo, eqref) → eqref`; an **exported**
+  function's `f64` boundary stays `Boxed` (the host ABI is `i32`); a tail
+  `return_call` is only emitted when the callee's result rep matches the caller's.
+  Measured (vs the unoptimized baseline): bintreeDfs 12.6→**17.4×**, fib 2.12→2.28×,
+  nqueens 3.26→3.41×; sumLoop flat at 2.65× (now bounded by the `Ordering`
+  allocation in `>`, not `Int` boxing — a separate optimization).
 - **B — front B field specialization:** type-directed `i32`/`f64` struct fields for
   concrete-scalar constructor/record fields, using externs types.
