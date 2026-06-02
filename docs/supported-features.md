@@ -35,17 +35,23 @@ model:
   a concrete representation — a raw **`i32`** (`Int` / `Char`), a raw **`f64`**
   (`Number`), an **`i31ref`** (`Boolean`, and all-nullary enums such as
   `Ordering`), or the boxed **`eqref`** — and boxes **only at representation
-  boundaries** (a value stored into an ADT/record field, a polymorphic call, a
-  closure capture, the host ABI). Monomorphic arithmetic and loops therefore run
-  allocation-free.
+  boundaries** (a *polymorphic* field, a polymorphic call, a closure capture, the
+  host ABI). A constructor field whose type is a concrete `Int` / `Number` is
+  stored **unboxed** in the constructor's struct (front B, read from the externs),
+  so it is not a boundary. Monomorphic arithmetic and loops run allocation-free.
 
 The recurring heap shapes — used *at* those boundaries — in the WAT:
 
 - `(struct (field i32))` — a boxed `Int` (`$Int`). `struct.new` boxes, `struct.get 0`
   (after a `ref.cast`) unboxes; `Number` is the analogous `(struct (field f64))`.
-- `(struct (field i32) (field (ref …)))` — an ADT (`tag` + a field array). An enum-like ADT (i.e. **all constructors are nullary**) is instead an allocation-free `i31ref`
-  tag, and a nullary constructor of a mixed type (`Nil`, `Nothing`) is allocated
-  once and shared rather than rebuilt per use.
+- An ADT value is a **struct per constructor**: a tag-only base `$Data = (struct
+  i32)` and, for each constructor, a subtype `(sub $Data (struct i32 <one field per
+  ctor field>))` — the `i32` tag followed by each field at its own representation
+  (`i32` / `f64` for a concrete scalar, `eqref` otherwise). A match casts to `$Data`
+  to read the tag, then to the constructor's subtype to read a field. An enum-like
+  ADT (**all constructors nullary**) is instead an allocation-free `i31ref` tag, and
+  a nullary constructor of a mixed type (`Nil`, `Nothing`) is the shared tag-only
+  base, allocated once.
 - `(struct (field funcref) (field (ref …)))` — a closure (code pointer + a
   captured-environment array).
 - Each exported function has a thin **`…$export` wrapper** with the host-facing
@@ -112,19 +118,20 @@ someOrElse :: Int -> Int
 someOrElse n = orElse (Some n) 0
 ```
 
-A value of an ADT with at least one field-carrying constructor is `(struct tag
-fields)`: an `i32` **constructor tag** (assigned by declaration order — `None` = 0,
-`Some` = 1) plus a boxed-`eqref` **field array**. Construction is `struct.new` over
-an `array.new_fixed` of the fields. Two cases avoid this heap struct (ADR 0013): an
-ADT whose constructors are **all nullary** (e.g. `Ordering`, like `Boolean`) is
-just its tag as an allocation-free `i31ref`, matched by reading the tag with
-`i31.get_s`; and a **nullary constructor of a mixed type** (`None`, `Nil`) is
-allocated once and shared, not rebuilt at each use. A `case` lowers to a **decision
-tree** (`Lower.Match`). The example below
-is the simplest shape — one scrutinee, flat constructor alternatives — which
-becomes an `if`/`else` chain that compares the scrutinee's tag against each
-constructor; a constructor binder reads the matched fields out of the array with
-`array.get`. An exhaustive match's final fall-through is `unreachable`.
+A field-carrying constructor is a **struct subtype of the tag-only base `$Data =
+(struct i32)`**: `Some`'s is `(sub $Data (struct i32 i32))` — the `i32` **tag**
+(assigned by declaration order: `None` = 0, `Some` = 1) followed by its fields, each
+at its own representation (`Some`'s `Int` is an **unboxed `i32`**; a polymorphic or
+otherwise-boxed field would be `eqref`). Construction is a single `struct.new` of
+that subtype. Two cases need no per-constructor struct (ADR 0013): an ADT whose
+constructors are **all nullary** (e.g. `Ordering`, like `Boolean`) is just its tag as
+an allocation-free `i31ref`; and a **nullary constructor of a mixed type** (`None`,
+`Nil`) is the shared tag-only base `$Data`, allocated once. A `case` lowers to a
+**decision tree** (`Lower.Match`). The example below is the simplest shape — one
+scrutinee, flat constructor alternatives — an `if`/`else` chain that reads the tag by
+casting the scrutinee to `$Data`; a constructor binder reads a matched field by
+casting to that constructor's subtype and `struct.get`. An exhaustive match's
+fall-through is `unreachable`.
 
 The same compiler handles the general case: **several scrutinees at once**
 (`case x, y of …`), **nested** constructor / literal / **array** (`[]`, `[a, b]`)
@@ -135,35 +142,30 @@ it with the fields projected into each branch, and recurses on the rest — see
 features this unlocks (derived `Eq`/`Ord`, `Generic` deriving).
 
 ```wat
-;; types: $0 = (struct (field i32))                    boxed Int
-;;        $1 = (array (mut eqref))                      field array
-;;        $2 = (struct (field i32) (field (ref $1)))    an ADT: tag + fields
-(func $M.orElse (param $0 eqref) (param $1 eqref) (result eqref)   ;; o, d
-  (local $2 eqref)
-  (if (result eqref)
-   (i32.eq (struct.get $2 0 (ref.cast (ref $2) (local.get $0))) (i32.const 0))   ;; tag o == 0 (None)?
-   (then (local.get $1))                                                         ;; None -> d
+;; types:  $Int  = (struct i32)                  a boxed Int
+;;         $Data = (struct i32)                  the tag-only ADT base ($None is this, tag 0)
+;;         $Some = (sub $Data (struct i32 i32))  Some: tag + an unboxed Int field
+(func $M.orElse (param $0 eqref) (param $1 i32) (result i32)   ;; o, d
+  (if (result i32)
+   (i32.eq (struct.get $Data 0 (ref.cast (ref $Data) (local.get $0))) (i32.const 0))   ;; tag o == 0 (None)?
+   (then (local.get $1))                                                               ;; None -> d
    (else
-    (if (result eqref)
-     (i32.eq (struct.get $2 0 (ref.cast (ref $2) (local.get $0))) (i32.const 1)) ;; tag o == 1 (Some)?
-     (then
-      ;; Some x -> x  : bind x = field 0 of o, then return it
-      (local.set $2 (array.get $1 (struct.get $2 1 (ref.cast (ref $2) (local.get $0))) (i32.const 0)))
-      (local.get $2))
-     (else (unreachable))))))                                                    ;; exhaustive
-(func $M.someOrElse (param $0 eqref) (result eqref)   ;; n
-  (local $1 eqref) (local $2 eqref)
-  ;; Some n  — construct: tag 1, one field
-  (local.set $1 (struct.new $2 (i32.const 1) (array.new_fixed $1 1 (local.get $0))))
-  ;; orElse (Some n) 0  — saturated direct call; the literal 0 is box(0)
-  (local.set $2 (call $M.orElse (local.get $1) (struct.new $0 (i32.const 0))))
-  (local.get $2))
+    (if (result i32)
+     (i32.eq (struct.get $Data 0 (ref.cast (ref $Data) (local.get $0))) (i32.const 1)) ;; tag o == 1 (Some)?
+     ;; Some x -> x  : cast o to $Some and read field 1 (the unboxed Int)
+     (then (struct.get $Some 1 (ref.cast (ref $Some) (local.get $0))))
+     (else (unreachable))))))                                                          ;; exhaustive
+(func $M.someOrElse (param $0 eqref) (result i32)   ;; n  (arrives boxed — someOrElse is an exported entry)
+  (return_call $M.orElse
+   ;; Some n  — one struct.new of $Some: tag 1, the field stored as a raw i32
+   (struct.new $Some (i32.const 1) (struct.get $Int 0 (ref.cast (ref $Int) (local.get $0))))
+   (i32.const 0)))                                  ;; orElse (Some n) 0
 ```
 
-A nullary constructor just has an empty field array (`None` is
-`(struct.new $2 (i32.const 0) (array.new_fixed $1 0))`), and binders at other
-positions read the corresponding index — e.g. `case Triple a b c of Triple _ _ z`
-reads `z` with `(array.get $1 … (i32.const 2))`.
+A nullary constructor is just the shared tag-only base (`None` is `struct.new $Data
+(i32.const 0)`, allocated once), and binders at other positions read the
+corresponding struct field — e.g. `case Triple a b c of Triple _ _ z` reads `z` with
+`(struct.get $Triple 3 …)` (field 3 = the tag plus the third constructor field).
 
 ## Scalar literals and literal patterns
 

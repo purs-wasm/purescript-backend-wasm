@@ -76,57 +76,54 @@ eval = case _ of
 ```
 
 `eval` compiles to the wat below. The `Prelude` bundle (the `+` / `*` / `negate`
-that lower to the `i32.add` / `i32.mul` / `i32.sub` intrinsics, plus the runtime
-helpers) and the host `i32` export shim are elided to keep the focus on `eval`;
+that lower to the `i32.add` / `i32.mul` / `i32.sub` intrinsics, plus the `$negate`
+helper) and the host `i32` export shim are elided to keep the focus on `eval`;
 identifiers are given readable names and the output is lightly reformatted.
 
-Note what is **not** there: no dictionary closures, no `call_ref`, and no
-per-operation `Int` boxing. Arithmetic runs as unboxed `i32`, the four
-constructors are dispatched by a direct tag test, and recursion is a direct
-`call $eval`. (The middle-end eliminates the type-class dictionaries and unboxes
-the arithmetic; see the [`Int`/`Number` unboxing](docs/design-decisions/0013-int-number-unboxing.md)
-ADR.)
+Note what is **not** there: **`eval` allocates nothing**. Each constructor is a
+struct *subtype* of the tag-only base `$Data`, so a match reads the tag by casting
+to `$Data`, then a branch casts to the constructor's own struct and reads its fields
+with `struct.get`. Arithmetic runs as unboxed `i32`, `eval` **returns** an unboxed
+`i32`, and `Lit`'s `Int` field is stored unboxed — `Lit n` just reads an `i32` and
+returns it. No dictionary closures, no `call_ref`, no `$Int` boxing. (The middle-end
+eliminates the type-class dictionaries and unboxes the arithmetic; the concrete
+`Int` field is unboxed from the externs type — see the
+[`Int`/`Number` unboxing](docs/design-decisions/0013-int-number-unboxing.md) ADR.)
 
 ```wat
 (module
- ;; Types (names added for readability; the optimiser emits numeric ids):
- ;;   $Expr = (struct (field i32) (field (ref $vals)))  -- an ADT: ctor tag + field array
- ;;   $vals = (array (mut eqref))                         -- the field array
- ;;   $Int  = (struct (field i32))                        -- a boxed Int
+ ;; Types (names added for readability; the optimiser emits numeric ids). Every
+ ;; constructor is a struct subtype of the tag-only base $Data:
+ ;;   $Data = (struct i32)                          -- the ctor tag; the cast target for a match
+ ;;   $Bin  = (sub $Data (struct i32 eqref eqref))  -- Add / Mul: tag + two Expr fields
+ ;;   $Un   = (sub $Data (struct i32 eqref))        -- Neg: tag + one Expr field
+ ;;   $Lit  = (sub $Data (struct i32 i32))          -- Lit: tag + an unboxed Int field
  (export "eval" (func $eval$export))
 
  ;; --- elided: the Prelude bundle (intAdd / intMul / intSub intrinsics, the
- ;;     negate helper, runtime helpers) and the host i32 export shim ---
+ ;;     $negate helper) and the host i32 export shim ---
 
- (func $eval (param $0 eqref) (result eqref)
-  (local $1 (ref $Expr)) (local $2 eqref) (local $3 (ref $vals))
-  (if (result eqref)
-   (struct.get $Expr 0 (local.tee $1 (ref.cast (ref $Expr) (local.get $0))))     ;; read the ctor tag
-   (then
-    (if (result eqref) (i32.eq (struct.get $Expr 0 (local.get $1)) (i32.const 1)) ;; tag 1 = Mul?
-     (then  ;; Mul x y  ->  eval x * eval y
-      (local.set $3 (struct.get $Expr 1 (local.get $1)))                          ;; the field array
-      (local.set $0 (array.get $vals (local.get $3) (i32.const 1)))               ;; y
-      (local.set $2 (call $eval (array.get $vals (local.get $3) (i32.const 0))))  ;; eval x
-      (local.set $0 (call $eval (local.get $0)))                                  ;; eval y
-      (struct.new $Int (i32.mul                                                   ;; unboxed i32 multiply
-       (struct.get $Int 0 (ref.cast (ref $Int) (local.get $2)))
-       (struct.get $Int 0 (ref.cast (ref $Int) (local.get $0))))))
-     (else
-      (if (result eqref) (i32.eq (struct.get $Expr 0 (local.get $1)) (i32.const 2)) ;; tag 2 = Neg?
-       (then  ;; Neg x  ->  negate (eval x)
-        (struct.new $Int (call $negate
-         (call $eval (array.get $vals (struct.get $Expr 1 (local.get $1)) (i32.const 0))))))
-       (else
-        (if (result eqref) (i32.eq (struct.get $Expr 0 (local.get $1)) (i32.const 3)) ;; tag 3 = Lit?
-         (then  ;; Lit n  ->  n  (the field is already a boxed Int)
-          (array.get $vals (struct.get $Expr 1 (local.get $1)) (i32.const 0)))
-         (else (unreachable))))))))
-   (else  ;; tag 0 = Add x y  ->  eval x + eval y
-    (local.set $0 (array.get $vals (struct.get $Expr 1 (local.get $1)) (i32.const 1)))            ;; y
-    (local.set $2 (call $eval (array.get $vals (struct.get $Expr 1 (local.get $1)) (i32.const 0)))) ;; eval x
-    (local.set $0 (call $eval (local.get $0)))                                                    ;; eval y
-    (struct.new $Int (i32.add                                                                     ;; unboxed i32 add
-     (struct.get $Int 0 (ref.cast (ref $Int) (local.get $2)))
-     (struct.get $Int 0 (ref.cast (ref $Int) (local.get $0)))))))))
+ (func $eval (param $0 eqref) (result i32)          ;; Expr -> Int — returns an unboxed i32
+  (local $x eqref) (local $y eqref)
+  (if (result i32)
+   (i32.eq (struct.get $Data 0 (ref.cast (ref $Data) (local.get $0))) (i32.const 0))  ;; tag 0 = Add?
+   (then  ;; Add x y  ->  eval x + eval y
+    (local.set $x (struct.get $Bin 1 (ref.cast (ref $Bin) (local.get $0))))
+    (local.set $y (struct.get $Bin 2 (ref.cast (ref $Bin) (local.get $0))))
+    (i32.add (call $eval (local.get $x)) (call $eval (local.get $y))))               ;; unboxed — no struct.new
+   (else (if (result i32)
+    (i32.eq (struct.get $Data 0 (ref.cast (ref $Data) (local.get $0))) (i32.const 1)) ;; tag 1 = Mul?
+    (then  ;; Mul x y  ->  eval x * eval y
+     (local.set $x (struct.get $Bin 1 (ref.cast (ref $Bin) (local.get $0))))
+     (local.set $y (struct.get $Bin 2 (ref.cast (ref $Bin) (local.get $0))))
+     (i32.mul (call $eval (local.get $x)) (call $eval (local.get $y))))
+    (else (if (result i32)
+     (i32.eq (struct.get $Data 0 (ref.cast (ref $Data) (local.get $0))) (i32.const 2)) ;; tag 2 = Neg?
+     (then  ;; Neg x  ->  negate (eval x)
+      (return_call $negate (call $eval (struct.get $Un 1 (ref.cast (ref $Un) (local.get $0))))))
+     (else (if (result i32)
+      (i32.eq (struct.get $Data 0 (ref.cast (ref $Data) (local.get $0))) (i32.const 3)) ;; tag 3 = Lit?
+      (then  ;; Lit n  ->  n   (the field is already an unboxed i32)
+       (struct.get $Lit 1 (ref.cast (ref $Lit) (local.get $0))))
+      (else (unreachable))))))))))
 ```
