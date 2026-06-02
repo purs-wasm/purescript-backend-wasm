@@ -32,6 +32,16 @@ Key architectural decisions are recorded as ADRs under
       unboxed/immediate enum constructors (OCaml-style constant constructors)
 - [ ] Multiple platform support (browser/node/native)
 
+## Benchmarks
+
+### Quicksort
+
+![qsort](bench/snapshots/latest/qsort.png)
+
+### Fibonacci
+
+![fib](bench/snapshots/latest/fib.png)
+
 ## Example
 
 ```purescript
