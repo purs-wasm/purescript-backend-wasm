@@ -1,0 +1,161 @@
+-- | The shared-runtime import surface (ADR 0010): the module name the generated
+-- | code imports the `$rt.*` helpers from, the import declarations themselves, and
+-- | the stable internal names every `B.call` site refers to. Keeping the names here
+-- | (rather than re-typing the literal strings at each call) keeps the import
+-- | declarations and the call sites in sync.
+module PureScript.Backend.Wasm.Codegen.Imports
+  ( runtimeModuleName
+  , importRuntime
+  , internStrName
+  , projHelperName
+  , recHasHelperName
+  , recSetHelperName
+  , recDeleteHelperName
+  , strEqHelperName
+  , strCmpHelperName
+  , strConcatHelperName
+  , arrayConcatHelperName
+  , arrayEqHelperName
+  , arrayOrdHelperName
+  , arrayMapHelperName
+  , arrayApplyHelperName
+  , arrayBindHelperName
+  , showIntHelperName
+  , showCharHelperName
+  , showStringHelperName
+  , showArrayHelperName
+  , showNumberHelperName
+  , intercalateHelperName
+  , intModHelperName
+  , intDivHelperName
+  , intDegreeHelperName
+  ) where
+
+import Prelude
+
+import Binaryen as B
+import Effect (Effect)
+import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
+
+-- | The module name under which generated code imports the shared runtime
+-- | (ADR 0010). Satisfied by instantiating `runtime.wasm` (tests) or by
+-- | `wasm-merge` (the single-file build).
+runtimeModuleName :: String
+runtimeModuleName = "rt"
+
+-- | Declare the imports for the shared runtime helpers (now defined in
+-- | `runtime.wat`, ADR 0010). The internal names (e.g. `$rt.strEq`) are unchanged,
+-- | so existing `B.call` sites resolve to the imports transparently. The boundary
+-- | uses only `eqref`/`i32` (ADR 0004), so no concrete GC type crosses it.
+importRuntime :: Ctx -> Effect Unit
+importRuntime ctx = do
+  let imp name base params result = B.addFunctionImport ctx.mod name runtimeModuleName base (B.createType params) result
+  imp projHelperName "proj" [ B.eqref, B.i32 ] B.eqref
+  imp recHasHelperName "recHas" [ B.eqref, B.i32 ] B.i32
+  imp recSetHelperName "recSet" [ B.eqref, B.i32, B.eqref ] B.eqref
+  imp recDeleteHelperName "recDelete" [ B.eqref, B.i32 ] B.eqref
+  imp strEqHelperName "strEq" [ B.eqref, B.eqref ] B.i32
+  imp strCmpHelperName "strCmp" [ B.eqref, B.eqref ] B.i32
+  imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
+  imp arrayConcatHelperName "arrayConcat" [ B.eqref, B.eqref ] B.eqref
+  imp arrayEqHelperName "arrayEq" [ B.eqref, B.eqref, B.eqref ] B.i32
+  imp arrayOrdHelperName "arrayOrd" [ B.eqref, B.eqref, B.eqref ] B.i32
+  imp arrayMapHelperName "arrayMap" [ B.eqref, B.eqref ] B.eqref
+  imp arrayApplyHelperName "arrayApply" [ B.eqref, B.eqref ] B.eqref
+  imp arrayBindHelperName "arrayBind" [ B.eqref, B.eqref ] B.eqref
+  imp showIntHelperName "showInt" [ B.i32 ] B.eqref
+  imp showCharHelperName "showChar" [ B.i32 ] B.eqref
+  imp showStringHelperName "showString" [ B.eqref ] B.eqref
+  imp showArrayHelperName "showArray" [ B.eqref, B.eqref ] B.eqref
+  imp showNumberHelperName "showNumber" [ B.f64 ] B.eqref
+  imp intercalateHelperName "intercalate" [ B.eqref, B.eqref ] B.eqref
+  imp intModHelperName "intMod" [ B.i32, B.i32 ] B.i32
+  imp intDivHelperName "intDiv" [ B.i32, B.i32 ] B.i32
+  imp intDegreeHelperName "intDegree" [ B.i32 ] B.i32
+
+-- | The shared record/dictionary projection helper.
+projHelperName :: String
+projHelperName = "$rt.proj"
+
+-- | `Record.Unsafe` string-keyed record helpers (defined in `runtime.wat`): test
+-- | for a label id, and rebuild the record with a label id set / deleted.
+recHasHelperName :: String
+recHasHelperName = "$rt.recHas"
+
+recSetHelperName :: String
+recSetHelperName = "$rt.recSet"
+
+recDeleteHelperName :: String
+recDeleteHelperName = "$rt.recDelete"
+
+-- | The emitted resolver from a runtime label `String` to its interned `i32` id
+-- | (the program's `labels` table as an `if strEq … then id` chain). Lets
+-- | `Record.Unsafe`'s string-keyed access reuse the id-keyed record machinery.
+-- | (Defined in `Codegen`, not imported from the runtime — named here so the
+-- | record intrinsics and the emitter agree.)
+internStrName :: String
+internStrName = "$internStr"
+
+-- | The shared string byte-equality helper: returns `i32` `1`/`0`.
+strEqHelperName :: String
+strEqHelperName = "$rt.strEq"
+
+-- | The shared lexicographic string comparison helper: returns `i32` `-1`/`0`/`1`.
+strCmpHelperName :: String
+strCmpHelperName = "$rt.strCmp"
+
+-- | The shared string concatenation helper.
+strConcatHelperName :: String
+strConcatHelperName = "$rt.strConcat"
+
+-- | The shared array concatenation helper.
+arrayConcatHelperName :: String
+arrayConcatHelperName = "$rt.arrayConcat"
+
+-- | The shared higher-order `Array` equality / comparison helpers.
+arrayEqHelperName :: String
+arrayEqHelperName = "$rt.arrayEq"
+
+arrayOrdHelperName :: String
+arrayOrdHelperName = "$rt.arrayOrd"
+
+-- | The shared higher-order `Array` `Functor`/`Apply`/`Bind` helpers.
+arrayMapHelperName :: String
+arrayMapHelperName = "$rt.arrayMap"
+
+arrayApplyHelperName :: String
+arrayApplyHelperName = "$rt.arrayApply"
+
+arrayBindHelperName :: String
+arrayBindHelperName = "$rt.arrayBind"
+
+-- | The shared `Show` rendering helpers (defined in `runtime.wat`).
+showIntHelperName :: String
+showIntHelperName = "$rt.showInt"
+
+showCharHelperName :: String
+showCharHelperName = "$rt.showChar"
+
+showStringHelperName :: String
+showStringHelperName = "$rt.showString"
+
+showArrayHelperName :: String
+showArrayHelperName = "$rt.showArray"
+
+showNumberHelperName :: String
+showNumberHelperName = "$rt.showNumber"
+
+-- | `Data.Show.Generic`'s `intercalate` foreign: join an `Array String` with a
+-- | `String` separator (defined in `runtime.wat`).
+intercalateHelperName :: String
+intercalateHelperName = "$rt.intercalate"
+
+-- | The shared Euclidean `Int` division/remainder/degree helpers.
+intModHelperName :: String
+intModHelperName = "$rt.intMod"
+
+intDivHelperName :: String
+intDivHelperName = "$rt.intDiv"
+
+intDegreeHelperName :: String
+intDegreeHelperName = "$rt.intDegree"

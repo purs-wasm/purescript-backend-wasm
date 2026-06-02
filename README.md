@@ -24,7 +24,8 @@ Key architectural decisions are recorded as ADRs under
 - [x] [ADT and pattern matching](./docs/supported-features.md#algebraic-data-types-and-pattern-matching)
 - [x] [Recursive let-bindings](./docs/supported-features.md#recursive-let-bindings)
 - [x] [Basic typeclass resolution](./docs/supported-features.md#typeclass-dictionaries-not-optimized) (no cyclic dependencies like `Effect`'s Functor/Applicative/Monad instances')
-- [ ] `Prelude` builtin support ... *WIP*
+- [x] Builtin support for `Prelude`
+- [ ] Additional builtin support for curated packages (strings, arrays, records, etc)
 - [ ] User-defined FFI (beyond the built-in intrinsics table)
 - [ ] Special compiler support for `Effect` and `ST` monad
 - [ ] Optimizations: unboxing, arity raising / uncurrying, nominal record layout,
