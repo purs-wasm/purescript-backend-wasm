@@ -35,6 +35,9 @@ type ModuleInfo =
   -- | `IsTypeClassConstructor`). They are newtype identities (`\x -> x`) wrapping
   -- | the dictionary record, so their application is erased (ADR 0007).
   , dictCtors :: Object Unit
+  -- | Constructors of enum-like types (every constructor nullary), built as
+  -- | `i31ref` tags rather than heap `$ADT` structs (ADR 0013).
+  , enumCtors :: Object Unit
   , labelIds :: Object Int
   }
 

@@ -144,7 +144,7 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
       let
         decls =
           [ ctor "Ty" "A" []
-          , ctor "Ty" "B" []
+          , ctor "Ty" "B" [ "v" ]
           , def "f" (lam "x" (caseOf (lv "x") [ ctorAlt "A" [] (litInt 1), wildAlt (litInt 0) ]))
           ]
       case lower decls of

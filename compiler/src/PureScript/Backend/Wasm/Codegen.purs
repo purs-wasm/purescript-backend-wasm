@@ -274,6 +274,7 @@ rhsRep ctx = case _ of
   RAtom atom -> atomRep ctx atom
   RPrim intr _ -> primRep intr
   RCallKnown name _ -> maybe Boxed _.result (Map.lookup name ctx.sigs)
+  REnumTag _ -> I32
   _ -> Boxed
 
 genRhs :: Ctx -> Rhs -> Effect B.Expression
@@ -289,6 +290,9 @@ genRhs ctx = case _ of
     vals <- B.arrayNewFixed ctx.mod ctx.rt.valsHt fieldEs
     tagE <- B.i32Const ctx.mod tag
     B.structNew ctx.mod ctx.rt.adtHt [ tagE, vals ]
+  -- an enum-like value is its tag as an allocation-free `i31ref`
+  RMkEnum tag -> B.i32Const ctx.mod tag >>= B.i31New ctx.mod
+  REnumTag atom -> genAtomAs ctx Boxed atom >>= unboxBoolExpr ctx
   RProjField adtAtom index -> do
     a <- genAtomAs ctx Boxed adtAtom
     c <- B.refCast ctx.mod a ctx.rt.refAdt

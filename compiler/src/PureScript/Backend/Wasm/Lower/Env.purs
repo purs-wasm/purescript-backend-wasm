@@ -15,5 +15,7 @@ type Env =
   , ctors :: Object CtorInfo
   , moduleName :: Array String
   , dictCtors :: Object Unit
+  -- | Constructors of enum-like types (all-nullary), represented as `i31ref` tags.
+  , enumCtors :: Object Unit
   , labelIds :: Object Int
   }

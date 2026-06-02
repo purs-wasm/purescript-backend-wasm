@@ -51,6 +51,9 @@ type MatchOps env =
   , lowerCond :: env -> M.Expr -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
   , bindLocal :: String -> Atom -> env -> env
   , lookupCtor :: Qualified String -> Lower { tag :: Int, arity :: Int }
+  -- | Whether a constructor belongs to an enum-like type (all-nullary): its values
+  -- | are `i31ref` tags, matched by reading the tag rather than a `$ADT` switch.
+  , isEnumCtor :: Qualified String -> Boolean
   }
 
 -- | One clause row: the remaining column patterns, the variable bindings collected
@@ -144,10 +147,24 @@ bindIrref ops env occ = case _ of
 compileCtor :: forall env. MatchOps env -> env -> Array Atom -> Array Clause -> Int -> Atom -> Lower AnfExpr
 compileCtor ops env occs rows col occ = do
   let ctors = Array.nubEq (Array.mapMaybe (\r -> ctorOf =<< Array.index r.pats col) rows)
-  branches <- traverse ctorBranch ctors
-  dflt <- defaultMatrix ops env occs rows col occ
-  pure (Switch occ branches dflt)
+  -- An enum-like column (all-nullary type) is an `i31ref` tag: read it and switch on
+  -- it as a literal, with no field projection (the constructors carry no fields).
+  case Array.head ctors of
+    Just c | ops.isEnumCtor c -> do
+      tagSlot <- fresh
+      branches <- traverse enumBranch ctors
+      dflt <- defaultMatrix ops env occs rows col occ
+      pure (Let tagSlot I32 (REnumTag occ) (LitSwitch (AVar (Local tagSlot)) branches dflt))
+    _ -> do
+      branches <- traverse ctorBranch ctors
+      dflt <- defaultMatrix ops env occs rows col occ
+      pure (Switch occ branches dflt)
   where
+  enumBranch ctorName = do
+    info <- ops.lookupCtor ctorName
+    let specialized = Array.mapMaybe (specializeCtor occ col ctorName 0) rows
+    inner <- compile ops env (removeAt col occs) specialized
+    pure (LitBranch (PInt info.tag) inner)
   ctorBranch ctorName = do
     info <- ops.lookupCtor ctorName
     let specialized = Array.mapMaybe (specializeCtor occ col ctorName info.arity) rows

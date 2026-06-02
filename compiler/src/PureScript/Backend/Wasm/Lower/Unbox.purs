@@ -137,6 +137,7 @@ assignProgramReps funcs = map (rewriteFunc sigs) funcs
     RAtom (ALitInt _) -> Ti32
     RAtom (ALitNumber _) -> Tf64
     RCallKnown name _ -> maybe Bx _.result (Map.lookup name s)
+    REnumTag _ -> Ti32
     _ -> Bx
 
   -- the join of the types of every atom an expression returns
@@ -246,6 +247,7 @@ producerRep sigs = case _ of
   RAtom (ALitInt _) -> I32
   RAtom (ALitNumber _) -> F64
   RCallKnown name _ -> maybe Boxed (repOfTy <<< _.result) (Map.lookup name sigs)
+  REnumTag _ -> I32
   _ -> Boxed
 
 -- | Tally, per local slot, the representation each of its uses demands (calls demand
@@ -278,6 +280,8 @@ rhsDemands sigs acc = case _ of
   RCallKnown name args ->
     foldlWithIndex (\i a at -> demand (calleeParamRep sigs name i) at a) acc args
   RMkData _ fields -> boxedAll acc fields
+  RMkEnum _ -> acc
+  REnumTag at -> demand Boxed at acc
   RProjField at _ -> demand Boxed at acc
   RMkRecord pairs -> foldl (\a (Tuple _ at) -> demand Boxed at a) acc pairs
   RProjLabel at _ -> demand Boxed at acc

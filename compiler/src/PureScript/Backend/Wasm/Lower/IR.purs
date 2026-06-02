@@ -90,6 +90,13 @@ data Rhs
   -- | empty operand list. Lowered to `struct.new $ADT [tag, array.new_fixed
   -- | $Vals fields]`.
   | RMkData Int (Array Atom)
+  -- | Construct an *enum-like* ADT value (a type whose every constructor is
+  -- | nullary, e.g. `Ordering`): the value is just the constructor `tag` as an
+  -- | allocation-free `i31ref` (like `Boolean`, ADR 0013), not a heap `$ADT`.
+  | RMkEnum Int
+  -- | Read the constructor tag of an enum-like value as an `i32` (`ref.cast i31ref`
+  -- | then `i31.get_s`), to drive a `LitSwitch` rather than reading a `$ADT` tag.
+  | REnumTag Atom
   -- | Project field `index` out of an ADT value (itself an `eqref`), yielding
   -- | the field's `eqref`. Lowered to a cast to `(ref $ADT)`, a `struct.get` of
   -- | the fields array, then `array.get`.

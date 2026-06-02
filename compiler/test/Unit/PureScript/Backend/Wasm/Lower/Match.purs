@@ -97,8 +97,8 @@ spec = describe "PureScript.Backend.Wasm.Lower.Match (decision trees)" do
     let
       decls =
         [ ctor "Ty" "A" []
-        , ctor "Ty" "B" []
-        , def "f" (lam "x" (caseOf (lv "x") [ binderAlt (ctorBinderT "Ty" "A" []) (litInt 1), binderAlt (ctorBinderT "Ty" "B" []) (litInt 2) ]))
+        , ctor "Ty" "B" [ "v" ]
+        , def "f" (lam "x" (caseOf (lv "x") [ binderAlt (ctorBinderT "Ty" "A" []) (litInt 1), binderAlt (ctorBinderT "Ty" "B" [ nullBinder ]) (litInt 2) ]))
         ]
     case lower decls of
       Left err -> fail (show err)
@@ -112,13 +112,13 @@ spec = describe "PureScript.Backend.Wasm.Lower.Match (decision trees)" do
     let
       decls =
         [ ctor "Ty" "A" []
-        , ctor "Ty" "B" []
+        , ctor "Ty" "B" [ "v" ]
         , def "f"
             ( lam "x"
                 ( lam "y"
                     ( case2 (lv "x") (lv "y")
                         [ alt2 (ctorBinderT "Ty" "A" []) (intLitBinder 0) (litInt 1)
-                        , alt2 (ctorBinderT "Ty" "B" []) nullBinder (litInt 2)
+                        , alt2 (ctorBinderT "Ty" "B" [ nullBinder ]) nullBinder (litInt 2)
                         , alt2 nullBinder nullBinder (litInt 3)
                         ]
                     )
@@ -179,11 +179,11 @@ spec = describe "PureScript.Backend.Wasm.Lower.Match (decision trees)" do
     -- nested inside that branch.
     let
       decls =
-        [ ctor "Ty" "A" []
+        [ ctor "Ty" "A" [ "v" ]
         , def "f"
             ( lam "x"
                 ( caseOf (lv "x")
-                    [ guardedAlt (ctorBinderT "Ty" "A" []) (litInt 1) (litInt 1)
+                    [ guardedAlt (ctorBinderT "Ty" "A" [ nullBinder ]) (litInt 1) (litInt 1)
                     , binderAlt nullBinder (litInt 2)
                     ]
                 )

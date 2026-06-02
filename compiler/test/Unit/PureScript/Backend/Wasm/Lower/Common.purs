@@ -204,6 +204,8 @@ rhsAtoms = case _ of
   RPrim _ as -> as
   RCallKnown _ as -> as
   RMkData _ as -> as
+  RMkEnum _ -> []
+  REnumTag a -> [ a ]
   RProjField a _ -> [ a ]
   RMkClosure _ as -> as
   RApply f a -> [ f, a ]

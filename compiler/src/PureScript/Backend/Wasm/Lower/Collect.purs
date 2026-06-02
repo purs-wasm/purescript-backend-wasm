@@ -4,6 +4,7 @@
 -- | lowers anything — these are the facts gathered *before* lowering.
 module PureScript.Backend.Wasm.Lower.Collect
   ( collectCtors
+  , collectEnumCtors
   , collectFuncs
   , collectDictCtors
   , collectLabels
@@ -19,7 +20,7 @@ import Prelude
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
@@ -46,6 +47,29 @@ collectCtors modules = (foldl perModule { counts: Object.empty, out: Object.empt
       { counts: Object.insert typeKey (tag + 1) counts
       , out: Object.insert (qualifiedKey moduleName ctorName) { tag, arity } out
       }
+
+-- | The constructors of every **enum-like** type — a type whose every constructor
+-- | is nullary (e.g. `Ordering`, `Unit`, `Data.Generic.Rep.NoArguments`, user
+-- | enums). Their values are represented as allocation-free `i31ref` tags rather
+-- | than heap `$ADT` structs (ADR 0013).
+collectEnumCtors :: Array Module -> Object Unit
+collectEnumCtors modules =
+  Object.fromFoldable (Array.mapMaybe keepEnum entries)
+  where
+  entries = modules >>= \m -> Array.mapMaybe (ctorEntry m.name) m.decls
+  -- the largest constructor arity seen for each (qualified) type
+  typeArities = foldl (\acc e -> Object.alter (Just <<< maybe e.arity (max e.arity)) e.typeKey acc) Object.empty entries
+  keepEnum e =
+    if Object.lookup e.typeKey typeArities == Just 0 then Just (Tuple e.ctorKey unit)
+    else Nothing
+  ctorEntry moduleName = case _ of
+    NonRec _ _ (M.Constructor typeName ctorName fieldNames) ->
+      Just
+        { typeKey: qualifiedKey moduleName typeName
+        , ctorKey: qualifiedKey moduleName ctorName
+        , arity: Array.length fieldNames
+        }
+    _ -> Nothing
 
 -- | Flatten the top-level binding groups into `(ident, expr)` pairs. A `Rec`
 -- | group is mutual recursion between top-level functions; since each becomes a

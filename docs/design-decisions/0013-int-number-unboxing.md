@@ -118,5 +118,14 @@ that changes per-function param/result reps via a whole-program fixpoint.
   Measured (vs the unoptimized baseline): bintreeDfs 12.6→**17.4×**, fib 2.12→2.28×,
   nqueens 3.26→3.41×; sumLoop flat at 2.65× (now bounded by the `Ordering`
   allocation in `>`, not `Int` boxing — a separate optimization).
+- **Enum-like ADT unboxing (done):** a related representation choice. A type whose
+  every constructor is nullary (`Ordering`, `Unit`, `NoArguments`, user enums) carries
+  no fields, so its values are the constructor tag as an allocation-free `i31ref` —
+  generalising `Boolean` (already an `i31ref`) to N tags — rather than a heap `$ADT`
+  struct. `Collect.collectEnumCtors` finds these (a type all of whose constructors
+  have arity 0); construction lowers to `RMkEnum tag` (`i31.new`), and a match reads
+  the tag with `REnumTag` (`i31.get_s`, exactly the `Boolean` unbox) and `LitSwitch`es
+  on it. This removes the per-comparison `Ordering` allocations that capped `sumLoop`
+  (2.65→3.47×; fib 2.28→2.91×, qsort →1.67×, bintreeDfs →19.4×).
 - **B — front B field specialization:** type-directed `i32`/`f64` struct fields for
   concrete-scalar constructor/record fields, using externs types.

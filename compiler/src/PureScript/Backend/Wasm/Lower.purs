@@ -48,7 +48,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), fst)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic)
-import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
+import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), FuncName(..), IRFunc, Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
@@ -117,7 +117,9 @@ lowerArg env expr k = case expr of
   -- never `ctors`/`knownFuncs` — so `foreignIntrinsic` is only the fallback.
   M.Var q@(Qualified (Just _) ident)
     | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors ->
-        if info.arity == 0 then bindRhs (RMkData info.tag []) k
+        if info.arity == 0 then
+          if Object.member (qualifiedKeyOf q) env.enumCtors then bindRhs (RMkEnum info.tag) k
+          else bindRhs (RMkData info.tag []) k
         else lowerArg env (etaExpand expr info.arity) k
     | Just arity <- Object.lookup (qualifiedKeyOf q) env.knownFuncs ->
         if arity == 0 then bindRhs (RCallKnown (qualifiedFuncName q) []) k
@@ -401,6 +403,7 @@ matchOps env finish =
   , lowerCond: lowerArg
   , bindLocal: \name atom e -> e { locals = Object.insert name atom e.locals }
   , lookupCtor: \q -> requireCtor env (qualifiedKeyOf q)
+  , isEnumCtor: \q -> Object.member (qualifiedKeyOf q) env.enumCtors
   }
 
 -- | Recognise a single record-pattern alternative `{ l: b, … } -> body` (a
@@ -449,6 +452,7 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
       , ctors: info.ctors
       , moduleName
       , dictCtors: info.dictCtors
+      , enumCtors: info.enumCtors
       , labelIds: info.labelIds
       }
   modify_ _ { slot = Array.length params }
@@ -477,6 +481,7 @@ lowerModules optimize roots modules = do
       { knownFuncs: collectFuncs dictCtors modules
       , ctors: collectCtors modules
       , dictCtors
+      , enumCtors: collectEnumCtors modules
       , labelIds: collectLabels modules
       }
     entries = modules >>= \m ->
