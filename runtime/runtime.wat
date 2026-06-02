@@ -14,7 +14,7 @@
 ;; use only eqref/i32 (ADR 0004); concrete GC types appear only inside the bodies.
 (module
   (type $Vals (array (mut eqref)))                                  ;; array elements / record values
-  (type $LabelIds (array i32))                                      ;; interned record labels (immutable)
+  (type $LabelIds (array (mut i32)))                                ;; interned record labels (mut: rebuilt by recSet/recDelete)
   (type $Bytes (array (mut i32)))                                   ;; UTF-8 bytes, one per i32 lane (not packed)
   (type $Rec (struct (field (ref $LabelIds)) (field (ref $Vals))))  ;; parallel labels / values
   (type $Str (struct (field (ref $Bytes))))
@@ -40,6 +40,99 @@
                     (array.len (struct.get $Rec 0 (local.get $r)))))
         (unreachable))
       (unreachable)))
+
+  ;; $rt.recHas(rec, id) -> i32 : 1 iff the record has a field with label id `id`
+  ;; (Record.Unsafe's `unsafeHas`; non-trapping, unlike `proj`, and empty-safe).
+  (func $rt.recHas (export "recHas") (param $rec eqref) (param $id i32) (result i32)
+    (local $ids (ref $LabelIds))
+    (local $n i32)
+    (local $i i32)
+    (local.set $ids (struct.get $Rec 0 (ref.cast (ref $Rec) (local.get $rec))))
+    (local.set $n (array.len (local.get $ids)))
+    (block $end
+      (loop $loop
+        (br_if $end (i32.ge_u (local.get $i) (local.get $n)))
+        (if (i32.eq (array.get $LabelIds (local.get $ids) (local.get $i)) (local.get $id))
+          (then (return (i32.const 1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 0))
+
+  ;; $rt.recSet(rec, id, val) -> eqref : Record.Unsafe's `unsafeSet`. Label ids are
+  ;; kept sorted ascending, so we find the first position `pos` with id[pos] >= id;
+  ;; if it equals `id` the field is replaced (copy, swap that value), otherwise the
+  ;; (id, val) pair is inserted there (fresh length+1 arrays). Pure: the input record
+  ;; is never mutated.
+  (func $rt.recSet (export "recSet") (param $rec eqref) (param $id i32) (param $val eqref) (result eqref)
+    (local $r (ref $Rec))
+    (local $ids (ref $LabelIds))
+    (local $vals (ref $Vals))
+    (local $n i32)
+    (local $pos i32)
+    (local $nids (ref $LabelIds))
+    (local $nvals (ref $Vals))
+    (local.set $r (ref.cast (ref $Rec) (local.get $rec)))
+    (local.set $ids (struct.get $Rec 0 (local.get $r)))
+    (local.set $vals (struct.get $Rec 1 (local.get $r)))
+    (local.set $n (array.len (local.get $ids)))
+    (block $stop
+      (loop $loop
+        (br_if $stop (i32.ge_u (local.get $pos) (local.get $n)))
+        (br_if $stop (i32.ge_u (array.get $LabelIds (local.get $ids) (local.get $pos)) (local.get $id)))
+        (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+        (br $loop)))
+    ;; replace: pos in range and the id already present
+    (if (i32.and (i32.lt_u (local.get $pos) (local.get $n))
+                 (i32.eq (array.get $LabelIds (local.get $ids) (local.get $pos)) (local.get $id)))
+      (then
+        (local.set $nids (array.new $LabelIds (i32.const 0) (local.get $n)))
+        (array.copy $LabelIds $LabelIds (local.get $nids) (i32.const 0) (local.get $ids) (i32.const 0) (local.get $n))
+        (local.set $nvals (array.new $Vals (ref.null none) (local.get $n)))
+        (array.copy $Vals $Vals (local.get $nvals) (i32.const 0) (local.get $vals) (i32.const 0) (local.get $n))
+        (array.set $Vals (local.get $nvals) (local.get $pos) (local.get $val))
+        (return (struct.new $Rec (local.get $nids) (local.get $nvals)))))
+    ;; insert at pos: [0,pos) copied, [pos] new, [pos,n) shifted right by one
+    (local.set $nids (array.new $LabelIds (i32.const 0) (i32.add (local.get $n) (i32.const 1))))
+    (local.set $nvals (array.new $Vals (ref.null none) (i32.add (local.get $n) (i32.const 1))))
+    (array.copy $LabelIds $LabelIds (local.get $nids) (i32.const 0) (local.get $ids) (i32.const 0) (local.get $pos))
+    (array.copy $Vals $Vals (local.get $nvals) (i32.const 0) (local.get $vals) (i32.const 0) (local.get $pos))
+    (array.set $LabelIds (local.get $nids) (local.get $pos) (local.get $id))
+    (array.set $Vals (local.get $nvals) (local.get $pos) (local.get $val))
+    (array.copy $LabelIds $LabelIds (local.get $nids) (i32.add (local.get $pos) (i32.const 1)) (local.get $ids) (local.get $pos) (i32.sub (local.get $n) (local.get $pos)))
+    (array.copy $Vals $Vals (local.get $nvals) (i32.add (local.get $pos) (i32.const 1)) (local.get $vals) (local.get $pos) (i32.sub (local.get $n) (local.get $pos)))
+    (struct.new $Rec (local.get $nids) (local.get $nvals)))
+
+  ;; $rt.recDelete(rec, id) -> eqref : Record.Unsafe's `unsafeDelete`. Returns the
+  ;; record unchanged if the label is absent, else fresh length-1 arrays omitting it.
+  (func $rt.recDelete (export "recDelete") (param $rec eqref) (param $id i32) (result eqref)
+    (local $r (ref $Rec))
+    (local $ids (ref $LabelIds))
+    (local $vals (ref $Vals))
+    (local $n i32)
+    (local $pos i32)
+    (local $rest i32)
+    (local $nids (ref $LabelIds))
+    (local $nvals (ref $Vals))
+    (local.set $r (ref.cast (ref $Rec) (local.get $rec)))
+    (local.set $ids (struct.get $Rec 0 (local.get $r)))
+    (local.set $vals (struct.get $Rec 1 (local.get $r)))
+    (local.set $n (array.len (local.get $ids)))
+    (if (i32.eqz (local.get $n)) (then (return (local.get $rec))))
+    (block $found
+      (loop $loop
+        (br_if $found (i32.eq (array.get $LabelIds (local.get $ids) (local.get $pos)) (local.get $id)))
+        (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+        (br_if $loop (i32.lt_u (local.get $pos) (local.get $n)))
+        (return (local.get $rec))))
+    ;; omit index pos: [0,pos) copied, (pos,n) shifted left by one
+    (local.set $rest (i32.sub (i32.sub (local.get $n) (local.get $pos)) (i32.const 1)))
+    (local.set $nids (array.new $LabelIds (i32.const 0) (i32.sub (local.get $n) (i32.const 1))))
+    (local.set $nvals (array.new $Vals (ref.null none) (i32.sub (local.get $n) (i32.const 1))))
+    (array.copy $LabelIds $LabelIds (local.get $nids) (i32.const 0) (local.get $ids) (i32.const 0) (local.get $pos))
+    (array.copy $Vals $Vals (local.get $nvals) (i32.const 0) (local.get $vals) (i32.const 0) (local.get $pos))
+    (array.copy $LabelIds $LabelIds (local.get $nids) (local.get $pos) (local.get $ids) (i32.add (local.get $pos) (i32.const 1)) (local.get $rest))
+    (array.copy $Vals $Vals (local.get $nvals) (local.get $pos) (local.get $vals) (i32.add (local.get $pos) (i32.const 1)) (local.get $rest))
+    (struct.new $Rec (local.get $nids) (local.get $nvals)))
 
   ;; $rt.strEq(a, b) -> i32 : 1 iff the two strings have equal bytes.
   (func $rt.strEq (export "strEq") (param $a eqref) (param $b eqref) (result i32)

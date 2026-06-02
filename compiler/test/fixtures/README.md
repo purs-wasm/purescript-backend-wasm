@@ -44,6 +44,9 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Data.Symbol.corefn.json`        | (real Prelude) | `Test.E2E.PreludeGenericShowCompare` | the `reflectSymbol` class-method accessor |
 | `Type.Proxy.corefn.json`         | (real Prelude) | `Test.E2E.PreludeGenericShowCompare` | the `Proxy` value passed to `reflectSymbol` |
 | `Expr.corefn.json`    | `Expr.purs.sample`    | `Test.E2E.ExprEval`           | **integration** (mirrors `example/src/Main.purs`): an arithmetic-expression evaluator + pretty-printer — ADTs, nested decision-tree matching, a case guard, recursion, `show` / `<>` / `negate` / `+` / `*` / `>`. Links `Data.{Boolean,Eq,Ord,Ordering,Ring,Semigroup,Semiring,Show}` |
+| `Erased.corefn.json`  | `Erased.purs.sample`  | `Test.E2E.PreludeErased`      | **erased foreigns**: `Data.Unit.unit` (a nullary boxed constant) and `unsafeCoerce` (erased during lowering — `unsafeCoerce x` *is* `x`). Links `Data.Function` (`const`) / `Data.Semiring` (`add`) |
+| `Rec.corefn.json`     | `Rec.purs.sample`     | `Test.E2E.RecordUnsafe`       | **`Record.Unsafe`**: `unsafeGet` / `unsafeSet` (replace + insert) / `unsafeHas` / `unsafeDelete` — the runtime `String` key resolved via the emitted `internStr`, then the id-keyed `$rt.rec*` helpers. Foreigns are intrinsics, so only `Rec` is linked |
+| `RecInst.corefn.json` | `RecInst.purs.sample` | `Test.E2E.RecordInstances`    | **record instances**: real `Eq (Record r)` / `Show (Record r)` (`reflectSymbol` label + `unsafeGet` value over the row). Links `Data.{Eq,Show,Symbol,Semigroup,HeytingAlgebra}` / `Type.Proxy` |
 
 `Data.Semiring` / `Data.Ring` / `Data.Eq` / `Data.Ord` / `Data.Ordering` are
 **real `purs`-compiled Prelude output** (copied verbatim from a build's

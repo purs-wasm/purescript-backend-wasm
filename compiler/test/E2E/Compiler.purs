@@ -34,6 +34,9 @@ import Test.E2E.PreludeGeneric as PreludeGeneric
 import Test.E2E.PreludeGenericShowCompare as PreludeGenericShowCompare
 import Test.E2E.PreludeGuards as PreludeGuards
 import Test.E2E.ExprEval as ExprEval
+import Test.E2E.PreludeErased as PreludeErased
+import Test.E2E.RecordUnsafe as RecordUnsafe
+import Test.E2E.RecordInstances as RecordInstances
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -67,3 +70,6 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeGenericShowCompare.spec
   PreludeGuards.spec
   ExprEval.spec
+  PreludeErased.spec
+  RecordUnsafe.spec
+  RecordInstances.spec

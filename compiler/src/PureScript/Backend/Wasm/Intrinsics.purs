@@ -79,6 +79,16 @@ data Intrinsic
   | BottomChar -- minBound Char, code point 0 (`Int`-rep)
   | TopNumber -- `+Infinity` (`$Num` f64)
   | BottomNumber -- `-Infinity` (`$Num` f64)
+  -- | `Data.Unit.unit` (arity 0): the single `Unit` inhabitant — a nullary constant
+  -- | foreign (like `topInt`), never inspected, so any boxed value serves.
+  | UnitValue
+  -- | `Record.Unsafe` string-keyed record access. The runtime `String` key is
+  -- | resolved to its interned `i32` label id by the emitted `internStr`, then the
+  -- | record's parallel id/value arrays are read or rebuilt (ADR 0007).
+  | UnsafeGet -- String -> Record r -> a
+  | UnsafeHas -- String -> Record r -> Boolean
+  | UnsafeSet -- String -> a -> Record r1 -> Record r2
+  | UnsafeDelete -- String -> Record r1 -> Record r2
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -145,6 +155,14 @@ foreignIntrinsic = case _ of
   "showNumberImpl" -> Just (Tuple ShowNumber 1)
   -- `Data.Show.Generic`'s `intercalate` foreign (joins shown constructor args)
   "intercalate" -> Just (Tuple Intercalate 2)
+  -- `Data.Unit.unit` — a nullary constant foreign. (`unsafeCoerce` is not here: it
+  -- is erased during lowering rather than emitted as an op.)
+  "unit" -> Just (Tuple UnitValue 0)
+  -- `Record.Unsafe` string-keyed record access
+  "unsafeGet" -> Just (Tuple UnsafeGet 2)
+  "unsafeHas" -> Just (Tuple UnsafeHas 2)
+  "unsafeSet" -> Just (Tuple UnsafeSet 3)
+  "unsafeDelete" -> Just (Tuple UnsafeDelete 2)
   "numAdd" -> Just (Tuple NumAdd 2)
   "numMul" -> Just (Tuple NumMul 2)
   "numSub" -> Just (Tuple NumSub 2)

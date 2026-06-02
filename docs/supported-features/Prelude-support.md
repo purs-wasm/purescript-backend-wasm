@@ -300,4 +300,22 @@ lowers to a chain of boolean tests whose final `else` is the compiled remainder 
 the matrix (or a trap, when nothing remains — a partial match). Multiple guards in
 one alternative (`_ | a → … | b → …`) become successive tests in that chain.
 
+**`Record.Unsafe`** — `unsafeGet` / `unsafeSet` / `unsafeHas` / `unsafeDelete`, the
+string-keyed record access the core record instances are built on. Records store
+**compile-time interned `i32` label ids** (ADR 0007), but these foreigns take a
+*runtime* `String` key (typically a `reflectSymbol` result). To bridge that, codegen
+emits an `internStr` resolver — the program's whole label table as an `if strEq key
+"label" then <id> …` chain — turning the runtime string back into its id, after
+which the existing id-keyed record machinery applies: `$rt.proj` (get), and new
+`$rt.recHas` / `$rt.recSet` / `$rt.recDelete` that rebuild the sorted parallel
+id/value arrays (`$LabelIds` is now mutable so a field can be inserted/removed). This
+makes the real `Eq (Record r)` / `Show (Record r)` / `Ord (Record r)` instances work
+— `show { x: 1, y: 2 } == "{ x: 1, y: 2 }"` — since they iterate the row with
+`reflectSymbol` (the label) and `unsafeGet` (the value).
+
+**Erased / trivial foreigns.** `Data.Unit.unit` is a nullary boxed constant (like
+`topInt`); `unsafeCoerce` is representation-preserving and so is **erased during
+lowering** — `unsafeCoerce x` lowers to exactly `x`, emitting no op (a later IR
+optimisation pass could subsume this).
+
 `Data.Int.round` / `floor` / `…` are not wired up.

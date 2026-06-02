@@ -24,7 +24,7 @@ import Prelude
 import Binaryen as B
 import Data.Array as Array
 import Data.Enum (fromEnum)
-import Data.Foldable (traverse_)
+import Data.Foldable (foldr, traverse_)
 import Data.Int.Bits (and, shr)
 import Data.Maybe (Maybe(..))
 import Data.String.CodePoints (toCodePointArray)
@@ -76,9 +76,30 @@ buildModule prog = do
   rt <- buildRuntimeTypes mod
   let ctx = { mod, rt, params: [] }
   importRuntime ctx
+  addInternStr ctx prog.labels
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx) prog.funcs
   pure mod
+
+-- | Emit the `internStr` resolver: a `String` key → its interned `i32` label id,
+-- | as an `if (strEq key "label") then <id> else …` chain over the program's
+-- | `labels` (ending in `unreachable` — a queried label is always interned). Used
+-- | by `Record.Unsafe`'s string-keyed access to reach the id-keyed record helpers.
+-- | (Binaryen prunes it when no record op references it.)
+addInternStr :: Ctx -> Array (Tuple String Int) -> Effect Unit
+addInternStr ctx labels = do
+  miss <- B.unreachable ctx.mod
+  body <- foldr step (pure miss) labels
+  _ <- B.addFunction ctx.mod internStrName (B.createType [ B.eqref ]) B.i32 [] body
+  pure unit
+  where
+  step (Tuple label labelId) accM = do
+    acc <- accM
+    key <- B.localGet ctx.mod 0 B.eqref
+    labelConst <- genAtom ctx (ALitString label)
+    cond <- B.call ctx.mod strEqHelperName [ key, labelConst ] B.i32
+    idExpr <- B.i32Const ctx.mod labelId
+    B.if_ ctx.mod cond idExpr acc
 
 -- | The module name under which generated code imports the shared runtime
 -- | (ADR 0010). Satisfied by instantiating `runtime.wasm` (tests) or by
@@ -94,6 +115,9 @@ importRuntime :: Ctx -> Effect Unit
 importRuntime ctx = do
   let imp name base params result = B.addFunctionImport ctx.mod name runtimeModuleName base (B.createType params) result
   imp projHelperName "proj" [ B.eqref, B.i32 ] B.eqref
+  imp recHasHelperName "recHas" [ B.eqref, B.i32 ] B.i32
+  imp recSetHelperName "recSet" [ B.eqref, B.i32, B.eqref ] B.eqref
+  imp recDeleteHelperName "recDelete" [ B.eqref, B.i32 ] B.eqref
   imp strEqHelperName "strEq" [ B.eqref, B.eqref ] B.i32
   imp strCmpHelperName "strCmp" [ B.eqref, B.eqref ] B.i32
   imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
@@ -116,6 +140,23 @@ importRuntime ctx = do
 -- | The shared record/dictionary projection helper (see `addProjHelper`).
 projHelperName :: String
 projHelperName = "$rt.proj"
+
+-- | `Record.Unsafe` string-keyed record helpers (defined in `runtime.wat`): test
+-- | for a label id, and rebuild the record with a label id set / deleted.
+recHasHelperName :: String
+recHasHelperName = "$rt.recHas"
+
+recSetHelperName :: String
+recSetHelperName = "$rt.recSet"
+
+recDeleteHelperName :: String
+recDeleteHelperName = "$rt.recDelete"
+
+-- | The emitted resolver from a runtime label `String` to its interned `i32` id
+-- | (the program's `labels` table as an `if strEq … then id` chain). Lets
+-- | `Record.Unsafe`'s string-keyed access reuse the id-keyed record machinery.
+internStrName :: String
+internStrName = "$internStr"
 
 -- | The shared string byte-equality helper (see `addStrEqHelper`): returns `i32`
 -- | `1`/`0`.
@@ -196,7 +237,7 @@ buildRuntimeTypes _ = do
   refValsTmp <- B.typeBuilderGetTempHeapType tb 0 >>= \h -> B.typeBuilderGetTempRefType tb h false
   B.typeBuilderSetStructType tb 2 [ { ty: B.i32, mutable: false }, { ty: refValsTmp, mutable: false } ] -- $ADT
   B.typeBuilderSetStructType tb 3 [ { ty: B.funcref, mutable: false }, { ty: refValsTmp, mutable: false } ] -- $Clo
-  B.typeBuilderSetArrayType tb 4 B.i32 false -- $LabelIds = (array i32), interned record labels
+  B.typeBuilderSetArrayType tb 4 B.i32 true -- $LabelIds = (array (mut i32)); mut so recSet/recDelete can rebuild it
   refLabelIdsTmp <- B.typeBuilderGetTempHeapType tb 4 >>= \h -> B.typeBuilderGetTempRefType tb h false
   -- $Rec = (struct (ref $LabelIds) (ref $Vals)) — parallel label-id / value arrays
   B.typeBuilderSetStructType tb 5 [ { ty: refLabelIdsTmp, mutable: false }, { ty: refValsTmp, mutable: false } ]
@@ -662,8 +703,33 @@ genPrim ctx intr args = case intr, args of
   BottomChar, [] -> B.i32Const ctx.mod 0 >>= boxInt ctx
   TopNumber, [] -> B.f64Const ctx.mod (1.0 / 0.0) >>= boxNum ctx
   BottomNumber, [] -> B.f64Const ctx.mod (-1.0 / 0.0) >>= boxNum ctx
+  -- `Data.Unit.unit`: a never-inspected boxed `0`.
+  UnitValue, [] -> B.i32Const ctx.mod 0 >>= boxInt ctx
+  -- `Record.Unsafe`: resolve the `String` key to its label id, then read / rebuild
+  -- the record through the id-keyed runtime helpers.
+  UnsafeGet, [ key, rec ] -> do
+    rid <- internId ctx key
+    er <- genAtom ctx rec
+    B.call ctx.mod projHelperName [ er, rid ] B.eqref
+  UnsafeHas, [ key, rec ] -> do
+    rid <- internId ctx key
+    er <- genAtom ctx rec
+    B.call ctx.mod recHasHelperName [ er, rid ] B.i32 >>= B.i31New ctx.mod
+  UnsafeSet, [ key, val, rec ] -> do
+    rid <- internId ctx key
+    ev <- genAtom ctx val
+    er <- genAtom ctx rec
+    B.call ctx.mod recSetHelperName [ er, rid, ev ] B.eqref
+  UnsafeDelete, [ key, rec ] -> do
+    rid <- internId ctx key
+    er <- genAtom ctx rec
+    B.call ctx.mod recDeleteHelperName [ er, rid ] B.eqref
   _, _ -> throwException (error "Codegen: intrinsic given an operand list of the wrong arity")
   where
+  -- resolve a record-label `String` atom to its interned `i32` id via `internStr`
+  internId c key = do
+    ek <- genAtom c key
+    B.call c.mod internStrName [ ek ] B.i32
   intBinop op a b = do
     ea <- unboxIntAtom ctx a
     eb <- unboxIntAtom ctx b

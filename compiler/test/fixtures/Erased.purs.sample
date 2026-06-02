@@ -1,0 +1,15 @@
+module Erased where
+
+import Prelude
+
+import Data.Unit (unit)
+import Unsafe.Coerce (unsafeCoerce)
+
+-- `unit` reaches codegen as a real (never-inspected) value argument to `const`.
+withUnit :: Int -> Int
+withUnit n = const n unit
+
+-- `unsafeCoerce` is the identity on the uniform eqref representation: coerce an
+-- Int to Number and back, then use it as an Int again.
+coerceRoundTrip :: Int -> Int
+coerceRoundTrip n = add (unsafeCoerce (unsafeCoerce n :: Number)) 0

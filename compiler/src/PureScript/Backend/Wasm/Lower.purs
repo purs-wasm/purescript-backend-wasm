@@ -182,6 +182,9 @@ lowerArg env expr k = case expr of
     | Just arity <- Object.lookup (qualifiedKeyOf q) env.knownFuncs ->
         if arity == 0 then bindRhs (RCallKnown (qualifiedFuncName q) []) k
         else lowerArg env (etaExpand expr arity) k
+    -- Unapplied `unsafeCoerce`: eta-expand to `\x -> unsafeCoerce x`, which reduces
+    -- (via the erasure in `lowerApp`) to the identity closure `\x -> x`.
+    | ident == "unsafeCoerce" -> lowerArg env (etaExpand expr 1) k
     -- A nullary foreign (e.g. `Data.Bounded.topInt`) is a constant value, not a
     -- callable, so it materializes directly rather than eta-expanding.
     | Just (Tuple intr arity) <- foreignIntrinsic ident ->
@@ -275,6 +278,12 @@ lowerApp env { head, args } k = case head of
   C.Var _ q@(Qualified (Just _) ident)
     | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors -> applyArity info.arity (RMkData info.tag)
     | Just arity <- Object.lookup (qualifiedKeyOf q) env.knownFuncs -> applyArity arity (RCallKnown (qualifiedFuncName q))
+    -- `unsafeCoerce` is representation-preserving (values are uniformly `eqref`), so
+    -- it is erased: the argument *is* the result, and any further args apply to it.
+    -- Checked after ctors/knownFuncs, so a user binding of the name is never shadowed.
+    | ident == "unsafeCoerce", Just { head: arg, tail } <- Array.uncons args -> case tail of
+        [] -> lowerArg env arg k
+        _ -> lowerApp env { head: arg, args: tail } k
     | Just (Tuple intr arity) <- foreignIntrinsic ident -> applyArity arity (RPrim intr)
     | otherwise -> throw (UnsupportedExpr ("unknown callee: " <> qualifiedKeyOf q))
   _ ->
@@ -675,7 +684,7 @@ lowerModules roots modules = do
   Tuple funcs st <- runStateT
     (traverse (\e -> lowerTopFunc info e.moduleName e.isRoot (Tuple e.ident e.expr)) toLower)
     { slot: 0, lifted: [], nextCode: 0 }
-  pure { funcs: funcs <> st.lifted }
+  pure { funcs: funcs <> st.lifted, labels: Object.toUnfoldable info.labelIds }
 
 -- | Lower a single decoded CoreFn module to a backend IR `Program`, exporting its
 -- | top-level functions (the single-module case of `lowerModules`).

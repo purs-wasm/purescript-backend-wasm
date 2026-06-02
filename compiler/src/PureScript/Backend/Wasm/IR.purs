@@ -214,6 +214,13 @@ type IRFunc =
 -- | functions and the nullary functions that top-level value bindings compile
 -- | to). ADR 0002's tier-2 runtime functions will join them once strings/arrays
 -- | arrive.
+-- |
+-- | `labels` is the program's record-label intern table — every record label as
+-- | its `(string, i32 id)` pair (ids dense from 0, the same ids baked into
+-- | `RProjLabel` / `RMkRecord`). Codegen emits it as the runtime `internStr`
+-- | resolver so `Record.Unsafe`'s string-keyed access (`unsafeGet`, …) can turn a
+-- | runtime label string — e.g. a `reflectSymbol` result — back into its id.
 type Program =
   { funcs :: Array IRFunc
+  , labels :: Array (Tuple String Int)
   }

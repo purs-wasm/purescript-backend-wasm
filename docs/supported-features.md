@@ -565,11 +565,17 @@ support; records add two more forms:
 - **Patterns** `\{ x } -> …` are a single always-matching destructure: each field
   sub-binder is bound to its `RProjLabel` of the scrutinee (no `Switch`).
 
-Not yet supported: the `Record.*` library's **dynamic-`String`-key** operations
-(`get`/`set`/`insert`/`delete` — they need a runtime string→label-id mapping, since
-labels are interned to `i32` ids at compile time), and **polymorphic update** of an
-open row (`copy` absent — the unknown extra fields need a runtime copy). Both are
-deferred to the `Prelude` / `Record`-module stage.
+`Record.Unsafe`'s **dynamic-`String`-key** operations (`unsafeGet` / `unsafeSet` /
+`unsafeHas` / `unsafeDelete`) are now supported. Labels are interned to `i32` ids at
+compile time, so a runtime `String` key (e.g. a `reflectSymbol` result) is bridged by
+the emitted **`internStr`** resolver — the program's label table as an `if strEq key
+"label" then <id> …` chain — after which the id-keyed helpers apply: `$rt.proj`
+(read) and `$rt.recHas` / `$rt.recSet` / `$rt.recDelete` (rebuild the sorted parallel
+id/value arrays). This is what the real `Eq` / `Show` / `Ord` instances for records
+run on (see `Prelude` support).
+
+Still deferred: **polymorphic update** of an open row (`r { x = v }` with `copy`
+absent — the unknown extra fields need a runtime copy).
 
 ## Host interface
 

@@ -1,0 +1,36 @@
+module Rec where
+
+import Prelude
+
+import Record.Unsafe (unsafeDelete, unsafeGet, unsafeHas, unsafeSet)
+
+-- foo / bar / baz all appear in record literals below, so their labels are
+-- interned and `internStr` can resolve them at runtime.
+type R3 = { bar :: Int, baz :: Int, foo :: Int }
+
+base :: R3
+base = { foo: 10, bar: 20, baz: 30 }
+
+two :: { bar :: Int, foo :: Int }
+two = { foo: 1, bar: 2 }
+
+getFoo :: Int
+getFoo = unsafeGet "foo" base -- 10
+
+getBaz :: Int
+getBaz = unsafeGet "baz" base -- 30
+
+setBar :: Int
+setBar = unsafeGet "bar" (unsafeSet "bar" 99 base :: R3) -- 99 (replace)
+
+insBaz :: Int
+insBaz = unsafeGet "baz" (unsafeSet "baz" 77 two :: R3) -- 77 (insert)
+
+hasFoo :: Int
+hasFoo = if unsafeHas "foo" base then 1 else 0 -- 1
+
+hasDeleted :: Int
+hasDeleted = if unsafeHas "bar" (unsafeDelete "bar" base :: { baz :: Int, foo :: Int }) then 1 else 0 -- 0
+
+hasKept :: Int
+hasKept = if unsafeHas "foo" (unsafeDelete "bar" base :: { baz :: Int, foo :: Int }) then 1 else 0 -- 1
