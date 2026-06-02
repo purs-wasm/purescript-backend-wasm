@@ -26,6 +26,7 @@ import PureScript.Backend.Wasm.Codegen (buildModule)
 import Data.Traversable (traverse)
 import PureScript.Backend.Wasm.Lower.IR (Program)
 import PureScript.Backend.Wasm.Lower (lowerModule, lowerModules)
+import PureScript.Backend.Wasm.MiddleEnd (optimizeModule)
 import PureScript.CoreFn (Module)
 import PureScript.CoreFn.FromJSON (decodeModule)
 
@@ -56,7 +57,7 @@ instantiateProgram program = do
 instantiateFixture :: String -> Effect Instance
 instantiateFixture path = do
   m <- decodeFixture path
-  case lowerModule m of
+  case lowerModule (optimizeModule m) of
     Left err -> throwException (error ("lowering failed: " <> show err))
     Right program -> instantiateProgram program
 
@@ -65,7 +66,8 @@ instantiateFixture path = do
 instantiateLinked :: Array (Array String) -> Array String -> Effect Instance
 instantiateLinked roots paths = do
   modules <- traverse decodeFixture paths
-  case lowerModules roots modules of
+  -- mirror the production pipeline: run the middle-end (incl. lambda lifting) before lowering
+  case lowerModules roots (map optimizeModule modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> instantiateProgram program
 

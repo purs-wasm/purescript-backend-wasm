@@ -50,7 +50,6 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
 import PureScript.Backend.Wasm.Lower.FreeVars (freeVars)
-import PureScript.Backend.Wasm.Lower.LambdaLift (lambdaLiftModule)
 import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
@@ -471,11 +470,8 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
 -- | unused — and possibly unsupported — instances are never visited); the roots'
 -- | own functions are exported, the rest are internal.
 lowerModules :: Array (Array String) -> Array Module -> Either LowerError Program
-lowerModules roots modules0 = do
+lowerModules roots modules = do
   let
-    -- Lift self-recursive local functions to top-level supercombinators first, so
-    -- their (tail) self-calls become direct calls eligible for `return_call`.
-    modules = map lambdaLiftModule modules0
     dictCtors = collectDictCtors modules
     info =
       { knownFuncs: collectFuncs dictCtors modules
