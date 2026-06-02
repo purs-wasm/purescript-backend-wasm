@@ -127,5 +127,21 @@ that changes per-function param/result reps via a whole-program fixpoint.
   the tag with `REnumTag` (`i31.get_s`, exactly the `Boolean` unbox) and `LitSwitch`es
   on it. This removes the per-comparison `Ordering` allocations that capped `sumLoop`
   (2.65→3.47×; fib 2.28→2.91×, qsort →1.67×, bintreeDfs →19.4×).
+- **Nullary constructor sharing (done):** a nullary constructor (`RMkData tag []`)
+  is a *constant* `$ADT` value — `(tag, empty fields)` — fully determined by its tag,
+  so every construction yields an identical, immutable heap object. Instead of a
+  `struct.new` per use, codegen allocates it **once as an immutable module global**
+  and reads it with `global.get` (`Codegen.addNullaryGlobals` emits a global per tag
+  actually constructed; `genRhs` routes empty-field `RMkData` to it). Sharing is keyed
+  **by tag**, not by source type, because the `$ADT` representation erases the type:
+  `Nothing`, `Nil`, `Leaf`, `QNil` are all `(0, [])` and runtime-indistinguishable, so
+  one global serves them all (the bench corpus collapses to a single `$global$0`,
+  read 7×, surviving the Binaryen optimizer). Enum-like types use `i31ref` and never
+  reach here. This needed two new Binaryen FFI calls (`addGlobal`/`globalGet`); the
+  GC proposal admits `struct.new` of constants in a global initializer. Removes the
+  per-construction allocation of constant constructors (the terminators of recursive
+  data — `Nil`/`Leaf`), a category of garbage that otherwise scales with data size;
+  the measured win is modest because non-nullary cells (`Cons`/`Node`) dominate
+  allocation, and the allocation-bound benchmarks are GC-noisy.
 - **B — front B field specialization:** type-directed `i32`/`f64` struct fields for
   concrete-scalar constructor/record fields, using externs types.

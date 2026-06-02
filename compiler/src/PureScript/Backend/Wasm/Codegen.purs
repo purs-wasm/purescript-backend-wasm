@@ -30,6 +30,8 @@ import Data.Array as Array
 import Data.Foldable (foldr, traverse_)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
+import Data.Set (Set)
+import Data.Set as Set
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -53,9 +55,45 @@ buildModule prog = do
   let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, sigs }
   importRuntime ctx
   addInternStr ctx prog.labels
+  addNullaryGlobals ctx (nullaryTags prog)
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx) prog.funcs
   pure mod
+
+-- | A nullary constructor (`RMkData tag []`) is a constant `$ADT` value — `(tag,
+-- | empty fields)` — fully determined by its tag, so every construction of it is
+-- | the same heap object. Rather than `struct.new` one per use, allocate it once
+-- | as an immutable module global and read it with `global.get`. Sharing is by
+-- | tag because the `$ADT` representation erases the source type: `Nothing` and
+-- | `Nil` are both `(0, [])` and indistinguishable at runtime. (Enum-like types
+-- | use `i31ref` tags instead and never reach here; ADR 0013.)
+nullaryGlobalName :: Int -> String
+nullaryGlobalName tag = "$nullary" <> show tag
+
+-- | The set of nullary-constructor tags actually constructed anywhere in the
+-- | program, so a shared global is emitted for exactly those (and no more).
+nullaryTags :: Program -> Set Int
+nullaryTags prog = foldr (\fn acc -> exprTags fn.body acc) Set.empty prog.funcs
+  where
+  exprTags expr acc = case expr of
+    Return _ -> acc
+    Let _ _ rhs k -> exprTags k (rhsTags rhs acc)
+    Switch _ branches dflt -> dfltTags dflt (foldr (\(Branch _ b) -> exprTags b) acc branches)
+    LitSwitch _ branches dflt -> dfltTags dflt (foldr (\(LitBranch _ b) -> exprTags b) acc branches)
+    LetRec _ k -> exprTags k acc
+  rhsTags rhs acc = case rhs of
+    RMkData tag fields | Array.null fields -> Set.insert tag acc
+    _ -> acc
+  dfltTags dflt acc = maybe acc (\k -> exprTags k acc) dflt
+
+addNullaryGlobals :: Ctx -> Set Int -> Effect Unit
+addNullaryGlobals ctx tags = traverse_ addOne (Set.toUnfoldable tags :: Array Int)
+  where
+  addOne tag = do
+    vals <- B.arrayNewFixed ctx.mod ctx.rt.valsHt []
+    tagE <- B.i32Const ctx.mod tag
+    initE <- B.structNew ctx.mod ctx.rt.adtHt [ tagE, vals ]
+    B.addGlobal ctx.mod (nullaryGlobalName tag) B.eqref false initE
 
 -- | Emit the `internStr` resolver: a `String` key → its interned `i32` label id,
 -- | as an `if (strEq key "label") then <id> else …` chain over the program's
@@ -285,11 +323,15 @@ genRhs ctx = case _ of
     let sig = fromMaybe { params: const Boxed <$> args, result: Boxed } (Map.lookup name ctx.sigs)
     operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)
     B.call ctx.mod (funcNameStr name) operands (repType ctx sig.result)
-  RMkData tag fields -> do
-    fieldEs <- traverse (genAtomAs ctx Boxed) fields
-    vals <- B.arrayNewFixed ctx.mod ctx.rt.valsHt fieldEs
-    tagE <- B.i32Const ctx.mod tag
-    B.structNew ctx.mod ctx.rt.adtHt [ tagE, vals ]
+  -- a nullary constructor is a shared module global (allocated once); a
+  -- constructor with fields allocates a fresh `$ADT` per construction
+  RMkData tag fields
+    | Array.null fields -> B.globalGet ctx.mod (nullaryGlobalName tag) B.eqref
+    | otherwise -> do
+        fieldEs <- traverse (genAtomAs ctx Boxed) fields
+        vals <- B.arrayNewFixed ctx.mod ctx.rt.valsHt fieldEs
+        tagE <- B.i32Const ctx.mod tag
+        B.structNew ctx.mod ctx.rt.adtHt [ tagE, vals ]
   -- an enum-like value is its tag as an allocation-free `i31ref`
   RMkEnum tag -> B.i32Const ctx.mod tag >>= B.i31New ctx.mod
   REnumTag atom -> genAtomAs ctx Boxed atom >>= unboxBoolExpr ctx
