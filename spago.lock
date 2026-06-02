@@ -1,6 +1,17 @@
 {
   "workspace": {
     "packages": {
+      "bench": {
+        "path": "bench",
+        "core": {
+          "dependencies": [
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "bin": {
         "path": "bin",
         "core": {

@@ -2,4 +2,5 @@ packages:
   - "./binaryen/**"
   - "./compiler/**"
   - "./bin/**"
+  - "./bench/**"
   - "./example/**"

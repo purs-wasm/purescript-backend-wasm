@@ -29,8 +29,9 @@
               purs-backend-es
               nodejs_24
               pnpm
+              gnuplot
               claude-code
-            ]; 
+            ];
           };
         }
     );
