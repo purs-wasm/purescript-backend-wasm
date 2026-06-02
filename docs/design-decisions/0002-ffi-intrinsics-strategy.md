@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-05-31
+- See also: [ADR 0012](0012-ulib-curated-package-ffi.md) — evolves tiers 2/3 (the
+  bundled-runtime / higher-order foreigns) into manifest-driven `ulib` FFI, keeping
+  tier 1 as the inline-intrinsics table.
 
 ## Context
 

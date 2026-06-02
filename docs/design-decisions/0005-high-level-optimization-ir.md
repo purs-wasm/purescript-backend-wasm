@@ -1,7 +1,9 @@
 # 0005. A high-level optimization IR
 
-- Status: Proposed
+- Status: Proposed (module layout + migration plan firmed up; the IR's *shape* is
+  still open — see Open questions)
 - Date: 2026-05-31
+- Revised: 2026-06-02
 
 ## Context
 
@@ -41,41 +43,114 @@ Binaryen's optimizer (`mod.optimize()`), so a thick low-level IR is low value.
 
 ## Decision (proposed)
 
-Introduce a **high-level optimization IR between CoreFn and the current
-lowering**, where the PureScript-level optimizations live: inlining, type-class
-dictionary specialization/elimination, dead-code elimination,
-case-of-known-constructor, and beta/simplification. The existing
-`AnfExpr`/`Lower`/`Codegen` stay as the low-level target; Binaryen remains the
-low-level optimizer. Representation optimizations that Binaryen cannot infer
-because it does not know our boxing semantics — unboxing of monomorphic `Int`,
-immediate (`i31`) nullary constructors, arity raising — are done as passes over
-the `Rep`-carrying `AnfExpr`, not a separate low-level IR.
+Introduce a **high-level optimization IR (the "middle IR", MIR) between CoreFn and
+the current lowering**, as a new `MiddleEnd` subsystem, where the PureScript-level
+optimizations live: inlining, type-class dictionary specialization/elimination,
+dead-code elimination, case-of-known-constructor, beta/simplification, and the
+**lambda lifting / supercombinator conversion** currently done as a CoreFn pre-pass
+(`Lower.LambdaLift`, added for tail-call elimination — its proper home is here). In
+the MIR, lambdas and dictionaries are still ordinary values (before closure
+conversion and boxing).
 
-Target pipeline:
+The existing `AnfExpr`/`Codegen` stay as the low-level target and Binaryen remains
+the low-level optimizer. Representation optimizations Binaryen cannot infer because
+it does not know our boxing semantics — unboxing of monomorphic `Int`, immediate
+(`i31`) nullary constructors, arity raising — are passes over the `Rep`-carrying
+`AnfExpr`, not a separate low-level IR.
+
+Target pipeline (three explicit phases):
 
 ```
 CoreFn
-  → [new] high-level optimization IR   (inlining, dictionary elimination, DCE, case-of-ctor, beta)
-  → AnfExpr (current)                  (closure conversion, eqref representation, decision trees;
-                                        optional Rep-level unboxing / immediate-enum passes)
-  → Binaryen → wasm                    (low-level optimization via optimize())
+  → Transl    → MIR        faithful, mechanical translation (no optimization)
+  → Optimize  → MIR        inlining · dictionary elimination · lambda lifting ·
+                           uncurrying · DCE · case-of-ctor · beta (driven to a fixpoint)
+  → Lower     → AnfExpr    closure conversion (RMkClosure/EnvField), eqref boxing,
+                           decision trees; optional Rep-level unboxing / immediate-enum
+  → Codegen → Binaryen → wasm    low-level optimization via optimize()
 ```
 
-This is an *additive* evolution of ADR 0003: the new layer is inserted before
-the existing lowering, which is unchanged.
+This restructures rather than purely extends the lowering: **`Lower` now consumes
+the MIR, not CoreFn.** The two halves of "handling functions with free variables"
+separate cleanly — *lambda lifting* (which functions become top-level
+supercombinators / direct calls) is an `Optimize` pass; *closure conversion*
+(making the captured environment explicit) stays in `Lower`. Decision-tree pattern
+compilation (`Lower.Match`) likewise stays in `Lower`.
+
+### Module layout
+
+A `PureScript.Backend.Wasm.MiddleEnd` subsystem (sibling of `Lower` / `Codegen`):
+
+```
+MiddleEnd/
+  IR / Types     the MIR representation (functions, applications, dictionaries,
+                 lambdas, case, let as ordinary high-level values)
+  Monad          the optimization monad: a fresh-name supply, accumulated
+                 top-level declarations, an analysis environment (known functions
+                 + arities, inlinable definitions, usage counts), a change flag
+  Transl         CoreFn → MIR — faithful, no optimization
+  Optimize       the pass driver: sequences / iterates the passes to a fixpoint
+  Optimize/
+    LambdaLifting   self-recursive (and known) local functions → top-level
+                    supercombinators (migrated from `Lower.LambdaLift`)
+    Inline, Uncurry, Dce, BetaReduce, CaseOfCtor, DictElim, …
+```
+
+`Optimize` is the orchestration (a pass pipeline), not a bare re-export aggregator;
+each `Optimize/*` module is a single-responsibility pass.
+
+## Migration plan
+
+Introduce the layer **behaviour-neutrally first**, then add optimizations
+incrementally, so the large refactor stays test-driven at each step:
+
+1. **Skeleton (no optimization).** Define the MIR + `Transl` (CoreFn → MIR) + a
+   `Lower` that consumes the MIR and reproduces today's output with **zero**
+   optimization passes. Whole suite green. This is the risky structural step, done
+   as a pure, behaviour-preserving refactor.
+2. **Migrate lambda lifting.** Reimplement the `Lower.LambdaLift` transform as
+   `Optimize/LambdaLifting` over the MIR; delete the CoreFn pre-pass. (The MIR —
+   uncurried, known-function-aware — should make it cleaner than wrestling raw
+   curried CoreFn.)
+3. **Add passes one at a time.** Starting with the headline **dictionary
+   elimination**, then inlining / uncurrying / DCE / case-of-ctor, each behind
+   tests and an output comparison.
+   - Reachability DCE (today `Lower.Collect`) splits into a coarse pre-`Transl`
+     filter (don't translate unreachable functions) and a finer `Optimize/Dce`.
+
+## Open questions
+
+The **shape of the MIR is not yet decided** — it is the central design question, to
+settle before step 1, because it governs how much the optimizations can do:
+
+- **Curried vs uncurried (arity-explicit).** Uncurrying makes saturation checks,
+  lambda lifting, and inlining far simpler (the current `Lower.LambdaLift` struggles
+  precisely because saturated self-calls are buried in a curried `call_ref` chain).
+- **Tree vs ANF / NbE.** A CoreFn-like tree is straightforward; a
+  normalization-by-evaluation core (à la `purescript-backend-optimizer`) is stronger
+  for inlining/specialization but more involved.
+- **How much dictionary structure is resolved in `Transl`** (e.g. to label-maps)
+  vs kept abstract for `Optimize/DictElim` to specialize.
+- The optimization monad's exact effects, and whether `Optimize` runs a fixed
+  schedule or a true fixpoint.
 
 ## Consequences
 
 - The big PureScript wins (especially dictionary elimination, which makes
   Prelude arithmetic compile to direct intrinsics and avoids runtime
   dictionary/closure overhead) become expressible.
-- Slice 3 (records + type-class dictionaries) is the natural trigger. To keep
-  correctness first, Slice 3 can run dictionaries *at runtime* (dictionaries as
-  records, methods as projections, recursive value groups ordered for
-  construction — see ADR 0008 for the precise story, since such groups can be
-  genuinely cyclic and "topologically sorted" is a simplification) with **no**
-  optimization IR; the high-level IR and dictionary elimination come afterwards,
-  on top of a working baseline.
+- The **runtime-dictionary baseline this layer builds on now exists**: records and
+  type-class dictionaries run at runtime (dictionaries as records, methods as
+  projections; recursive value groups per ADR 0008) and most of `Prelude` compiles
+  and runs without any optimization IR. So the layer is now the targeted next step,
+  on top of a working baseline, rather than a prerequisite for correctness.
+- **`Lower.LambdaLift` is the first inhabitant to migrate in.** It was added (as a
+  CoreFn pre-pass) for tail-call elimination — turning self-recursive local
+  functions into top-level supercombinators so their tail self-calls become direct
+  `return_call`s — but it is an optimization and belongs in `Optimize`.
+- `Lower` is reworked to consume the MIR (no longer CoreFn); closure conversion and
+  decision-tree compilation stay in it. This is a larger change than ADR 0003's
+  purely-additive framing implied, mitigated by the behaviour-neutral migration.
 - Adds a compilation stage and an IR to maintain, introduced to make
   PureScript-specific optimizations (above) expressible and justified by that
   payoff.

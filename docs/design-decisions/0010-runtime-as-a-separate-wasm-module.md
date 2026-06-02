@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-06-01
+- See also: [ADR 0012](0012-ulib-curated-package-ffi.md) — splits this single
+  runtime module into a runtime *core* plus per-package `ulib` foreign modules
+  (which reuse the singleton-type canonicalization established here).
 
 ## Context
 

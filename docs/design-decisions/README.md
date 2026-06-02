@@ -37,6 +37,9 @@ history.
 | 0007 | [Positional (tuple) type-class dictionary specialization](0007-positional-dictionary-specialization.md) | Proposed |
 | 0008 | [Constructing recursive type-class dictionary groups](0008-recursive-dictionary-groups.md) | Proposed |
 | 0009 | [Build and linking model: multi-module input, single-wasm output](0009-build-and-linking-model.md) | Proposed |
+| 0010 | [The shared runtime as a separate, hand-written wasm module](0010-runtime-as-a-separate-wasm-module.md) | Accepted |
+| 0011 | [Packaging, platform targets, and host imports](0011-packaging-platform-and-host-imports.md) | Proposed |
+| 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Proposed |
 
 ## Scope
 
