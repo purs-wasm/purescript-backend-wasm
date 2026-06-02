@@ -39,37 +39,49 @@ type Ctx =
   , inline :: Map String M.Expr -- inlinable top-level bindings, keyed by qualified name
   }
 
--- | Simplify an expression to a fixed point: rebuild it bottom-up (children first),
--- | then apply a top-level reduction; if one fires, re-simplify the result.
-simplifyExpr :: Ctx -> M.Expr -> M.Expr
-simplifyExpr ctx = go
-  where
-  go e = reduce (rebuild e)
+-- | A generous ceiling on simplification passes; dictionary elimination converges in
+-- | a handful, this only bounds pathological cases.
+maxPasses :: Int
+maxPasses = 1000
 
-  rebuild = case _ of
-    M.Lit lit -> M.Lit (mapLit go lit)
+-- | Simplify an expression to a fixed point. Each pass rebuilds the expression
+-- | bottom-up and applies one top-level reduction per node; passes repeat until the
+-- | expression stops changing, bounded by `maxPasses` so that even a pathological
+-- | (cyclic) inline set terminates with a partially-reduced — still correct — result.
+simplifyExpr :: Ctx -> M.Expr -> M.Expr
+simplifyExpr ctx = fixpoint maxPasses
+  where
+  fixpoint :: Int -> M.Expr -> M.Expr
+  fixpoint n e
+    | n <= 0 = e
+    | otherwise =
+        let
+          e' = pass e
+        in
+          if e' == e then e else fixpoint (n - 1) e'
+
+  pass e = let r = descend e in fromMaybe r (step r)
+
+  descend = case _ of
+    M.Lit lit -> M.Lit (mapLit pass lit)
     e@(M.Var _) -> e
     e@(M.Constructor _ _ _) -> e
-    M.Accessor l e -> M.Accessor l (go e)
-    M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
-    M.Abs ps b -> M.Abs ps (go b)
-    M.App f args -> M.App (go f) (map go args)
-    M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
-    M.Let bs body -> M.Let (map goBind bs) (go body)
+    M.Accessor l e -> M.Accessor l (pass e)
+    M.Update e cf kvs -> M.Update (pass e) cf (map (map pass) kvs)
+    M.Abs ps b -> M.Abs ps (pass b)
+    M.App f args -> M.App (pass f) (map pass args)
+    M.Case ss alts -> M.Case (map pass ss) (map passAlt alts)
+    M.Let bs body -> M.Let (map passBind bs) (pass body)
 
-  goAlt alt = alt
+  passAlt alt = alt
     { result = case alt.result of
-        Right e -> Right (go e)
-        Left gs -> Left (map (\g -> { guard: go g.guard, expression: go g.expression }) gs)
+        Right e -> Right (pass e)
+        Left gs -> Left (map (\g -> { guard: pass g.guard, expression: pass g.expression }) gs)
     }
 
-  goBind = case _ of
-    M.NonRec meta i e -> M.NonRec meta i (go e)
-    M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
-
-  reduce e = case step e of
-    Just e' -> go e'
-    Nothing -> e
+  passBind = case _ of
+    M.NonRec meta i e -> M.NonRec meta i (pass e)
+    M.Rec rs -> M.Rec (map (\r -> r { expr = pass r.expr }) rs)
 
   step = case _ of
     M.Var q
