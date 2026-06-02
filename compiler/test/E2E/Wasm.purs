@@ -57,7 +57,7 @@ instantiateProgram program = do
 instantiateFixture :: String -> Effect Instance
 instantiateFixture path = do
   m <- decodeFixture path
-  case lowerModule (optimizeModule m) of
+  case lowerModule true (optimizeModule m) of
     Left err -> throwException (error ("lowering failed: " <> show err))
     Right program -> instantiateProgram program
 
@@ -67,7 +67,7 @@ instantiateLinked :: Array (Array String) -> Array String -> Effect Instance
 instantiateLinked roots paths = do
   modules <- traverse decodeFixture paths
   -- mirror the production pipeline: run the whole-program middle-end before lowering
-  case lowerModules roots (optimizeProgram true modules) of
+  case lowerModules true roots (optimizeProgram true modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> instantiateProgram program
 

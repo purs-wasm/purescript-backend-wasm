@@ -28,15 +28,17 @@ import Prelude
 import Binaryen as B
 import Data.Array as Array
 import Data.Foldable (foldr, traverse_)
-import Data.Maybe (Maybe(..))
+import Data.Map as Map
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import PureScript.Backend.Wasm.Codegen.Imports (importRuntime, internStrName, projHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, buildRuntimeTypes, repType)
-import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtom, unboxBoolExpr, unboxIntAtom, unboxIntExpr, unboxNumExpr)
-import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Codegen.Value (atomRep, boxInt, coerce, genAtom, genAtomAs, slotRep, unboxBoolExpr, unboxIntExpr)
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.Reps (primRep)
 
 -- | Build a Binaryen module from the IR `Program`: enable GC, build the
 -- | runtime type group, add every function (`eqref` calling convention; lifted
@@ -47,7 +49,7 @@ buildModule prog = do
   mod <- B.createModule
   B.setFeaturesGC mod
   rt <- buildRuntimeTypes mod
-  let ctx = { mod, rt, params: [] }
+  let ctx = { mod, rt, params: [], localReps: [] }
   importRuntime ctx
   addInternStr ctx prog.labels
   traverse_ (addFunc ctx) prog.funcs
@@ -82,12 +84,36 @@ funcNameStr (FuncName n) = n
 -- | are all `eqref`. A code function added with `(ref $Clo, eqref) -> eqref`
 -- | matches `$Code`, so `call_ref` against it validates.
 addFunc :: Ctx -> IRFunc -> Effect Unit
-addFunc ctx fn = do
-  body <- genBody (ctx { params = fn.params }) fn.body
+addFunc ctx0 fn = do
+  let localReps = buildLocalReps fn
+  let ctx = ctx0 { params = fn.params, localReps = localReps }
+  body <- genBody ctx fn.body
   let params = B.createType (repType ctx <$> fn.params)
-  let varTypes = Array.replicate (fn.localCount - Array.length fn.params) B.eqref
+  -- `Let`-bound locals (the slots after the parameters) take their chosen rep
+  let varTypes = repType ctx <$> Array.drop (Array.length fn.params) localReps
   _ <- B.addFunction ctx.mod (funcNameStr fn.name) params B.eqref varTypes body
   pure unit
+
+-- | The representation of every local slot: a parameter takes its declared rep, a
+-- | `Let`-bound slot the rep on its binding, and a `LetRec` closure slot `Boxed`.
+buildLocalReps :: IRFunc -> Array Rep
+buildLocalReps fn = Array.mapWithIndex slotRepAt (Array.replicate fn.localCount unit)
+  where
+  letReps = Map.fromFoldable (collectSlotReps fn.body)
+  slotRepAt i _ = case Array.index fn.params i of
+    Just r -> r
+    Nothing -> fromMaybe Boxed (Map.lookup i letReps)
+
+collectSlotReps :: AnfExpr -> Array (Tuple Int Rep)
+collectSlotReps = case _ of
+  Return _ -> []
+  Let (Slot s) rep _ k -> Array.cons (Tuple s rep) (collectSlotReps k)
+  Switch _ branches dflt ->
+    (branches >>= \(Branch _ b) -> collectSlotReps b) <> maybe [] collectSlotReps dflt
+  LitSwitch _ branches dflt ->
+    (branches >>= \(LitBranch _ b) -> collectSlotReps b) <> maybe [] collectSlotReps dflt
+  LetRec recBinds k ->
+    map (\(RecBind (Slot s) _ _) -> Tuple s Boxed) recBinds <> collectSlotReps k
 
 -- | Add the host-facing `i32` wrapper for an exported function (never a code
 -- | function — those are not exported): box each `i32` argument, call the
@@ -112,7 +138,9 @@ genBody :: Ctx -> AnfExpr -> Effect B.Expression
 genBody ctx = go []
   where
   go statements = case _ of
-    Return atom -> seal statements =<< genAtom ctx atom
+    -- The function returns `eqref` (the calling convention is unchanged), so a
+    -- returned atom is coerced (boxed) to `Boxed`.
+    Return atom -> seal statements =<< genAtomAs ctx Boxed atom
     Switch scrutAtom branches dflt -> seal statements =<< genSwitch ctx scrutAtom branches dflt
     LitSwitch scrutAtom branches dflt -> seal statements =<< genLitSwitch ctx scrutAtom branches dflt
     -- A direct call whose result is immediately returned is a *tail* call: emit
@@ -121,10 +149,12 @@ genBody ctx = go []
     -- `return_call_ref` is not exposed by binaryen.js (see the TCE notes).
     Let (Slot index) _ (RCallKnown name args) (Return (AVar (Local (Slot retIndex))))
       | index == retIndex -> do
-          operands <- traverse (genAtom ctx) args
+          operands <- traverse (genAtomAs ctx Boxed) args
           seal statements =<< B.returnCall ctx.mod (funcNameStr name) operands B.eqref
+    -- Store the rhs into its slot, boxing/unboxing if the slot's chosen rep differs
+    -- from the rhs's natural rep.
     Let (Slot index) _ rhs k -> do
-      e <- genRhs ctx rhs
+      e <- genRhs ctx rhs >>= coerce ctx (rhsRep ctx rhs) (slotRep ctx index)
       stmt <- B.localSet ctx.mod index e
       go (Array.snoc statements stmt) k
     LetRec recBinds k -> do
@@ -156,7 +186,7 @@ allocRecClosure ctx groupSlots (RecBind (Slot slot) codeName env) = do
   where
   element atom
     | isGroupRef groupSlots atom = B.i32Const ctx.mod 0 >>= boxInt ctx
-    | otherwise = genAtom ctx atom
+    | otherwise = genAtomAs ctx Boxed atom
 
 -- | Back-patch a recursive closure's environment: for every slot that referred
 -- | to a sibling (now allocated), `array.set` the real closure into place.
@@ -170,7 +200,7 @@ patchRecClosure ctx groupSlots (RecBind (Slot slot) _ env) =
     clo <- B.localGet ctx.mod slot B.eqref >>= \c -> B.refCast ctx.mod c ctx.rt.refClo
     envArr <- B.structGet ctx.mod 1 clo ctx.rt.refVals false
     idx <- B.i32Const ctx.mod index
-    val <- genAtom ctx atom
+    val <- genAtomAs ctx Boxed atom
     B.arraySet ctx.mod envArr idx val
 
 -- | A `Switch` becomes a chain of `if (tag == k) <branch> else …`, ending in the
@@ -179,7 +209,7 @@ genSwitch :: Ctx -> Atom -> Array Branch -> Maybe AnfExpr -> Effect B.Expression
 genSwitch ctx scrutAtom branches dflt = chain branches
   where
   readTag = do
-    s <- genAtom ctx scrutAtom
+    s <- genAtomAs ctx Boxed scrutAtom
     c <- B.refCast ctx.mod s ctx.rt.refAdt
     B.structGet ctx.mod 0 c B.i32 false
   chain bs = case Array.uncons bs of
@@ -211,7 +241,7 @@ genLitSwitch ctx scrutAtom branches dflt = chain branches
       B.if_ ctx.mod cond thenE elseE
   litTest = case _ of
     PInt n -> do
-      s <- unboxIntAtom ctx scrutAtom
+      s <- genAtomAs ctx I32 scrutAtom
       k <- B.i32Const ctx.mod n
       B.i32Eq ctx.mod s k
     PBoolean b -> do
@@ -219,7 +249,7 @@ genLitSwitch ctx scrutAtom branches dflt = chain branches
       k <- B.i32Const ctx.mod (if b then 1 else 0)
       B.i32Eq ctx.mod s k
     PNumber n -> do
-      s <- genAtom ctx scrutAtom >>= unboxNumExpr ctx
+      s <- genAtomAs ctx F64 scrutAtom
       k <- B.f64Const ctx.mod n
       B.f64Eq ctx.mod s k
     -- the scrutinee equals the literal string iff the byte-equality helper says
@@ -229,20 +259,29 @@ genLitSwitch ctx scrutAtom branches dflt = chain branches
       lit <- genAtom ctx (ALitString str)
       B.call ctx.mod strEqHelperName [ s, lit ] B.i32
 
+-- | The natural representation a `Rhs` produces, so `genBody` can box / unbox it to
+-- | the bound slot. An atom keeps its own rep, an intrinsic its `primRep`; every
+-- | allocating / calling rhs yields an `eqref` (`Boxed`).
+rhsRep :: Ctx -> Rhs -> Rep
+rhsRep ctx = case _ of
+  RAtom atom -> atomRep ctx atom
+  RPrim intr _ -> primRep intr
+  _ -> Boxed
+
 genRhs :: Ctx -> Rhs -> Effect B.Expression
 genRhs ctx = case _ of
   RAtom atom -> genAtom ctx atom
   RPrim intr args -> genPrim ctx intr args
   RCallKnown name args -> do
-    operands <- traverse (genAtom ctx) args
+    operands <- traverse (genAtomAs ctx Boxed) args
     B.call ctx.mod (funcNameStr name) operands B.eqref
   RMkData tag fields -> do
-    fieldEs <- traverse (genAtom ctx) fields
+    fieldEs <- traverse (genAtomAs ctx Boxed) fields
     vals <- B.arrayNewFixed ctx.mod ctx.rt.valsHt fieldEs
     tagE <- B.i32Const ctx.mod tag
     B.structNew ctx.mod ctx.rt.adtHt [ tagE, vals ]
   RProjField adtAtom index -> do
-    a <- genAtom ctx adtAtom
+    a <- genAtomAs ctx Boxed adtAtom
     c <- B.refCast ctx.mod a ctx.rt.refAdt
     vals <- B.structGet ctx.mod 1 c ctx.rt.refVals false
     idx <- B.i32Const ctx.mod index
@@ -251,22 +290,22 @@ genRhs ctx = case _ of
   -- label-id / value arrays inside a `$Rec` struct (ADR 0001 / 0007).
   RMkRecord pairs -> do
     idEs <- traverse (\(Tuple labelId _) -> B.i32Const ctx.mod labelId) pairs
-    valEs <- traverse (\(Tuple _ valAtom) -> genAtom ctx valAtom) pairs
+    valEs <- traverse (\(Tuple _ valAtom) -> genAtomAs ctx Boxed valAtom) pairs
     idsArr <- B.arrayNewFixed ctx.mod ctx.rt.labelIdsHt idEs
     valsArr <- B.arrayNewFixed ctx.mod ctx.rt.valsHt valEs
     B.structNew ctx.mod ctx.rt.recHt [ idsArr, valsArr ]
   -- Projection is a runtime label-id search, delegated to the shared helper so
   -- the loop is emitted once (ADR 0007).
   RProjLabel recAtom labelId -> do
-    recE <- genAtom ctx recAtom
+    recE <- genAtomAs ctx Boxed recAtom
     idE <- B.i32Const ctx.mod labelId
     B.call ctx.mod projHelperName [ recE, idE ] B.eqref
   -- An array is the bare `$Vals` array (it is already an `eqref`).
   RMkArray elements -> do
-    elemEs <- traverse (genAtom ctx) elements
+    elemEs <- traverse (genAtomAs ctx Boxed) elements
     B.arrayNewFixed ctx.mod ctx.rt.valsHt elemEs
   RMkClosure codeName captures -> do
-    capEs <- traverse (genAtom ctx) captures
+    capEs <- traverse (genAtomAs ctx Boxed) captures
     envArr <- B.arrayNewFixed ctx.mod ctx.rt.valsHt capEs
     fref <- B.refFunc ctx.mod (funcNameStr codeName) ctx.rt.codeHt
     B.structNew ctx.mod ctx.rt.cloHt [ fref, envArr ]
@@ -274,9 +313,9 @@ genRhs ctx = case _ of
   -- `call_ref` with the closure itself plus the argument. (A multi-argument
   -- application is a chain of these, produced by the lowering.)
   RApply headAtom argAtom -> do
-    cloForCode <- genAtom ctx headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
+    cloForCode <- genAtomAs ctx Boxed headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
     fref <- B.structGet ctx.mod 0 cloForCode B.funcref false
     codeF <- B.refCast ctx.mod fref ctx.rt.refCode
-    cloOperand <- genAtom ctx headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
-    argE <- genAtom ctx argAtom
+    cloOperand <- genAtomAs ctx Boxed headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
+    argE <- genAtomAs ctx Boxed argAtom
     B.callRef ctx.mod codeF [ cloOperand, argE ] ctx.rt.codeHt

@@ -180,10 +180,10 @@ moduleNamed name decls =
 -- The lowering now consumes the MIR, so the test helpers translate their hand-built
 -- CoreFn to MIR first (without the optimization passes — these test lowering alone).
 lower :: Array CF.Bind -> Either LowerError Program
-lower decls = lowerModule (translModule (moduleNamed [ "T" ] decls))
+lower decls = lowerModule true (translModule (moduleNamed [ "T" ] decls))
 
 lowerMany :: Array (Array String) -> Array CF.Module -> Either LowerError Program
-lowerMany roots modules = lowerModules roots (map translModule modules)
+lowerMany roots modules = lowerModules true roots (map translModule modules)
 
 -- --- IR inspection helpers --------------------------------------------------
 

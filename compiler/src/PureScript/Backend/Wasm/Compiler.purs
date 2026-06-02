@@ -50,7 +50,7 @@ withCompiledModule
   -> Array ModuleName
   -> Array Module
   -> Effect (Either String a)
-withCompiledModule opts emit roots modules = case lowerModules roots (optimizeProgram opts.optimizeMir modules) of
+withCompiledModule opts emit roots modules = case lowerModules opts.optimizeMir roots (optimizeProgram opts.optimizeMir modules) of
   Left err -> pure (Left ("linking failed: " <> show err))
   Right program -> do
     mod <- buildModule program

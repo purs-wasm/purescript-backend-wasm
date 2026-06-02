@@ -44,7 +44,15 @@ type RuntimeTypes =
 -- | `params` is the representation of the function currently being generated,
 -- | so a `local.get` uses the slot's actual type (a code function's local 0 is
 -- | `(ref $Clo)`, not `eqref`).
-type Ctx = { mod :: B.Module, rt :: RuntimeTypes, params :: Array Rep }
+type Ctx =
+  { mod :: B.Module
+  , rt :: RuntimeTypes
+  , params :: Array Rep
+  -- | The representation of every local slot (parameters first, then `Let`-bound
+  -- | temporaries), so codegen can declare and read each local at its chosen wasm
+  -- | type and box/unbox only at representation boundaries.
+  , localReps :: Array Rep
+  }
 
 -- | Build the value type group (`$Vals` / `$Int` / `$ADT` / `$Clo`) and, in a
 -- | separate recursion group, the closure code signature `$Code`. `$Clo` holds

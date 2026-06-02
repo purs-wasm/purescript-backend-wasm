@@ -40,6 +40,7 @@ history.
 | 0010 | [The shared runtime as a separate, hand-written wasm module](0010-runtime-as-a-separate-wasm-module.md) | Accepted |
 | 0011 | [Packaging, platform targets, and host imports](0011-packaging-platform-and-host-imports.md) | Proposed |
 | 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Proposed |
+| 0013 | [Unboxing `Int` and `Number`](0013-int-number-unboxing.md) | Approved |
 
 ## Scope
 

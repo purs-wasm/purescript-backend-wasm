@@ -55,6 +55,7 @@ import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo, ModuleInfo, peelAbs, qualifiedFuncName, qualifiedKey, qualifiedKeyOf)
+import PureScript.Backend.Wasm.Lower.Unbox (assignReps)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (freeVars)
 import PureScript.Backend.Wasm.MiddleEnd.IR (Bind(..), Module)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
@@ -468,8 +469,8 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
 -- | `roots` modules are lowered (so a `Prelude` module's unused — and possibly
 -- | unsupported — instances are never visited); the roots' own functions are
 -- | exported, the rest are internal.
-lowerModules :: Array (Array String) -> Array Module -> Either LowerError Program
-lowerModules roots modules = do
+lowerModules :: Boolean -> Array (Array String) -> Array Module -> Either LowerError Program
+lowerModules optimize roots modules = do
   let
     dictCtors = collectDictCtors modules
     info =
@@ -491,9 +492,14 @@ lowerModules roots modules = do
   Tuple funcs st <- runStateT
     (traverse (\e -> lowerTopFunc info e.moduleName e.isRoot (Tuple e.ident e.expr)) toLower)
     { slot: 0, lifted: [], nextCode: 0 }
-  pure { funcs: funcs <> st.lifted, labels: Object.toUnfoldable info.labelIds }
+  let allFuncs = funcs <> st.lifted
+  -- representation analysis (ADR 0013): unbox `Int`/`Number` where it avoids boxing
+  pure
+    { funcs: if optimize then map assignReps allFuncs else allFuncs
+    , labels: Object.toUnfoldable info.labelIds
+    }
 
 -- | Lower a single MIR module to a backend IR `Program`, exporting its top-level
 -- | functions (the single-module case of `lowerModules`).
-lowerModule :: Module -> Either LowerError Program
-lowerModule m = lowerModules [ m.name ] [ m ]
+lowerModule :: Boolean -> Module -> Either LowerError Program
+lowerModule optimize m = lowerModules optimize [ m.name ] [ m ]
