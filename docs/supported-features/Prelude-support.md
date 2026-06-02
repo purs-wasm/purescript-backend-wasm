@@ -68,9 +68,8 @@ The newtype wrappers erase, so `Additive a <> Additive b` reduces straight throu
 the existing `Semigroup` / `Semiring` paths. Reaching this surfaced one new lowering
 capability: a binary operator that destructures *both* operands
 (`\(Additive a) (Additive b) -> …`) compiles to a **multi-scrutinee `case`**, which
-is now desugared into right-nested single-scrutinee `case`s (one per column),
-reusing the per-column lowering. (Multi-*alternative* multi-scrutinee matches still
-need real column-wise pattern compilation and remain unsupported.)
+the general decision-tree compiler (`Lower.Match`) now handles directly — including
+multi-*alternative* multi-scrutinee matches, nested patterns, and guards.
 
 **`Data.Show`** for every primitive type — `Int`, `Boolean`, `Char`, `String`,
 `Array`, and `Number`. The rendering work lives in `runtime.wat` (ADR 0010):
@@ -193,9 +192,8 @@ The newtype wrappers erase, so `Additive a <> Additive b` reduces straight throu
 the existing `Semigroup` / `Semiring` paths. Reaching this surfaced one new lowering
 capability: a binary operator that destructures *both* operands
 (`\(Additive a) (Additive b) -> …`) compiles to a **multi-scrutinee `case`**, which
-is now desugared into right-nested single-scrutinee `case`s (one per column),
-reusing the per-column lowering. (Multi-*alternative* multi-scrutinee matches still
-need real column-wise pattern compilation and remain unsupported.)
+the general decision-tree compiler (`Lower.Match`) now handles directly — including
+multi-*alternative* multi-scrutinee matches, nested patterns, and guards.
 
 **`Data.Show`** for every primitive type — `Int`, `Boolean`, `Char`, `String`,
 `Array`, and `Number`. The rendering work lives in `runtime.wat` (ADR 0010):

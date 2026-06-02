@@ -21,18 +21,17 @@ Key architectural decisions are recorded as ADRs under
 
 - [x] [Higher-order functions](./docs/supported-features.md#closures-and-higher-order-functions) with [full-support for partial/over application](./docs/supported-features.md#function-application-partial-and-over)
 - [x] [strings](./docs/supported-features.md#strings), [arrays](./docs/supported-features.md#arrays) and [records](./docs/supported-features.md#records)
-- [x] [ADT and simple pattern matching](./docs/supported-features.md#algebraic-data-types-and-single-scrutinee-pattern-matching) (single-scrutinee, no case guards)
+- [x] [ADT and pattern matching](./docs/supported-features.md#algebraic-data-types-and-pattern-matching)
 - [x] [Recursive let-bindings](./docs/supported-features.md#recursive-let-bindings)
 - [x] [Basic typeclass resolution](./docs/supported-features.md#typeclass-dictionaries-not-optimized) (no cyclic dependencies like `Effect`'s Functor/Applicative/Monad instances')
-- [ ] `Prelude` builtin support ... *WIP* 
-- [ ] Compiling genearal pattern matching (with multi-scrutinee with case guards) into efficient decision tree
+- [ ] `Prelude` builtin support ... *WIP*
 - [ ] User-defined FFI (beyond the built-in intrinsics table)
 - [ ] Special compiler support for `Effect` and `ST` monad
 - [ ] Optimizations: unboxing, arity raising / uncurrying, nominal record layout,
       unboxed/immediate enum constructors (OCaml-style constant constructors)
 - [ ] Multiple platform support (browser/node/native)
 
-# Example
+## Example
 
 ```purescript
 module Example.Fib where

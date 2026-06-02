@@ -6,7 +6,7 @@ not a design decision.
 
 - [Compilation model](#compilation-model-how-to-read-the-wat)
 - [Top-level functions](#top-level-functions)
-- [Algebraic data types and single-scrutinee pattern matching](#algebraic-data-types-and-single-scrutinee-pattern-matching)
+- [Algebraic data types and pattern matching](#algebraic-data-types-and-pattern-matching)
 - [Scalar literals and literal patterns](#scalar-literals-and-literal-patterns)
 - [Strings](#strings)
 - [Arrays](#arrays)
@@ -87,7 +87,7 @@ to a direct `call`. Full emitted WAT:
 
 So the host calls `five()` → `5`, `addN(2, 3)` → `5`.
 
-## Algebraic data types and single-scrutinee pattern matching
+## Algebraic data types and pattern matching
 
 ```purs
 data OptInt = None | Some Int
@@ -104,10 +104,19 @@ someOrElse n = orElse (Some n) 0
 A value of an ADT is `(struct tag fields)`: an `i32` **constructor tag**
 (assigned by declaration order — `None` = 0, `Some` = 1) plus a boxed-`eqref`
 **field array**. Construction is `struct.new` over an `array.new_fixed` of the
-fields. A single-scrutinee `case` lowers to a **decision tree**: an `if`/`else`
-chain that compares the scrutinee's tag against each constructor; a constructor
-binder reads the matched fields out of the array with `array.get`. The match is
-known to be exhaustive, so the final fall-through is `unreachable`.
+fields. A `case` lowers to a **decision tree** (`Lower.Match`). The example below
+is the simplest shape — one scrutinee, flat constructor alternatives — which
+becomes an `if`/`else` chain that compares the scrutinee's tag against each
+constructor; a constructor binder reads the matched fields out of the array with
+`array.get`. An exhaustive match's final fall-through is `unreachable`.
+
+The same compiler handles the general case: **several scrutinees at once**
+(`case x, y of …`), **nested** constructor / literal / **array** (`[]`, `[a, b]`)
+patterns, newtype erasure, and **guards** (a guarded alternative whose guards all
+fail falls through to the subsequent alternatives). It picks a column, switches on
+it with the fields projected into each branch, and recurses on the rest — see
+[`Prelude` support](supported-features/Prelude-support.md) for the details and the
+features this unlocks (derived `Eq`/`Ord`, `Generic` deriving).
 
 ```wat
 ;; types: $0 = (struct (field i32))                    boxed Int

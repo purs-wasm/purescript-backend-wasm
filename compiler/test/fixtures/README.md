@@ -43,6 +43,7 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Data.Show.Generic.corefn.json`  | (real Prelude) | `Test.E2E.PreludeGenericShowCompare` | `genericShow` + the `intercalate` foreign |
 | `Data.Symbol.corefn.json`        | (real Prelude) | `Test.E2E.PreludeGenericShowCompare` | the `reflectSymbol` class-method accessor |
 | `Type.Proxy.corefn.json`         | (real Prelude) | `Test.E2E.PreludeGenericShowCompare` | the `Proxy` value passed to `reflectSymbol` |
+| `Expr.corefn.json`    | `Expr.purs.sample`    | `Test.E2E.ExprEval`           | **integration** (mirrors `example/src/Main.purs`): an arithmetic-expression evaluator + pretty-printer — ADTs, nested decision-tree matching, a case guard, recursion, `show` / `<>` / `negate` / `+` / `*` / `>`. Links `Data.{Boolean,Eq,Ord,Ordering,Ring,Semigroup,Semiring,Show}` |
 
 `Data.Semiring` / `Data.Ring` / `Data.Eq` / `Data.Ord` / `Data.Ordering` are
 **real `purs`-compiled Prelude output** (copied verbatim from a build's

@@ -33,6 +33,7 @@ import Test.E2E.PreludeFnInstance as PreludeFnInstance
 import Test.E2E.PreludeGeneric as PreludeGeneric
 import Test.E2E.PreludeGenericShowCompare as PreludeGenericShowCompare
 import Test.E2E.PreludeGuards as PreludeGuards
+import Test.E2E.ExprEval as ExprEval
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -65,3 +66,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeGeneric.spec
   PreludeGenericShowCompare.spec
   PreludeGuards.spec
+  ExprEval.spec
