@@ -14,7 +14,7 @@ import PureScript.Backend.Wasm.MiddleEnd.Transl (translModule)
 import PureScript.CoreFn (Qualified(..))
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
-import Test.Unit.PureScript.Backend.Wasm.Lower.Common (appE, def, lam, letRec, lv, moduleNamed)
+import Test.Unit.PureScript.Backend.Wasm.Lower.Common (appE, def, lam, letRec, letRec2, lv, moduleNamed)
 
 spec :: Spec Unit
 spec = describe "PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift" do
@@ -35,3 +35,23 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift" do
               M.App (M.Var (Qualified (Just _) callee)) _ -> callee `shouldEqual` name
               _ -> fail "expected the lifted body to be a direct self-call"
       _ -> fail "expected a lifted top-level supercombinator first"
+
+  it "lifts a mutually-recursive group, capturing the shared free variable" do
+    -- h x = let rec f m = g x ; g m = f x in f x
+    -- both f and g capture `x`, so each lifts to `…$liftN x m = …` (x leading), and
+    -- their sibling references become direct top-level calls.
+    let
+      f = lam "m" (appE (lv "g") (lv "x"))
+      g = lam "m" (appE (lv "f") (lv "x"))
+      h = def "h" (lam "x" (letRec2 "f" f "g" g (appE (lv "f") (lv "x"))))
+      lifted = lambdaLiftModule (translModule (moduleNamed [ "T" ] [ h ]))
+    -- two lifted supercombinators are prepended before the original `h`
+    Array.length lifted.decls `shouldEqual` 3
+    let
+      isLifted = case _ of
+        M.NonRec _ name (M.Abs params _) | contains (Pattern "$lift") name -> Just params
+        _ -> Nothing
+      liftedParams = Array.mapMaybe isLifted lifted.decls
+    Array.length liftedParams `shouldEqual` 2
+    -- each takes the captured `x` first, then its own parameter `m`
+    Array.all (_ == [ "x", "m" ]) liftedParams `shouldEqual` true

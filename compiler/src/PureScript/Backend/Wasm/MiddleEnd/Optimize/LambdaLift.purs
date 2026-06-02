@@ -1,22 +1,26 @@
--- | An MIR optimization pass (ADR 0005): **lambda-lift self-recursive local
--- | functions** to top-level supercombinators. A `let`/`where`-bound function that
--- | recurses on itself (a single-binding `Rec` whose value is a lambda — the
--- | `where go a b = … go a' b'` loop idiom) is moved out to a fresh top-level
--- | binding whose parameters are its captured free variables followed by its own
--- | parameters; the reference becomes that top-level name partially applied to the
--- | captures.
+-- | An MIR optimization pass (ADR 0005): **lambda-lift recursive local functions**
+-- | to top-level supercombinators. A `let`/`where`-bound recursive function group —
+-- | either a single self-recursive `Rec` (`where go a b = … go a' b'`) or a
+-- | mutually-recursive `Rec` group (`where go … = tryCols … ; tryCols … = … go …`) —
+-- | is moved out to fresh top-level bindings whose parameters are the group's shared
+-- | captured free variables followed by each function's own parameters; every
+-- | reference (a sibling call or the outside use site) becomes that top-level name
+-- | partially applied to the captures.
 -- |
--- | Why: a local function's self-call goes through its closure (`call_ref`), which
--- | the `return_call`-based tail-call elimination cannot reach. After lifting, the
--- | saturated self-call is a direct call to a known top-level function, so a tail
--- | self-call is eliminated like any other — this makes `fib`'s `go` loop run in
--- | constant stack.
+-- | Why: a local function's self/sibling call goes through its closure (`call_ref`
+-- | with boxed arguments), which the `return_call`-based tail-call elimination cannot
+-- | reach and the per-function unboxed ABI cannot apply to. After lifting, the call
+-- | is a direct call to a known top-level function, so a tail call is eliminated like
+-- | any other and its `i32`/`f64` arguments stay unboxed — this is what makes both
+-- | `fib`'s `go` (single) and `nqueens`'s `go`/`tryCols`/`placeAt` (mutual) loops run
+-- | in constant stack with unboxed arguments.
 -- |
 -- | This is the MIR counterpart of the former CoreFn `Lower.LambdaLift` pre-pass;
 -- | the uncurried IR makes it simpler (a parameter list rather than peeling curried
 -- | `Abs`, a partial application as one `App` node rather than a fold).
 -- |
--- | Scope: only single-binding self-recursive `Rec` function bindings are lifted.
+-- | Scope: function `Rec` groups (every member a lambda). A non-function recursive
+-- | binding in a group leaves the whole group in place.
 module PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift
   ( lambdaLiftModule
   ) where
@@ -26,7 +30,7 @@ import Prelude
 import Control.Monad.State (State, gets, modify_, runState)
 import Data.Array as Array
 import Data.Either (Either(..))
-import Data.Foldable (foldl)
+import Data.Foldable (foldl, for_)
 import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
@@ -89,6 +93,13 @@ liftLet modName binds body = go [] [] binds
         | M.Abs params lambdaBody <- r.expr -> do
             sub <- liftSelfRecFn modName r.ident params lambdaBody
             go kept (Array.snoc subs sub) tail
+      -- a mutually-recursive group of functions (e.g. a `where` block's
+      -- `go`/`tryCols`/`safe`) — lift the whole group, sharing its captured frees
+      M.Rec rs
+        | Array.length rs > 1
+        , Just members <- traverse asAbsMember rs -> do
+            groupSubs <- liftMutualRecGroup modName members
+            go kept (subs <> groupSubs) tail
       other -> do
         other' <- liftBind modName other
         go (Array.snoc kept other') subs tail
@@ -113,6 +124,38 @@ liftSelfRecFn modName ident params body = do
   let lambda' = M.Abs (frees <> params) body'
   modify_ \s -> s { lifted = Array.snoc s.lifted (M.NonRec Nothing liftedIdent lambda') }
   pure (Tuple ident repl)
+
+type RecMember = { ident :: String, params :: Array String, body :: M.Expr }
+
+asAbsMember :: forall r. { ident :: String, expr :: M.Expr | r } -> Maybe RecMember
+asAbsMember r = case r.expr of
+  M.Abs params body -> Just { ident: r.ident, params, body }
+  _ -> Nothing
+
+-- | Lift a mutually-recursive group of local functions to top-level
+-- | supercombinators sharing one set of captured free variables: each member
+-- | becomes `identᵢ$liftN = \frees… paramsᵢ… -> bodyᵢ'`, every reference to a group
+-- | member (a sibling call or the outside use site) becomes that member's
+-- | supercombinator applied to the shared `frees`. The frees are the free variables
+-- | of the whole group minus the members' own names (a sibling reference is not a
+-- | capture — it is rewritten to a top-level call).
+liftMutualRecGroup :: ModuleName -> Array RecMember -> LiftM (Array Sub)
+liftMutualRecGroup modName members = do
+  let names = map _.ident members
+  let frees = Array.filter (\v -> not (Array.elem v names)) (Array.nub (members >>= \m -> freeVars m.params m.body))
+  n <- gets _.counter
+  modify_ \s -> s { counter = s.counter + 1 }
+  let
+    liftedName ident = ident <> "$lift" <> show n
+    replFor ident = mkApp (M.Var (Qualified (Just modName) (liftedName ident))) (map localVar frees)
+    subs = map (\ident -> Tuple ident (replFor ident)) names
+  for_ members \m -> do
+    -- rewrite sibling + self references to the lifted supercombinators, then lift
+    -- any nested locals in the (now parameter-captured) body
+    body' <- liftExpr modName (applySubs subs m.body)
+    let lambda' = M.Abs (frees <> m.params) body'
+    modify_ \s -> s { lifted = Array.snoc s.lifted (M.NonRec Nothing (liftedName m.ident) lambda') }
+  pure subs
 
 -- substitution ---------------------------------------------------------------
 
