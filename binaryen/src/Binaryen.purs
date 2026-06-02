@@ -29,6 +29,7 @@ module Binaryen
   , brWithValue
   , brIfWithValue
   , call
+  , returnCall
   , i32Add
   , i32Sub
   , i32Mul
@@ -204,6 +205,13 @@ foreign import callImpl :: Module -> String -> Array Expression -> Type -> Effec
 -- | Call the internal function `target` with `operands`, yielding `returnType`.
 call :: Module -> String -> Array Expression -> Type -> Effect Expression
 call = callImpl
+
+foreign import returnCallImpl :: Module -> String -> Array Expression -> Type -> Effect Expression
+
+-- | A *tail* call to `target` (`return_call`): the current frame is replaced, so a
+-- | tail-recursive chain runs in constant stack. Requires the `TailCall` feature.
+returnCall :: Module -> String -> Array Expression -> Type -> Effect Expression
+returnCall = returnCallImpl
 
 foreign import i32AddImpl :: Module -> Expression -> Expression -> Effect Expression
 

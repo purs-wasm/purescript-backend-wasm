@@ -54,6 +54,9 @@ export const brIfWithValueImpl = (mod) => (label) => (condition) => (value) => (
 export const callImpl = (mod) => (target) => (operands) => (returnType) => () =>
   mod.call(target, operands, returnType);
 
+export const returnCallImpl = (mod) => (target) => (operands) => (returnType) => () =>
+  mod.return_call(target, operands, returnType);
+
 export const i32AddImpl = (mod) => (left) => (right) => () =>
   mod.i32.add(left, right);
 
@@ -135,7 +138,9 @@ export const i31NewImpl = (mod) => (value) => () => mod.ref.i31(value);
 export const i31GetSImpl = (mod) => (value) => () => mod.i31.get_s(value);
 
 export const setFeaturesGC = (mod) => () => {
-  mod.setFeatures(binaryen.Features.GC | binaryen.Features.ReferenceTypes);
+  mod.setFeatures(
+    binaryen.Features.GC | binaryen.Features.ReferenceTypes | binaryen.Features.TailCall,
+  );
 };
 
 // Write an array of 32-bit values into a freshly malloc'd buffer; caller frees.
