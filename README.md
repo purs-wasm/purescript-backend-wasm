@@ -43,7 +43,16 @@ is better):
 
 The wasm build is fastest on every benchmark, and completes the deep-recursion
 `bintreeBfs` where both JS backends overflow the call stack (JavaScript has no
-tail-call elimination). Reproduce with `cd bench && npm run graph`.
+tail-call elimination). The margin is **widest on the allocation- and
+pattern-match-heavy benchmarks** (`bintreeDfs` / `bintreeBfs`, ~5–8×) rather than the
+arithmetic ones (`fib` ~1.6×): much of the win comes from the compact Wasm-GC value
+representation — tagged structs reclaimed by the host GC, versus JavaScript object
+allocation — as well as from the arithmetic unboxing.
+
+These benchmarks measure **steady-state throughput after warmup**: both the JS and
+the Wasm code are run long enough for V8 to tier up hot code before timing, so the
+results reflect optimized runtime performance rather than startup latency. Reproduce
+with `cd bench && npm run graph`.
 
 | | |
 |:---:|:---:|
