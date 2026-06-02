@@ -34,13 +34,22 @@ Key architectural decisions are recorded as ADRs under
 
 ## Benchmarks
 
-### Quicksort
+The **same PureScript source** compiled three ways and timed on one machine (lower
+is better):
 
-![qsort](bench/snapshots/latest/qsort.png)
+- **wasm** — this backend
+- **JS (purs backend)** — `purs`'s stock JavaScript output
+- **JS (with [purs-backend-es](https://github.com/aristanetworks/purescript-backend-optimizer))** — the optimizing JS backend
 
-### Fibonacci
+The wasm build is fastest on every benchmark, and completes the deep-recursion
+`bintreeBfs` where both JS backends overflow the call stack (JavaScript has no
+tail-call elimination). Reproduce with `cd bench && npm run graph`.
 
-![fib](bench/snapshots/latest/fib.png)
+| | |
+|:---:|:---:|
+| ![fib](bench/results/fib.png) | ![sumLoop](bench/results/sumLoop.png) |
+| ![qsort](bench/results/qsort.png) | ![nqueens](bench/results/nqueens.png) |
+| ![bintreeDfs](bench/results/bintreeDfs.png) | ![bintreeBfs](bench/results/bintreeBfs.png) |
 
 ## Example
 

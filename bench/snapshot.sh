@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Build the benchmarks, sweep each across its input sizes, and store the results
 # (JSON + one gnuplot PNG per benchmark: time vs input) in a timestamped
-# bench/snapshots/<datetime>/ directory, then repoint snapshots/latest at it (so
-# README and other docs can reference a stable path). Run inside `nix develop` so
-# spago / node / gnuplot are on PATH.
+# bench/snapshots/<datetime>/ directory — the dev workflow for tracking an
+# optimization against the `npm run base` baseline. (The README's published
+# comparison graphs are a separate committed artifact: `npm run graph`.) Run inside
+# `nix develop` so spago / node / gnuplot are on PATH.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 cd "$here/.."
@@ -22,8 +23,4 @@ for dat in "$dir"/*.dat; do
   gnuplot -e "datafile='$dat'; outfile='$dir/$bench.png'; name='$bench'; stamp='$stamp'" plot-one.gp
 done
 
-# point snapshots/latest at the new snapshot (relative target, so it is portable
-# and git-trackable). -n: don't descend into the existing symlink's directory.
-ln -sfn "$stamp" snapshots/latest
-
-echo "snapshot -> bench/$dir  (snapshots/latest now points here)"
+echo "snapshot -> bench/$dir"

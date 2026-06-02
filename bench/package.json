@@ -7,6 +7,7 @@
     "build:wasm:base": "cd .. && node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main --no-opt",
     "build": "npm run build:ps && npm run build:wasm",
     "base": "npm run build:ps && npm run build:wasm:base && node run.mjs",
-    "snapshot": "./snapshot.sh"
+    "snapshot": "./snapshot.sh",
+    "graph": "./graph.sh"
   }
 }
