@@ -57,6 +57,8 @@ module Binaryen
   , addFunction
   , addFunctionExport
   , addFunctionImport
+  , addGlobal
+  , globalGet
   , optimize
   , validate
   , emitText
@@ -504,6 +506,21 @@ foreign import addFunctionImportImpl :: Module -> String -> String -> String -> 
 -- | name is what the host (or a merged module) must supply.
 addFunctionImport :: Module -> String -> String -> String -> Type -> Type -> Effect Unit
 addFunctionImport = addFunctionImportImpl
+
+foreign import addGlobalImpl :: Module -> String -> Type -> Boolean -> Expression -> Effect Unit
+
+-- | Add a (possibly mutable) module global: `addGlobal mod name type mutable
+-- | init`. The init expression must be a constant expression — for our shared
+-- | nullary constructors that is a `struct.new` of constant operands, which the
+-- | GC proposal admits in global initializers.
+addGlobal :: Module -> String -> Type -> Boolean -> Expression -> Effect Unit
+addGlobal = addGlobalImpl
+
+foreign import globalGetImpl :: Module -> String -> Type -> Effect Expression
+
+-- | Read a module global: `globalGet mod name type`.
+globalGet :: Module -> String -> Type -> Effect Expression
+globalGet = globalGetImpl
 
 foreign import optimizeImpl :: Module -> Effect Unit
 
