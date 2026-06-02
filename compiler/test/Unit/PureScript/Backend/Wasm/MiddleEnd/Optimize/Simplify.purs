@@ -36,6 +36,7 @@ ctx =
   { newtypeCtors: Set.singleton "T.Eq$Dict"
   , dataCtors: Set.fromFoldable [ "T.A", "T.B" ]
   , inline: Map.singleton "T.Eq$Dict" (M.Abs [ "x" ] (loc "x"))
+  , instanceFields: Map.singleton "T.heytingBool" [ Tuple "disj" (tv "boolDisj") ]
   }
 
 spec :: Spec Unit
@@ -45,10 +46,24 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify" do
     simplifyExpr ctx (M.Accessor "eq" (M.Lit (LitObject [ Tuple "eq" (tv "impl") ])))
       `shouldEqual` tv "impl"
 
+  it "projects a method off a known plain-record instance by name" do
+    -- heytingBool.disj  →  boolDisj   (a bare-record instance, projected by name)
+    simplifyExpr ctx (M.Accessor "disj" (tv "heytingBool")) `shouldEqual` tv "boolDisj"
+
   it "beta-reduces an applied lambda" do
     -- (\x -> x)(impl)  →  impl
     simplifyExpr ctx (M.App (M.Abs [ "x" ] (loc "x")) [ tv "impl" ])
       `shouldEqual` tv "impl"
+
+  it "short-circuits the boolean OR operator into a case" do
+    -- boolDisj(a, b)  →  case a of true -> true ; _ -> b   (b evaluated only if needed)
+    let boolDisj = M.Var (Qualified (Just [ "Data", "HeytingAlgebra" ]) "boolDisj")
+    simplifyExpr ctx (M.App boolDisj [ tv "a", tv "b" ])
+      `shouldEqual`
+        M.Case [ tv "a" ]
+          [ { binders: [ LiteralBinder bann (LitBoolean true) ], result: Right (M.Lit (LitBoolean true)) }
+          , { binders: [ NullBinder bann ], result: Right (tv "b") }
+          ]
 
   it "unwraps a transparent dict constructor (identity) on the value side" do
     -- Eq$Dict(impl)  →  impl   (via inlining Eq$Dict = \x -> x, then beta)

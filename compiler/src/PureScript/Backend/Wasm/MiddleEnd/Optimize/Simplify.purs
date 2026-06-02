@@ -32,12 +32,18 @@ import Data.String (joinWith)
 import Data.Tuple (Tuple(..), snd)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (binderVars)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
-import PureScript.CoreFn (Binder(..), Literal(..), Qualified(..))
+import PureScript.CoreFn (Ann, Binder(..), Literal(..), Qualified(..))
 
 type Ctx =
   { newtypeCtors :: Set String -- transparent ctors: a value is its payload (newtype / dict)
   , dataCtors :: Set String -- rigid data ctors, matched by name in `case`
   , inline :: Map String M.Expr -- inlinable top-level bindings, keyed by qualified name
+  -- top-level bindings whose value is a record literal (a plain-record instance
+  -- dictionary, or any constant record), keyed by qualified name → its fields. A
+  -- method accessor on such a name (`heytingAlgebraBoolean.disj`) is projected to
+  -- the field directly, without materialising the whole record (so a record that
+  -- references itself through another field, like `implies`, never expands).
+  , instanceFields :: Map String (Array (Tuple String M.Expr))
   }
 
 -- | A generous ceiling on simplification passes; dictionary elimination converges in
@@ -89,6 +95,14 @@ simplifyExpr ctx = fixpoint maxPasses
       | Just key <- qkey q
       , Just body <- Map.lookup key ctx.inline -> Just body
     M.App (M.Abs ps b) args -> Just (betaApp ps b args)
+    -- short-circuit the boolean operators: `a || b` / `a && b` evaluate `b` only
+    -- when needed, matching PureScript/JS semantics (and saving work — e.g. the
+    -- three comparisons in nqueens' `safe` stop at the first that holds). The
+    -- `Boolean` `disj`/`conj` resolve to these foreign intrinsics, which the
+    -- backend would otherwise emit as the *strict* `i32.or` / `i32.and`.
+    M.App (M.Var q) [ a, b ]
+      | qkey q == Just boolDisjKey -> Just (boolCase a (M.Lit (LitBoolean true)) b)
+      | qkey q == Just boolConjKey -> Just (boolCase a b (M.Lit (LitBoolean false)))
     -- flatten curried application to the canonical n-ary form, so a partially
     -- applied function (e.g. `ordIntImpl(LT, EQ, GT)`) saturates once its remaining
     -- arguments arrive and is recognised as the intrinsic rather than a closure
@@ -107,6 +121,10 @@ simplifyExpr ctx = fixpoint maxPasses
     M.Let [ M.NonRec _ x e ] body
       | occurrences x body <= 1 -> Just (substMany (Map.singleton x e) body)
     M.Accessor l (M.Lit (LitObject kvs)) -> lookupField l kvs
+    -- project a method out of a known plain-record instance by name
+    M.Accessor l (M.Var q)
+      | Just key <- qkey q
+      , Just kvs <- Map.lookup key ctx.instanceFields -> lookupField l kvs
     M.Case [ scrut ] alts -> caseOfKnown ctx scrut alts
     _ -> Nothing
 
@@ -210,6 +228,27 @@ isNonRec :: M.Bind -> Boolean
 isNonRec = case _ of
   M.NonRec _ _ _ -> true
   M.Rec _ -> false
+
+-- the `Boolean` `HeytingAlgebra` operators, after dictionary resolution
+boolDisjKey :: String
+boolDisjKey = "Data.HeytingAlgebra.boolDisj"
+
+boolConjKey :: String
+boolConjKey = "Data.HeytingAlgebra.boolConj"
+
+-- | `case cond of true -> t ; _ -> f` — the control-flow form of a short-circuit
+-- | boolean operator, so the unchosen branch is never evaluated.
+boolCase :: M.Expr -> M.Expr -> M.Expr -> M.Expr
+boolCase cond t f =
+  M.Case [ cond ]
+    [ { binders: [ LiteralBinder zeroAnn (LitBoolean true) ], result: Right t }
+    , { binders: [ NullBinder zeroAnn ], result: Right f }
+    ]
+
+zeroAnn :: Ann
+zeroAnn = { span: { start: origin, end: origin }, meta: Nothing }
+  where
+  origin = { line: 0, column: 0 }
 
 -- | Count references to a local name `x`. Inner binders that shadow `x` are not
 -- | discounted, so this may *over*-count — which only ever suppresses an inline,

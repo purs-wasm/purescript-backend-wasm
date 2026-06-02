@@ -45,8 +45,20 @@ buildCtx modules =
   { newtypeCtors: ctors
   , dataCtors: Set.fromFoldable (modules >>= \m -> Array.mapMaybe (dataCtorName m.name) m.decls)
   , inline: Map.fromFoldable (coreInline <> helperInline)
+  -- collected from the raw decls (not `infos`), since a plain-record instance that
+  -- references itself through a field — `heytingAlgebraBoolean`'s `implies` calls
+  -- its own `disj` — is a self-recursive `Rec` binding that `infoOf` skips
+  , instanceFields: Map.fromFoldable (modules >>= \m -> m.decls >>= recordFieldsOf m.name)
   }
   where
+  recordFieldsOf modName = case _ of
+    M.NonRec _ ident (M.Lit (LitObject kvs)) -> [ Tuple (key modName ident) kvs ]
+    M.Rec rs -> Array.mapMaybe recRecord rs
+      where
+      recRecord r = case r.expr of
+        M.Lit (LitObject kvs) -> Just (Tuple (key modName r.ident) kvs)
+        _ -> Nothing
+    _ -> []
   ctors = Set.fromFoldable (modules >>= \m -> Array.mapMaybe (dictCtorName m.name) m.decls)
   infos = modules >>= \m -> Array.mapMaybe (infoOf ctors m.name) m.decls
 
