@@ -1,0 +1,105 @@
+name: Benchmark
+
+# Render the cross-backend benchmark graphs (wasm vs js-naive vs js-es) and the
+# CountState State-monad sweep, then (a) attach them as a downloadable artifact,
+# (b) write the comparison tables to the run summary, and (c) publish the graphs to
+# GitHub Pages so the README can embed the latest images. Snapshots/results are no
+# longer committed (see .gitignore) — this regenerates them on demand.
+#
+# Runs on pushes to main and on manual dispatch (not every branch/PR): CI-runner
+# timing is noisy, so this tracks the curves/ratios and stack-overflow behaviour
+# rather than authoritative absolute numbers.
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "README.md"
+      - "docs/**/*.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Needed by the Pages deploy job.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      # Same Nix toolchain as ci.yaml (flake.nix is the single source of truth).
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - uses: cachix/cachix-action@v17
+        with:
+          name: katsujukou-github
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+      - uses: nicknovitski/nix-develop@v1
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # The bench scripts shell out to `bin/index.dev.js`, which imports the compiled
+      # `output/Main` and merges `runtime/runtime.wasm`, so build both first.
+      - name: Build compiler and runtime
+        run: |
+          pnpm -F ./compiler run compile
+          pnpm -F ./compiler run build:runtime
+
+      # graph.sh builds all three backends + renders the 7 algorithm graphs;
+      # count-state-graph.sh adds the State-monad graph.
+      - name: Render benchmark graphs
+        working-directory: bench
+        run: |
+          bash ./graph.sh
+          bash ./count-state-graph.sh
+
+      - name: Comparison tables → run summary
+        working-directory: bench
+        run: |
+          {
+            echo "## Benchmark — wasm vs js-naive vs js-es"
+            echo
+            echo "_CI-runner timing is indicative (noisy neighbours); the ratios and the stack-overflow behaviour are the real signal._"
+            echo
+            echo '```'
+            node compare-js.mjs
+            echo '```'
+            echo "### CountState — State-monad sweep"
+            echo '```'
+            node count-state.mjs
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload graphs (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-graphs
+          path: bench/results/
+
+      - name: Package graphs for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: bench/results/
+
+  # Publish the graphs to GitHub Pages so the README can embed stable image URLs.
+  # Best-effort: this only succeeds once Pages is enabled for the repo
+  # (Settings → Pages → Build and deployment → Source: GitHub Actions). Until then it
+  # is allowed to fail without failing the whole run.
+  deploy-pages:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
