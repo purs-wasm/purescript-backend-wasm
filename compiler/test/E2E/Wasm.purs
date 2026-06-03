@@ -7,6 +7,7 @@ module Test.E2E.Wasm
   ( Instance
   , instantiateFixture
   , instantiateLinked
+  , instantiateForeign
   , callI32x0
   , callI32x1
   , callI32x2
@@ -22,14 +23,17 @@ import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
+import Foreign (Foreign)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import Data.Traversable (traverse)
+import PureScript.Backend.Wasm.Externs (foreignSigs)
 import PureScript.Backend.Wasm.Lower.IR (Program)
 import PureScript.Backend.Wasm.Lower (lowerModule, lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd (optimizeModule, optimizeProgram)
 import PureScript.CoreFn (Module)
 import PureScript.CoreFn.FromJSON (decodeModule)
+import PureScript.ExternsFile (ExternsFile)
 
 -- | Decode a `corefn.json` fixture, raising parse/decode failures.
 decodeFixture :: String -> Effect Module
@@ -68,9 +72,27 @@ instantiateLinked :: Array (Array String) -> Array String -> Effect Instance
 instantiateLinked roots paths = do
   modules <- traverse decodeFixture paths
   -- mirror the production pipeline: run the whole-program middle-end before lowering
-  case lowerModules true Object.empty roots (optimizeProgram true modules) of
+  case lowerModules true Object.empty Object.empty roots (optimizeProgram true modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> instantiateProgram program
+
+-- | Link fixtures whose foreigns are resolved from `externs` (ADR 0014), and
+-- | instantiate with `imports` supplying the resulting host imports (keyed by the
+-- | foreign's source module, e.g. `{ "Example.FFI": { addOne } }`).
+instantiateForeign :: Array ExternsFile -> Foreign -> Array (Array String) -> Array String -> Effect Instance
+instantiateForeign externs imports roots paths = do
+  modules <- traverse decodeFixture paths
+  case lowerModules true Object.empty (foreignSigs externs) roots (optimizeProgram true modules) of
+    Left err -> throwException (error ("linking failed: " <> show err))
+    Right program -> do
+      mod <- buildModule program
+      ok <- B.validate mod
+      when (not ok) do
+        wat <- B.emitText mod
+        throwException (error ("module failed validation:\n" <> wat))
+      binary <- B.emitBinary mod
+      B.dispose mod
+      instantiateWith binary imports
 
 -- | A live `WebAssembly.Instance`.
 foreign import data Instance :: Type
@@ -79,6 +101,9 @@ foreign import readFixture :: String -> Effect String
 
 -- | Synchronously compile and instantiate a wasm binary (no imports).
 foreign import instantiate :: Uint8Array -> Effect Instance
+
+-- | Instantiate with the runtime plus user host imports (the foreign impls).
+foreign import instantiateWith :: Uint8Array -> Foreign -> Effect Instance
 
 foreign import callI32x0 :: Instance -> String -> Effect Int
 foreign import callI32x1 :: Instance -> String -> Int -> Effect Int

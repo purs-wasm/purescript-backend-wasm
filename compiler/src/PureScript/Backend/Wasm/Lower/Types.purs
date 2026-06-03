@@ -18,7 +18,7 @@ import Prelude
 import Data.Maybe (Maybe(..))
 import Data.String (joinWith)
 import Foreign.Object (Object)
-import PureScript.Backend.Wasm.Lower.IR (FuncName(..), Rep)
+import PureScript.Backend.Wasm.Lower.IR (FuncName(..), ForeignImport, Rep)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn (Qualified(..))
 
@@ -53,6 +53,9 @@ type ModuleInfo =
   -- | `i31ref` tags rather than heap `$ADT` structs (ADR 0013).
   , enumCtors :: Object Unit
   , labelIds :: Object Int
+  -- | `foreign import`s that resolve to wasm host imports (ADR 0014), by qualified
+  -- | name → calling convention; from the externs (`Externs.foreignSigs`).
+  , foreignSigs :: Object ForeignImport
   }
 
 -- | The globally-unique key/name for a module-qualified top-level identifier:

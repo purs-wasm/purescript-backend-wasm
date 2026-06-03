@@ -51,7 +51,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic)
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
-import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), FuncName(..), IRFunc, Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
@@ -133,6 +133,11 @@ lowerArg env expr k = case expr of
     | Just (Tuple intr arity) <- foreignIntrinsic ident ->
         if arity == 0 then bindRhs (RPrim intr []) k
         else lowerArg env (etaExpand expr arity) k
+    -- a `foreign import` with no intrinsic: a wasm host import (ADR 0014). A nullary
+    -- foreign is a constant value, materialized directly; otherwise eta-expand.
+    | Just sig <- Object.lookup (qualifiedKeyOf q) env.foreignSigs ->
+        if Array.null sig.params then bindRhs (RCallForeign sig []) k
+        else lowerArg env (etaExpand expr (Array.length sig.params)) k
     | otherwise -> throw (UnsupportedExpr ("unapplied top-level reference: " <> qualifiedKeyOf q))
   M.Accessor label record -> lowerArg env record \recAtom -> do
     labelId <- internLabel env label
@@ -237,6 +242,9 @@ lowerApp env { head, args } k = case head of
         [] -> lowerArg env arg k
         _ -> lowerApp env { head: arg, args: tail } k
     | Just (Tuple intr arity) <- foreignIntrinsic ident -> applyArity arity (RPrim intr)
+    -- an applied `foreign import` (no intrinsic): a wasm host import (ADR 0014)
+    | Just sig <- Object.lookup (qualifiedKeyOf q) env.foreignSigs ->
+        applyArity (Array.length sig.params) (RCallForeign sig)
     | otherwise -> throw (UnsupportedExpr ("unknown callee: " <> qualifiedKeyOf q))
   _ ->
     lowerArg env head \fAtom ->
@@ -455,6 +463,7 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
       , dictCtors: info.dictCtors
       , enumCtors: info.enumCtors
       , labelIds: info.labelIds
+      , foreignSigs: info.foreignSigs
       }
   modify_ _ { slot = Array.length params }
   block <- lowerTail env body
@@ -474,8 +483,8 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
 -- | `roots` modules are lowered (so a `Prelude` module's unused — and possibly
 -- | unsupported — instances are never visited); the roots' own functions are
 -- | exported, the rest are internal.
-lowerModules :: Boolean -> Object (Array Rep) -> Array (Array String) -> Array Module -> Either LowerError Program
-lowerModules optimize fieldReps roots modules = do
+lowerModules :: Boolean -> Object (Array Rep) -> Object ForeignImport -> Array (Array String) -> Array Module -> Either LowerError Program
+lowerModules optimize fieldReps foreignSigs roots modules = do
   let
     dictCtors = collectDictCtors modules
     info =
@@ -484,6 +493,7 @@ lowerModules optimize fieldReps roots modules = do
       , dictCtors
       , enumCtors: collectEnumCtors modules
       , labelIds: collectLabels modules
+      , foreignSigs
       }
     entries = modules >>= \m ->
       let
@@ -508,4 +518,4 @@ lowerModules optimize fieldReps roots modules = do
 -- | Lower a single MIR module to a backend IR `Program`, exporting its top-level
 -- | functions (the single-module case of `lowerModules`).
 lowerModule :: Boolean -> Module -> Either LowerError Program
-lowerModule optimize m = lowerModules optimize Object.empty [ m.name ] [ m ]
+lowerModule optimize m = lowerModules optimize Object.empty Object.empty [ m.name ] [ m ]

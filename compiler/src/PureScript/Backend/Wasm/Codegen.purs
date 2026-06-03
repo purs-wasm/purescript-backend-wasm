@@ -33,6 +33,8 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
+import Foreign.Object (Object)
+import Foreign.Object as Object
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -41,7 +43,7 @@ import PureScript.Backend.Wasm.Codegen.Imports (importRuntime, internStrName, pr
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
 import PureScript.Backend.Wasm.Codegen.Value (atomRep, boxInt, coerce, genAtom, genAtomAs, slotRep, unboxBoolExpr)
-import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), ForeignImport, FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower.Reps (primRep)
 
 -- | Build a Binaryen module from the IR `Program`: enable GC, build the
@@ -57,6 +59,7 @@ buildModule prog = do
   let sigs = Map.fromFoldable (map (\fn -> Tuple fn.name { params: fn.params, result: fn.result }) prog.funcs)
   let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, sigs, dataBase: dataGroup.base, dataStructs: dataGroup.structs }
   importRuntime ctx
+  addForeignImports ctx prog
   addInternStr ctx prog.labels
   addNullaryGlobals ctx (nullaryTags prog)
   traverse_ (addFunc ctx) prog.funcs
@@ -94,6 +97,29 @@ nullaryTags = foldProgramRhs collect Set.empty
   collect rhs acc = case rhs of
     RMkData tag _ fields | Array.null fields -> Set.insert tag acc
     _ -> acc
+
+-- | Emit a wasm host import (ADR 0014) for each `foreign import` the program calls.
+-- | The import's `(module, name)` is the foreign's source module and identifier — a
+-- | JS (or wasm) loader satisfies it; its signature is the foreign's externs
+-- | calling convention.
+addForeignImports :: Ctx -> Program -> Effect Unit
+addForeignImports ctx prog = traverse_ addOne (Object.values (foreignImports prog))
+  where
+  addOne sig = B.addFunctionImport ctx.mod (foreignName sig) sig.moduleName sig.base
+    (B.createType (repType ctx <$> sig.params))
+    (repType ctx sig.result)
+
+-- | The foreigns the program calls (`RCallForeign`), deduplicated by internal name.
+foreignImports :: Program -> Object ForeignImport
+foreignImports = foldProgramRhs collect Object.empty
+  where
+  collect rhs acc = case rhs of
+    RCallForeign sig _ -> Object.insert (foreignName sig) sig acc
+    _ -> acc
+
+-- | The internal wasm name of a foreign import: its qualified `Module.ident`.
+foreignName :: ForeignImport -> String
+foreignName sig = sig.moduleName <> "." <> sig.base
 
 -- | Every constructor field-rep signature constructed or projected in the program,
 -- | so a `$Data_<sig>` struct type is generated for exactly those.
@@ -373,6 +399,7 @@ rhsRep ctx = case _ of
   RAtom atom -> atomRep ctx atom
   RPrim intr _ -> primRep intr
   RCallKnown name _ -> maybe Boxed _.result (Map.lookup name ctx.sigs)
+  RCallForeign sig _ -> sig.result
   REnumTag _ -> I32
   -- a projected field is produced at its struct-field rep (so an unboxed scalar
   -- field is not spuriously unboxed again into its slot)
@@ -387,6 +414,11 @@ genRhs ctx = case _ of
     let sig = fromMaybe { params: const Boxed <$> args, result: Boxed } (Map.lookup name ctx.sigs)
     operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)
     B.call ctx.mod (funcNameStr name) operands (repType ctx sig.result)
+  -- a host import (ADR 0014): coerce operands to the foreign's param reps, call its
+  -- import by internal name, read the result at the foreign's result rep
+  RCallForeign sig args -> do
+    operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)
+    B.call ctx.mod (foreignName sig) operands (repType ctx sig.result)
   -- a nullary constructor is a shared module global (allocated once); a
   -- constructor with fields is one `struct.new` of its `$Data_<sig>` type, each
   -- field coerced to its struct-field rep (so a concrete scalar stays unboxed)

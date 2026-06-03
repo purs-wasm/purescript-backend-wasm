@@ -52,7 +52,7 @@ Generalise ADR 0002's `ForeignProvider` seam from a single table into an ordered
 **resolution ladder**. For a `foreign import` identifier, the first provider that
 supplies it wins:
 
-```
+```text
 1. intrinsic table        (ADR 0002 — i32.add, boolDisj, …; native, inlined)
 2. wasm/wat foreign        (ulib/<Module>/ or a user foreign.{wasm,wat}; native, merged)
 3. JS foreign              (foreign.js — emitted as a host import + marshalling glue)

@@ -11,11 +11,12 @@ import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..))
+import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), FuncName(..), LitPat(..), RecBind(..), Rep(..), VarRef(..))
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
-import Test.Unit.PureScript.Backend.Wasm.Lower.Common (allRhs, ann, appE, blockAtoms, boolAlt, caseOf, closureCaptures, ctor, ctorAlt, def, dictCtorDecl, exportOf, exported, intAlt, isApply, isPrim, lam, letRec2, liftedFuncs, litInt, litObj, litStr, litSwitchOf, lower, lowerMany, lv, mkDataTags, newtypeCase, objUpdate, projLabelIds, qv, qvIn, recAlt, recordLabelIds, strAlt, switchOf, switchScrutinees, hasSwitch, accessor, varBinder, arrayLengths, callKnownArities, callKnownNames, letRecOf, case2, ctorBinder, alt2, nullBinder, wildAlt, moduleNamed)
+import Test.Unit.PureScript.Backend.Wasm.Lower.Common (allRhs, ann, appE, blockAtoms, boolAlt, caseOf, closureCaptures, ctor, ctorAlt, def, dictCtorDecl, exportOf, exported, intAlt, isApply, isCallForeign, isPrim, lam, letRec2, liftedFuncs, litInt, litObj, litStr, litSwitchOf, lower, lowerForeign, lowerMany, lv, mkDataTags, newtypeCase, objUpdate, projLabelIds, qv, qvIn, recAlt, recordLabelIds, strAlt, switchOf, switchScrutinees, hasSwitch, accessor, varBinder, arrayLengths, callKnownArities, callKnownNames, letRecOf, case2, ctorBinder, alt2, nullBinder, wildAlt, moduleNamed)
 
 -- A function with a capturing lambda applied immediately:
 -- `f a b = (\y -> intAdd a y) b`. The lambda captures `a`.
@@ -330,6 +331,29 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Right prog -> case exported "f" prog of
           Nothing -> fail "expected an exported function f"
           Just fn -> Array.any isPrim (allRhs fn.body) `shouldEqual` true
+
+    it "resolves a non-intrinsic foreign import to a host-import call" do
+      -- f = addOne 1   where Ext.addOne :: Int -> Int is a user foreign (ADR 0014)
+      let
+        f = def "f" (appE (qvIn "Ext" "addOne") (litInt 1))
+        sigs = Object.singleton "Ext.addOne" { moduleName: "Ext", base: "addOne", params: [ I32 ], result: I32 }
+      case lowerForeign sigs [ f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just fn -> Array.any isCallForeign (allRhs fn.body) `shouldEqual` true
+
+    it "resolves a nullary foreign import (a constant) to a host-import call" do
+      -- f = maxInt   where Ext.maxInt :: Int is a nullary foreign — the params-empty
+      -- branch materializes it directly rather than eta-expanding (ADR 0014)
+      let
+        f = def "f" (qvIn "Ext" "maxInt")
+        sigs = Object.singleton "Ext.maxInt" { moduleName: "Ext", base: "maxInt", params: [], result: I32 }
+      case lowerForeign sigs [ f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just fn -> Array.any isCallForeign (allRhs fn.body) `shouldEqual` true
 
     it "lowers an array literal to RMkArray over its elements" do
       -- f = [ 10, 20, 30 ]

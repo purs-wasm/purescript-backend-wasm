@@ -17,6 +17,12 @@ const runtime = () => {
 export const instantiate = (bytes) => () =>
   new WebAssembly.Instance(new WebAssembly.Module(bytes), { rt: runtime() });
 
+// Instantiate with the shared runtime plus user host imports (ADR 0014): the
+// generated module's `foreign import`s are satisfied from `userImports`, keyed by
+// the foreign's source module (e.g. { "Example.FFI": { addOne } }).
+export const instantiateWith = (bytes) => (userImports) => () =>
+  new WebAssembly.Instance(new WebAssembly.Module(bytes), { rt: runtime(), ...userImports });
+
 export const callI32x0 = (inst) => (name) => () => inst.exports[name]();
 
 export const callI32x1 = (inst) => (name) => (a) => () => inst.exports[name](a);

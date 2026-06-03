@@ -10,8 +10,9 @@ import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Tuple (Tuple(..))
+import Foreign.Object (Object)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), FuncName(..), IRFunc, LitBranch(..), LitPat, Program, RecBind(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), ForeignImport, FuncName(..), IRFunc, LitBranch(..), LitPat, Program, RecBind(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower (LowerError, lowerModule, lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translModule)
 import PureScript.CoreFn as CF
@@ -183,7 +184,13 @@ lower :: Array CF.Bind -> Either LowerError Program
 lower decls = lowerModule true (translModule (moduleNamed [ "T" ] decls))
 
 lowerMany :: Array (Array String) -> Array CF.Module -> Either LowerError Program
-lowerMany roots modules = lowerModules true Object.empty roots (map translModule modules)
+lowerMany roots modules = lowerModules true Object.empty Object.empty roots (map translModule modules)
+
+-- | Lower a single `T` module with a foreign-import signature table (ADR 0014): a
+-- | reference to a name in the table resolves to a host-import call
+-- | (`RCallForeign`) rather than `UnsupportedExpr`.
+lowerForeign :: Object ForeignImport -> Array CF.Bind -> Either LowerError Program
+lowerForeign foreigns decls = lowerModules true Object.empty foreigns [ [ "T" ] ] [ translModule (moduleNamed [ "T" ] decls) ]
 
 -- --- IR inspection helpers --------------------------------------------------
 
@@ -203,6 +210,7 @@ rhsAtoms = case _ of
   RAtom a -> [ a ]
   RPrim _ as -> as
   RCallKnown _ as -> as
+  RCallForeign _ as -> as
   RMkData _ _ as -> as
   RMkEnum _ -> []
   REnumTag a -> [ a ]
@@ -350,6 +358,11 @@ isApply = case _ of
 isPrim :: Rhs -> Boolean
 isPrim = case _ of
   RPrim _ _ -> true
+  _ -> false
+
+isCallForeign :: Rhs -> Boolean
+isCallForeign = case _ of
+  RCallForeign _ _ -> true
   _ -> false
 
 -- | An application of the closure's own parameter (local 0) — i.e. a recursive

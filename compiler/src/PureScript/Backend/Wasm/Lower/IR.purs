@@ -86,6 +86,11 @@ data Rhs
   = RAtom Atom
   | RPrim Intrinsic (Array Atom) -- inlined machine op over evaluated operands
   | RCallKnown FuncName (Array Atom) -- saturated direct call to a top-level function (ADR 0003 eval/apply)
+  -- | Saturated call to a `foreign import` that is neither an intrinsic nor a
+  -- | runtime helper — emitted as a wasm **host import** (ADR 0014). Carries the
+  -- | import's calling convention inline (`ForeignImport`); its internal wasm name
+  -- | is `moduleName <> "." <> base`.
+  | RCallForeign ForeignImport (Array Atom)
   -- | Allocate an ADT value: constructor `tag`, the wasm representation of each
   -- | field (its struct-field signature; ADR 0013 front B), and the field
   -- | initializers in field order. The value is one struct `$Data_<sig> = (sub
@@ -234,4 +239,14 @@ type IRFunc =
 type Program =
   { funcs :: Array IRFunc
   , labels :: Array (Tuple String Int)
+  }
+
+-- | A `foreign import` resolved to a wasm host import: its source module / base
+-- | name (the import's `(module, name)`) and its calling convention. Carried inline
+-- | by `RCallForeign`; structurally matches `Externs.ForeignSig`.
+type ForeignImport =
+  { moduleName :: String
+  , base :: String
+  , params :: Array Rep
+  , result :: Rep
   }

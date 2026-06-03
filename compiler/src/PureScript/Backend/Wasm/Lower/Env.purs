@@ -3,7 +3,7 @@ module PureScript.Backend.Wasm.Lower.Env where
 import Prelude
 
 import Foreign.Object (Object)
-import PureScript.Backend.Wasm.Lower.IR (Atom)
+import PureScript.Backend.Wasm.Lower.IR (Atom, ForeignImport)
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
 
 -- | The local environment plus the module facts. `locals` maps a CoreFn
@@ -18,4 +18,7 @@ type Env =
   -- | Constructors of enum-like types (all-nullary), represented as `i31ref` tags.
   , enumCtors :: Object Unit
   , labelIds :: Object Int
+  -- | `foreign import`s (by qualified name) that resolve to a wasm host import,
+  -- | with their calling convention (ADR 0014).
+  , foreignSigs :: Object ForeignImport
   }
