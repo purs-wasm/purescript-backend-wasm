@@ -15,6 +15,7 @@ import Prelude
 
 import Data.Array as Array
 import Data.Either (Either(..))
+import Data.Maybe (Maybe(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn as C
 
@@ -23,8 +24,34 @@ translModule m = { name: m.name, decls: map translBind m.decls }
 
 translBind :: C.Bind -> M.Bind
 translBind = case _ of
-  C.NonRec ann ident e -> M.NonRec ann.meta ident (translExpr e)
-  C.Rec rs -> M.Rec (map (\r -> { meta: r.ann.meta, ident: r.ident, expr: translExpr r.expr }) rs)
+  C.NonRec ann ident e -> M.NonRec (bindMeta ann.meta e) ident (translExpr e)
+  C.Rec rs -> M.Rec (map (\r -> { meta: bindMeta r.ann.meta r.expr, ident: r.ident, expr: translExpr r.expr }) rs)
+
+-- | The `Meta` to keep on a binding. A binding's own annotation carries it (e.g. a
+-- | type-class dictionary constructor's `IsTypeClassConstructor`); but a user
+-- | newtype constructor's `IsNewtype` sits on its *defining expression* (the
+-- | identity `\x -> x`), not the binding, so promote that one onto the binding when
+-- | the binding itself is unannotated — the simplifier needs it to treat the newtype
+-- | as transparent (ADR 0015).
+bindMeta :: Maybe C.Meta -> C.Expr -> Maybe C.Meta
+bindMeta bind e = case bind of
+  Just m -> Just m
+  Nothing -> case exprMeta e of
+    Just C.IsNewtype -> Just C.IsNewtype
+    _ -> Nothing
+
+-- | The `Meta` on an expression's own annotation (the first field of every node).
+exprMeta :: C.Expr -> Maybe C.Meta
+exprMeta = case _ of
+  C.Literal a _ -> a.meta
+  C.Var a _ -> a.meta
+  C.Constructor a _ _ _ -> a.meta
+  C.Accessor a _ _ -> a.meta
+  C.ObjectUpdate a _ _ _ -> a.meta
+  C.Abs a _ _ -> a.meta
+  C.App a _ _ -> a.meta
+  C.Case a _ _ -> a.meta
+  C.Let a _ _ -> a.meta
 
 translExpr :: C.Expr -> M.Expr
 translExpr expr = case expr of

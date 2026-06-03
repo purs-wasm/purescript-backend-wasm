@@ -14,9 +14,12 @@ module PureScript.Backend.Wasm.MiddleEnd
 import Prelude
 
 import Data.Array as Array
+import Data.Map as Map
 import Data.Maybe (fromMaybe)
+import Data.Set as Set
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline as Inline
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift (lambdaLiftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
@@ -51,7 +54,15 @@ optimizeProgram dictElim modules =
     | otherwise =
         let
           specialized = specializeProgram prog
-          prog' = map (DictElim.simplifyModule (DictElim.buildCtx specialized)) specialized
+          -- the dictionary-elimination context, augmented with general known-function
+          -- inlining (ordinary small / single-use, acyclic top-level bindings) and
+          -- user newtype transparency, all driving the same simplifier (ADR 0005)
+          base = DictElim.buildCtx specialized
+          ctx = base
+            { inline = Map.union base.inline (Inline.inlineCandidates specialized)
+            , newtypeCtors = Set.union base.newtypeCtors (Inline.newtypeCtorNames specialized)
+            }
+          prog' = map (DictElim.simplifyModule ctx) specialized
         in
           if prog' == prog then prog else fixpoint (n - 1) prog'
 

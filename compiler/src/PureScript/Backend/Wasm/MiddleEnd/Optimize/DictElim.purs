@@ -22,17 +22,15 @@ module PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim
 import Prelude
 
 import Data.Array as Array
-import Data.Either (Either(..))
-import Data.Foldable (sum)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), maybe)
 import Data.Set (Set)
 import Data.Set as Set
-import Data.String (joinWith)
-import Data.Tuple (Tuple(..), snd)
+import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (exprSize, key, qkey, references)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx, simplifyExpr)
-import PureScript.CoreFn (Binder(..), Literal(..), Meta(..), ModuleName, Qualified(..))
+import PureScript.CoreFn (Binder(..), Literal(LitObject), Meta(..), ModuleName, Qualified)
 
 -- | Bindings larger than this are never inlined (keeps code size bounded).
 inlineSizeCap :: Int
@@ -121,7 +119,7 @@ infoOf ctors modName = case _ of
   M.NonRec meta ident rhs ->
     let
       k = key modName ident
-      rs = qualKeys rhs
+      rs = references rhs
     in
       Just
         { key: k
@@ -176,53 +174,6 @@ dataCtorName modName = case _ of
   M.NonRec _ ident (M.Constructor _ _ _) -> Just (key modName ident)
   _ -> Nothing
 
--- size and references ---------------------------------------------------------
-
-exprSize :: M.Expr -> Int
-exprSize = case _ of
-  M.Lit lit -> 1 + sum (map exprSize (litExprs lit))
-  M.Var _ -> 1
-  M.Constructor _ _ _ -> 1
-  M.Accessor _ e -> 1 + exprSize e
-  M.Update e _ kvs -> 1 + exprSize e + sum (map (exprSize <<< snd) kvs)
-  M.Abs _ b -> 1 + exprSize b
-  M.App f args -> 1 + exprSize f + sum (map exprSize args)
-  M.Case scruts alts -> 1 + sum (map exprSize scruts) + sum (map altSize alts)
-  M.Let binds body -> 1 + sum (map bindSize binds) + exprSize body
-  where
-  altSize alt = case alt.result of
-    Right e -> exprSize e
-    Left gs -> sum (map (\g -> exprSize g.guard + exprSize g.expression) gs)
-  bindSize = case _ of
-    M.NonRec _ _ e -> exprSize e
-    M.Rec rs -> sum (map (exprSize <<< _.expr) rs)
-
--- | Every top-level (qualified) name an expression references.
-qualKeys :: M.Expr -> Array String
-qualKeys = case _ of
-  M.Var q -> maybe [] pure (qkey q)
-  M.Lit lit -> litExprs lit >>= qualKeys
-  M.Constructor _ _ _ -> []
-  M.Accessor _ e -> qualKeys e
-  M.Update e _ kvs -> qualKeys e <> (kvs >>= qualKeys <<< snd)
-  M.Abs _ b -> qualKeys b
-  M.App f args -> qualKeys f <> (args >>= qualKeys)
-  M.Case scruts alts -> (scruts >>= qualKeys) <> (alts >>= altExprs >>= qualKeys)
-  M.Let binds body -> (binds >>= bindExprs >>= qualKeys) <> qualKeys body
-  where
-  altExprs alt = case alt.result of
-    Right e -> [ e ]
-    Left gs -> gs >>= \g -> [ g.guard, g.expression ]
-  bindExprs = case _ of
-    M.NonRec _ _ e -> [ e ]
-    M.Rec rs -> map _.expr rs
-
-litExprs :: Literal M.Expr -> Array M.Expr
-litExprs = case _ of
-  LitArray es -> es
-  LitObject kvs -> map snd kvs
-  _ -> []
-
 -- keys ------------------------------------------------------------------------
 
 intersects :: Array String -> Set String -> Boolean
@@ -230,11 +181,3 @@ intersects refs s = Array.any (_ `Set.member` s) refs
 
 ctorMember :: Set String -> Qualified String -> Boolean
 ctorMember ctors q = maybe false (_ `Set.member` ctors) (qkey q)
-
-key :: ModuleName -> String -> String
-key modName ident = joinWith "." modName <> "." <> ident
-
-qkey :: Qualified String -> Maybe String
-qkey = case _ of
-  Qualified (Just m) n -> Just (joinWith "." m <> "." <> n)
-  Qualified Nothing _ -> Nothing
