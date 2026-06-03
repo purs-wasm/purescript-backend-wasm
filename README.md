@@ -47,7 +47,11 @@ tail-call elimination). The margin is **widest on the allocation- and
 pattern-match-heavy benchmarks** (`bintreeDfs` / `bintreeBfs`, ~5–8×) rather than the
 arithmetic ones (`fib` ~1.6×): much of the win comes from the compact Wasm-GC value
 representation — tagged structs reclaimed by the host GC, versus JavaScript object
-allocation — as well as from the arithmetic unboxing.
+allocation — as well as from the arithmetic unboxing. Higher-order code (`mapFold`,
+which maps and left-folds a **polymorphic** list with closures) also wins: the
+closures are specialized away into direct, non-allocating loops — even though a
+polymorphic list element stays boxed (so this is a fair fight, with no
+monomorphization advantage over JS's native numbers).
 
 These benchmarks measure **steady-state throughput after warmup**: both the JS and
 the Wasm code are run long enough for V8 to tier up hot code before timing, so the
@@ -59,6 +63,7 @@ with `cd bench && npm run graph`.
 | ![fib](bench/results/fib.png) | ![sumLoop](bench/results/sumLoop.png) |
 | ![qsort](bench/results/qsort.png) | ![nqueens](bench/results/nqueens.png) |
 | ![bintreeDfs](bench/results/bintreeDfs.png) | ![bintreeBfs](bench/results/bintreeBfs.png) |
+| ![mapFold](bench/results/mapFold.png) | |
 
 ## Example
 
