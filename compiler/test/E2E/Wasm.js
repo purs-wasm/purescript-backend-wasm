@@ -18,7 +18,7 @@ export const instantiate = (bytes) => () =>
   new WebAssembly.Instance(new WebAssembly.Module(bytes), { rt: runtime() });
 
 // The recursive FFI marshalling glue (ADR 0014), driven by an `encodeMarshalKind`
-// string (`i`/`f`/`s`/`o` leaves, `[` prefix per Array level). `E` is the wasm
+// string (`i`/`f`/`b`/`s`/`o` leaves). `E` is the wasm
 // instance/runtime exports providing the $Str/$Vals/$Int read & build primitives.
 const _enc = new TextEncoder();
 const _dec = new TextDecoder();
@@ -35,10 +35,12 @@ const strFromJs = (E, s) => {
   return ref;
 };
 // eqref (a boxed, nested value) → JS, by kind. `k` is a parsed kind: a string leaf
-// ("i"/"f"/"s"/"o"), {a:k} (array), or {r:{field:k}} (record).
+// ("i"/"f"/"b"/"s"/"o"), {a:k} (array), or {r:{field:k}} (record).
 export const eqrefToJs = (E, k, ref) => {
   if (typeof k === "string") {
     if (k === "i") return E.unboxInt(ref);
+    if (k === "f") return E.unboxNum(ref); // boxed $Num element/field
+    if (k === "b") return !!E.unboxBool(ref); // i31ref 0/1 → boolean
     if (k === "s") return strToJs(E, ref);
     return ref;
   }
@@ -59,6 +61,8 @@ export const eqrefToJs = (E, k, ref) => {
 export const eqrefFromJs = (E, k, val) => {
   if (typeof k === "string") {
     if (k === "i") return E.boxInt(val);
+    if (k === "f") return E.boxNum(val);
+    if (k === "b") return E.boxBool(val ? 1 : 0);
     if (k === "s") return strFromJs(E, val);
     return val;
   }

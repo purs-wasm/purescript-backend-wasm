@@ -254,14 +254,15 @@ type ForeignImport =
   }
 
 -- | How a value crosses the wasm↔JS FFI boundary (ADR 0014). It refines `Rep`:
--- | `MI32`/`MF64` are raw scalars that *are* a JS `number` (no marshalling); `MStr`
--- | is a `$Str` converted to/from a JS `string`; `MArray` is a `$Vals` array
--- | converted to/from a JS array, each element marshalled by the inner kind;
--- | `MOpaque` is any other `eqref` (passed through as a reference — e.g. records, not
--- | yet marshalled).
+-- | `MI32`/`MF64` are raw scalars that *are* a JS `number` (no marshalling); `MBool`
+-- | is an `i31ref` converted to/from a JS `boolean`; `MStr` is a `$Str` converted
+-- | to/from a JS `string`; `MArray` is a `$Vals` array converted to/from a JS array,
+-- | each element marshalled by the inner kind; `MRecord` a record ⇄ object; `MOpaque`
+-- | is any other `eqref` (passed through as a reference).
 data MarshalKind
   = MI32 -- Int, Char
   | MF64 -- Number
+  | MBool -- Boolean
   | MStr -- String
   | MArray MarshalKind -- Array a (elements marshalled by the inner kind)
   | MRecord (Array (Tuple String MarshalKind)) -- a record { l :: T … } (fields by name)
@@ -278,19 +279,23 @@ marshalRep :: MarshalKind -> Rep
 marshalRep = case _ of
   MI32 -> I32
   MF64 -> F64
+  -- a Boolean is always the boxed `i31ref` (never an unboxed `i32` — it reaches `i32`
+  -- only at condition sites via `unboxBoolExpr`), so it crosses as an `eqref`
+  MBool -> Boxed
   MStr -> Boxed
   MArray _ -> Boxed
   MRecord _ -> Boxed
   MOpaque -> Boxed
 
 -- | A JSON encoding of a `MarshalKind` for the JS marshalling glue (ADR 0014): the
--- | leaves are the strings `"i"`/`"f"`/`"s"`/`"o"`; an array is `{"a":<kind>}`; a
--- | record is `{"r":{<field>:<kind>,…}}`. The glue dispatches on `typeof`/`.a`/`.r`
+-- | leaves are the strings `"i"`/`"f"`/`"b"`/`"s"`/`"o"`; an array is `{"a":<kind>}`;
+-- | a record is `{"r":{<field>:<kind>,…}}`. The glue dispatches on `typeof`/`.a`/`.r`
 -- | and marshals recursively.
 encodeMarshalKind :: MarshalKind -> String
 encodeMarshalKind = case _ of
   MI32 -> "\"i\""
   MF64 -> "\"f\""
+  MBool -> "\"b\""
   MStr -> "\"s\""
   MArray k -> "{\"a\":" <> encodeMarshalKind k <> "}"
   MRecord fields -> "{\"r\":{" <> joinWith "," (map field fields) <> "}}"

@@ -86,8 +86,9 @@ foreignResult = case _ of
   t -> marshalKind t
 
 -- | The FFI marshal kind of a concrete type at the boundary: scalars cross as a JS
--- | `number` (`MI32`/`MF64`), `String` to/from a JS `string` (`MStr`), `Array a` to/
--- | from a JS array (`MArray`, recursing on the element), everything else opaque
+-- | `number` (`MI32`/`MF64`), `Boolean` to/from a JS `boolean` (`MBool`), `String`
+-- | to/from a JS `string` (`MStr`), `Array a` to/from a JS array (`MArray`, recursing
+-- | on the element), `Record` to/from a JS object (`MRecord`), everything else opaque
 -- | (`MOpaque`).
 marshalKind :: forall a. T.Type a -> MarshalKind
 marshalKind = case _ of
@@ -97,6 +98,7 @@ marshalKind = case _ of
   T.TypeConstructor _ (Qualified _ (ProperName n))
     | n == "Int" || n == "Char" -> MI32
     | n == "Number" -> MF64
+    | n == "Boolean" -> MBool
     | n == "String" -> MStr
   _ -> MOpaque
 

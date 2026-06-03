@@ -19,6 +19,7 @@
   (type $Rec (struct (field (ref $LabelIds)) (field (ref $Vals))))  ;; parallel labels / values
   (type $Str (struct (field (ref $Bytes))))
   (type $Int (struct (field i32)))                                  ;; boxed Int (also Char)
+  (type $Num (struct (field f64)))                                  ;; boxed Number (host marshals nested f64)
   (type $Clo (struct (field funcref) (field (ref $Vals))))          ;; closure: code + captured env
   (type $Code (func (param (ref $Clo) eqref) (result eqref)))       ;; lifted closure-body signature
 
@@ -198,6 +199,20 @@
     (struct.new $Int (local.get $n)))
   (func $unboxInt (export "unboxInt") (param $b eqref) (result i32)
     (struct.get $Int 0 (ref.cast (ref $Int) (local.get $b))))
+
+  ;; Box / unbox a $Num — the host marshals a boxed Number array element / record
+  ;; field to a JS number and back (a top-level Number crosses as a raw f64 instead).
+  (func $boxNum (export "boxNum") (param $n f64) (result eqref)
+    (struct.new $Num (local.get $n)))
+  (func $unboxNum (export "unboxNum") (param $b eqref) (result f64)
+    (struct.get $Num 0 (ref.cast (ref $Num) (local.get $b))))
+
+  ;; Box / unbox a Boolean — represented as an `i31ref` (true = 1, false = 0; ADR
+  ;; 0001), so the host marshals it to/from a JS boolean (both top-level and nested).
+  (func $boxBool (export "boxBool") (param $n i32) (result eqref)
+    (ref.i31 (local.get $n)))
+  (func $unboxBool (export "unboxBool") (param $b eqref) (result i32)
+    (i31.get_s (ref.cast i31ref (local.get $b))))
 
   ;; An empty record ($Rec): the host builds a record by `recSet`ting fields onto it
   ;; (keyed by interned label id). Read access reuses $rt.proj (ADR 0014).

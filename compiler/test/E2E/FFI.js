@@ -29,3 +29,13 @@ export const recImports = {
     mkPoint: (n) => ({ x: n, y: n + 1 }),
   },
 };
+
+// Raw JS for the Boolean / nested-Number fixture; the harness wraps these with
+// i31ref <-> boolean and boxed-$Num <-> number marshalling per the manifest.
+export const scalarImports = {
+  "Example.FFIScalar": {
+    notF: (b) => !b,
+    countPos: (xs) => xs.filter((x) => x > 0).length,
+    mkNums: (n) => [-2.0, 3.5, -1.0, n],
+  },
+};

@@ -24,6 +24,7 @@ foreign import addOneImports :: Foreign
 foreign import strImports :: Foreign
 foreign import arrImports :: Foreign
 foreign import recImports :: Foreign
+foreign import scalarImports :: Foreign
 
 decodeExterns :: String -> Aff (Either _ ExternsFile)
 decodeExterns path = do
@@ -94,3 +95,21 @@ spec = describe "Test.E2E.FFI (user foreign import, ADR 0014)" do
         liftEffect (callI32x1 inst "pointX" 5) >>= (_ `shouldEqual` 5)
         liftEffect (callI32x1 inst "pointY" 5) >>= (_ `shouldEqual` 6)
         liftEffect (callI32x1 inst "pointY" 0) >>= (_ `shouldEqual` 1)
+
+  it "marshals Boolean (i31ref <-> JS boolean) and nested Number ($Num <-> JS number)" do
+    decodeExterns "compiler/test/fixtures/Example.FFIScalar.externs.cbor" >>= case _ of
+      Left err -> fail (show err)
+      Right ef -> do
+        inst <- liftEffect
+          ( instantiateForeignStr [ ef ] scalarImports
+              [ [ "Example", "FFIScalar" ] ]
+              [ "compiler/test/fixtures/Example.FFIScalar.corefn.json" ]
+          )
+        -- Boolean both directions: notF true = false → 0, notF false = true → 1
+        liftEffect (callI32x1 inst "notTrue" 0) >>= (_ `shouldEqual` 0)
+        liftEffect (callI32x1 inst "notFalse" 0) >>= (_ `shouldEqual` 1)
+        -- nested f64 *input*: countPos [1.5, 0.0, 2.0] = 2 (the boundary 0.0 is excluded)
+        liftEffect (callI32x1 inst "countDirect" 0) >>= (_ `shouldEqual` 2)
+        -- nested f64 round-trip: mkNums n = [-2,3.5,-1,n] (JS-built), countPos counts > 0
+        liftEffect (callI32x1 inst "countRoundTrip" 5) >>= (_ `shouldEqual` 2)
+        liftEffect (callI32x1 inst "countRoundTrip" 0) >>= (_ `shouldEqual` 1)

@@ -273,11 +273,13 @@ const strFromJs = (s) => {
   for (let i = 0; i < b.length; i++) inst.exports.strSetByte(ref, i, b[i]);
   return ref;
 };
-// `k` is a parsed encodeMarshalKind value: a string leaf ("i"/"f"/"s"/"o"), {a:k}
+// `k` is a parsed encodeMarshalKind value: a string leaf ("i"/"f"/"b"/"s"/"o"), {a:k}
 // (array), or {r:{field:k}} (record). eqref (a boxed, nested value) → JS, by kind.
 const eqrefToJs = (k, ref) => {
   if (typeof k === "string") {
     if (k === "i") return inst.exports.unboxInt(ref);
+    if (k === "f") return inst.exports.unboxNum(ref);
+    if (k === "b") return !!inst.exports.unboxBool(ref);
     if (k === "s") return strToJs(ref);
     return ref;
   }
@@ -298,6 +300,8 @@ const eqrefToJs = (k, ref) => {
 const eqrefFromJs = (k, val) => {
   if (typeof k === "string") {
     if (k === "i") return inst.exports.boxInt(val);
+    if (k === "f") return inst.exports.boxNum(val);
+    if (k === "b") return inst.exports.boxBool(val ? 1 : 0);
     if (k === "s") return strFromJs(val);
     return val;
   }

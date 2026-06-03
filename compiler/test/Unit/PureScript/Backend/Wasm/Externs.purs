@@ -84,9 +84,14 @@ spec = describe "PureScript.Backend.Wasm.Externs (field reps)" do
         sig "toChar" [ MI32 ] MI32 -- Char is i32
         sig "shout" [ MStr ] MStr -- String is marshalled
         sig "identityF" [ MOpaque ] MOpaque -- forall peeled; a type var is opaque
-        sig "flag" [] MOpaque -- Boolean is not scalar-unboxed → opaque (nullary)
+        sig "flag" [] MBool -- Boolean ⇄ JS boolean (nullary)
+        sig "notF" [ MBool ] MBool -- Boolean both directions
         sig "sumArr" [ MArray MI32 ] MI32 -- Array Int → array of i32-marshalled elements
         sig "joinArr" [ MArray MStr ] MStr -- Array String → array of strings
         sig "nestedArr" [ MArray (MArray MI32) ] MI32 -- nested arrays recurse
+        sig "sumNums" [ MArray MF64 ] MF64 -- Array Number → array of f64 (boxed $Num) elements
+        sig "countTrue" [ MArray MBool ] MI32 -- Array Boolean → array of i31 booleans
         -- a record param: fields by name + kind, in the row's order
         sig "describe" [ MRecord [ Tuple "name" MStr, Tuple "age" MI32 ] ] MStr
+        -- a record mixing a Boolean and a Number field (each recurses to its own kind)
+        sig "summarise" [ MRecord [ Tuple "active" MBool, Tuple "ratio" MF64 ] ] MI32
