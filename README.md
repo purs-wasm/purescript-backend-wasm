@@ -19,25 +19,43 @@ Key architectural decisions are recorded as ADRs under
 
 ## WIP
 
+### PureScript language features
+
 - [x] [Higher-order functions](./docs/supported-features.md#closures-and-higher-order-functions) with [full-support for partial/over application](./docs/supported-features.md#function-application-partial-and-over)
 - [x] [strings](./docs/supported-features.md#strings), [arrays](./docs/supported-features.md#arrays) and [records](./docs/supported-features.md#records)
 - [x] [ADT and pattern matching](./docs/supported-features.md#algebraic-data-types-and-pattern-matching)
 - [x] [Recursive let-bindings](./docs/supported-features.md#recursive-let-bindings)
 - [x] [Basic typeclass resolution](./docs/supported-features.md#typeclass-dictionaries-not-optimized) (no cyclic dependencies like `Effect`'s Functor/Applicative/Monad instances')
-- [x] Builtin support for `Prelude`
-- [ ] Additional builtin support for curated packages (strings, arrays, records, etc)
-- [ ] User-defined FFI (beyond the built-in intrinsics table)
-- [ ] Special compiler support for `Effect` and `ST` monad
-- [ ] Optimizations: unboxing, arity raising / uncurrying, nominal record layout,
-      unboxed/immediate enum constructors (OCaml-style constant constructors)
+- [x] User-defined FFI (beyond the built-in intrinsics table)
+
+### Optimizations
+
+- [x] Scalar unboxing — `Int`/`Char` as `i32`, `Number` as `f64`, enum-like ADTs as `i31` tags (no heap box)
+- [x] ADT field unboxing
+- [x] Typeclass dictionary elimination
+- [x] Inlining of Known-function (small or single-use, cycle-free) with β-reduction
+- [x] record-accessor projection & case-of-known-constructor reduction
+- [x] Lambda lifting
+- [x] Higher-order specialization (static-argument transformation)
+- [x] Tail-call elimination
+- [x] Dead-code elimination
+- [ ] Effect reflection and impurification
+- [ ] Monomorphization
+
+Please refer to the [docs/optimizations.md](./docs/optimizations.md) for detailed explanation.
+
+### Other features
+
 - [ ] Multiple platform support (browser/node/native)
+
 
 ## TODO
 
 - [ ] Write a developer guide documentation which includes
   - runtime representations of PureScript values
-  - interop between JS<->WASM
+  - JS<->WASM interop: *How to send to and receive from wasm world?*
   - compilation pipeline overview
+  - optimizations in detail
 - [ ] Provide one-stop CLI for tryout (via Nix)
 
 ## Benchmarks
@@ -71,7 +89,7 @@ with `cd bench && npm run graph`.
 | ![fib](bench/results/fib.png) | ![sumLoop](bench/results/sumLoop.png) |
 | ![qsort](bench/results/qsort.png) | ![nqueens](bench/results/nqueens.png) |
 | ![bintreeDfs](bench/results/bintreeDfs.png) | ![bintreeBfs](bench/results/bintreeBfs.png) |
-| ![mapFold](bench/results/mapFold.png) | |
+| ![mapFold](bench/results/mapFold.png) | ![countState](bench/results/count-state.png)|
 
 ## Example
 
