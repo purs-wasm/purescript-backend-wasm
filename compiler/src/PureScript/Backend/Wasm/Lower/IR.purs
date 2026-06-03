@@ -242,11 +242,36 @@ type Program =
   }
 
 -- | A `foreign import` resolved to a wasm host import: its source module / base
--- | name (the import's `(module, name)`) and its calling convention. Carried inline
--- | by `RCallForeign`; structurally matches `Externs.ForeignSig`.
+-- | name (the import's `(module, name)`) and its calling convention as a
+-- | `MarshalKind` per parameter and result. Carried inline by `RCallForeign`;
+-- | structurally matches `Externs.ForeignSig`.
 type ForeignImport =
   { moduleName :: String
   , base :: String
-  , params :: Array Rep
-  , result :: Rep
+  , params :: Array MarshalKind
+  , result :: MarshalKind
   }
+
+-- | How a value crosses the wasm↔JS FFI boundary (ADR 0014). It refines `Rep`:
+-- | `MI32`/`MF64` are raw scalars that *are* a JS `number` (no marshalling); `MStr`
+-- | is a `$Str` that the loader converts to/from a JS `string`; `MOpaque` is any
+-- | other `eqref` (passed through as a reference — full marshalling is future work).
+data MarshalKind
+  = MI32 -- Int, Char
+  | MF64 -- Number
+  | MStr -- String
+  | MOpaque -- any other boxed value
+
+derive instance eqMarshalKind :: Eq MarshalKind
+derive instance genericMarshalKind :: Generic MarshalKind _
+instance showMarshalKind :: Show MarshalKind where
+  show = genericShow
+
+-- | The wasm representation a `MarshalKind` lowers to: scalars stay raw, everything
+-- | else is the boxed `eqref`.
+marshalRep :: MarshalKind -> Rep
+marshalRep = case _ of
+  MI32 -> I32
+  MF64 -> F64
+  MStr -> Boxed
+  MOpaque -> Boxed

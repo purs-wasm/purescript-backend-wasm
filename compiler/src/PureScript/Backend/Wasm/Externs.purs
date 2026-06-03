@@ -18,7 +18,7 @@ import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Lower.IR (Rep(..))
+import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), Rep(..))
 import PureScript.ExternsFile (ExternsDeclaration(..), ExternsFile(..))
 import PureScript.ExternsFile.Names (Ident(..), ModuleName(..), ProperName(..), Qualified(..), QualifiedBy(..))
 import PureScript.ExternsFile.Types as T
@@ -47,8 +47,8 @@ ctorFieldReps externs = Object.fromFoldable (externs >>= declsOf)
 type ForeignSig =
   { moduleName :: String
   , base :: String
-  , params :: Array Rep
-  , result :: Rep
+  , params :: Array MarshalKind
+  , result :: MarshalKind
   }
 
 -- | Every top-level value's externs signature, keyed by qualified name
@@ -69,23 +69,34 @@ foreignSigs externs = Object.fromFoldable (externs >>= declsOf)
 -- | dictionary argument (a boxed `eqref`); each function arrow contributes its
 -- | argument's scalar rep. So `forall a. Show a => a -> String` has params
 -- | `[Boxed (the Show dict), Boxed (a)]`.
-foreignParams :: forall a. T.Type a -> Array Rep
+foreignParams :: forall a. T.Type a -> Array MarshalKind
 foreignParams = case _ of
   T.ForAll _ _ _ _ t _ -> foreignParams t
-  T.ConstrainedType _ _ t -> Array.cons Boxed (foreignParams t)
+  T.ConstrainedType _ _ t -> Array.cons MOpaque (foreignParams t)
   T.TypeApp _ (T.TypeApp _ (T.TypeConstructor _ fn) arg) rest
-    | isFunction fn -> Array.cons (scalarRep arg) (foreignParams rest)
+    | isFunction fn -> Array.cons (marshalKind arg) (foreignParams rest)
   _ -> []
 
--- | The rep of a foreign's result — the type left after the quantifiers,
+-- | The marshal kind of a foreign's result — the type left after the quantifiers,
 -- | constraints, and argument arrows.
-foreignResult :: forall a. T.Type a -> Rep
+foreignResult :: forall a. T.Type a -> MarshalKind
 foreignResult = case _ of
   T.ForAll _ _ _ _ t _ -> foreignResult t
   T.ConstrainedType _ _ t -> foreignResult t
   T.TypeApp _ (T.TypeApp _ (T.TypeConstructor _ fn) _) rest
     | isFunction fn -> foreignResult rest
-  t -> scalarRep t
+  t -> marshalKind t
+
+-- | The FFI marshal kind of a concrete type at the boundary: scalars cross as a JS
+-- | `number` (`MI32`/`MF64`), `String` is marshalled to/from a JS `string` (`MStr`),
+-- | everything else is an opaque reference (`MOpaque`).
+marshalKind :: forall a. T.Type a -> MarshalKind
+marshalKind = case _ of
+  T.TypeConstructor _ (Qualified _ (ProperName n))
+    | n == "Int" || n == "Char" -> MI32
+    | n == "Number" -> MF64
+    | n == "String" -> MStr
+  _ -> MOpaque
 
 -- | The argument types of a curried function type, in order. A constructor's
 -- | externs type is `field0 -> field1 -> … -> T`, encoded as nested `TypeApp`s of

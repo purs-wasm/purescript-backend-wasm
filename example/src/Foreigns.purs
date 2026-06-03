@@ -12,6 +12,7 @@ foreign import maxInt :: Int
 foreign import toChar :: Int -> Char
 foreign import identityF :: forall a. a -> a
 foreign import flag :: Boolean
+foreign import shout :: String -> String
 
 -- a constrained (non-foreign) value: exercises ConstrainedType in sig extraction
 -- (purs forbids constraints on `foreign import`s themselves)

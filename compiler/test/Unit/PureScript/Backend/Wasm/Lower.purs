@@ -12,7 +12,7 @@ import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Lower.IR (Atom(..), FuncName(..), LitPat(..), RecBind(..), Rep(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), FuncName(..), LitPat(..), MarshalKind(..), RecBind(..), Rep(..), VarRef(..))
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
@@ -336,7 +336,7 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
       -- f = addOne 1   where Ext.addOne :: Int -> Int is a user foreign (ADR 0014)
       let
         f = def "f" (appE (qvIn "Ext" "addOne") (litInt 1))
-        sigs = Object.singleton "Ext.addOne" { moduleName: "Ext", base: "addOne", params: [ I32 ], result: I32 }
+        sigs = Object.singleton "Ext.addOne" { moduleName: "Ext", base: "addOne", params: [ MI32 ], result: MI32 }
       case lowerForeign sigs [ f ] of
         Left err -> fail (show err)
         Right prog -> case exported "f" prog of
@@ -348,7 +348,7 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
       -- branch materializes it directly rather than eta-expanding (ADR 0014)
       let
         f = def "f" (qvIn "Ext" "maxInt")
-        sigs = Object.singleton "Ext.maxInt" { moduleName: "Ext", base: "maxInt", params: [], result: I32 }
+        sigs = Object.singleton "Ext.maxInt" { moduleName: "Ext", base: "maxInt", params: [], result: MI32 }
       case lowerForeign sigs [ f ] of
         Left err -> fail (show err)
         Right prog -> case exported "f" prog of

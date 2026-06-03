@@ -4,3 +4,4 @@ export const maxInt = 2147483647;
 export const toChar = (n) => n;
 export const identityF = (x) => x;
 export const flag = true;
+export const shout = (s) => s.toUpperCase();

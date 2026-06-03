@@ -30,7 +30,7 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Tuple (Tuple(..))
-import PureScript.Backend.Wasm.Lower.IR (AnfExpr(..), Atom(..), Branch(..), FuncName, IRFunc, LitBranch(..), LitPat(..), RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.IR (AnfExpr(..), Atom(..), Branch(..), FuncName, IRFunc, LitBranch(..), LitPat(..), RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..), marshalRep)
 import PureScript.Backend.Wasm.Lower.Reps (primOperandReps, primRep)
 
 -- type lattice ----------------------------------------------------------------
@@ -137,7 +137,7 @@ assignProgramReps funcs = map (rewriteFunc sigs) funcs
     RAtom (ALitInt _) -> Ti32
     RAtom (ALitNumber _) -> Tf64
     RCallKnown name _ -> maybe Bx _.result (Map.lookup name s)
-    RCallForeign sig _ -> tyOfRep sig.result
+    RCallForeign sig _ -> tyOfRep (marshalRep sig.result)
     REnumTag _ -> Ti32
     -- a projected field is produced at the constructor's struct-field rep
     RProjField _ sig idx -> tyOfRep (fromMaybe Boxed (Array.index sig idx))
@@ -250,7 +250,7 @@ producerRep sigs = case _ of
   RAtom (ALitInt _) -> I32
   RAtom (ALitNumber _) -> F64
   RCallKnown name _ -> maybe Boxed (repOfTy <<< _.result) (Map.lookup name sigs)
-  RCallForeign sig _ -> sig.result
+  RCallForeign sig _ -> marshalRep sig.result
   REnumTag _ -> I32
   RProjField _ sig idx -> fromMaybe Boxed (Array.index sig idx)
   _ -> Boxed
@@ -285,7 +285,7 @@ rhsDemands sigs acc = case _ of
   RCallKnown name args ->
     foldlWithIndex (\i a at -> demand (calleeParamRep sigs name i) at a) acc args
   RCallForeign sig args ->
-    foldlWithIndex (\i a at -> demand (fromMaybe Boxed (Array.index sig.params i)) at a) acc args
+    foldlWithIndex (\i a at -> demand (maybe Boxed marshalRep (Array.index sig.params i)) at a) acc args
   RMkData _ sig fields -> foldlWithIndex (\i a at -> demand (fromMaybe Boxed (Array.index sig i)) at a) acc fields
   RMkEnum _ -> acc
   REnumTag at -> demand Boxed at acc

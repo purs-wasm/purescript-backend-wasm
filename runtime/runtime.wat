@@ -162,6 +162,14 @@
   (func $strByteAt (export "strByteAt") (param $s eqref) (param $i i32) (result i32)
     (array.get $Bytes (struct.get $Str 0 (ref.cast (ref $Str) (local.get $s))) (local.get $i)))
 
+  ;; Build access to a $Str from the host (ADR 0014, FFI string marshalling): JS
+  ;; cannot allocate GC structs, so it makes a zeroed $Str of `len` UTF-8 bytes with
+  ;; strNew, fills it byte by byte with strSetByte, and hands the result to wasm.
+  (func $strNew (export "strNew") (param $len i32) (result eqref)
+    (struct.new $Str (array.new $Bytes (i32.const 0) (local.get $len))))
+  (func $strSetByte (export "strSetByte") (param $s eqref) (param $i i32) (param $b i32)
+    (array.set $Bytes (struct.get $Str 0 (ref.cast (ref $Str) (local.get $s))) (local.get $i) (local.get $b)))
+
   ;; $rt.strCmp(a, b) -> i32 (-1 / 0 / 1): lexicographic byte comparison. On UTF-8
   ;; bytes this is code-point order (UTF-8 preserves it); it diverges from JS's
   ;; UTF-16 order only for strings mixing astral characters with U+E000..U+FFFF

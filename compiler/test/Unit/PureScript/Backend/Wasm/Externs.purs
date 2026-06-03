@@ -15,7 +15,7 @@ import Foreign.Object as Object
 import Node.Cbor (decodeFirst)
 import Node.FS.Sync (readFile)
 import PureScript.Backend.Wasm.Externs (ctorFieldReps, foreignSigs)
-import PureScript.Backend.Wasm.Lower.IR (Rep(..))
+import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), Rep(..))
 import PureScript.ExternsFile (ExternsFile)
 import PureScript.ExternsFile.Decoder.Class (decoder)
 import PureScript.ExternsFile.Decoder.Monad (runDecoder)
@@ -53,22 +53,22 @@ spec = describe "PureScript.Backend.Wasm.Externs (field reps)" do
         -- `fib :: Int -> Int` → an `i32`-in, `i32`-out host-import signature (the
         -- same extraction a scalar `foreign import` uses; ADR 0014)
         Object.lookup "Bench.Main.fib" (foreignSigs [ ef ])
-          `shouldEqual` Just { moduleName: "Bench.Main", base: "fib", params: [ I32 ], result: I32 }
+          `shouldEqual` Just { moduleName: "Bench.Main", base: "fib", params: [ MI32 ], result: MI32 }
 
   it "boxes a polymorphic / non-scalar signature (peeling forall, multi-arg)" do
     decodeExterns "compiler/test/fixtures/Data.Maybe.externs.cbor" >>= case _ of
       Left err -> fail err
       Right ef ->
         -- `fromMaybe :: forall a. a -> Maybe a -> a` → after peeling the `forall`,
-        -- two boxed params (`a`, `Maybe a`) and a boxed result (nothing is a
-        -- concrete scalar, so nothing unboxes)
+        -- two opaque params (`a`, `Maybe a`) and an opaque result (nothing is a
+        -- concrete scalar/String, so nothing unboxes or marshals)
         Object.lookup "Data.Maybe.fromMaybe" (foreignSigs [ ef ])
-          `shouldEqual` Just { moduleName: "Data.Maybe", base: "fromMaybe", params: [ Boxed, Boxed ], result: Boxed }
+          `shouldEqual` Just { moduleName: "Data.Maybe", base: "fromMaybe", params: [ MOpaque, MOpaque ], result: MOpaque }
 
   -- Edge cases the manual `example/FFI` run never exercises: mixed scalar reps and
-  -- their order, nullary constants, `Char` vs `Int`, type variables, `Boolean`
-  -- (not scalar-unboxed), and a constraint (a leading dictionary param).
-  it "extracts diverse calling conventions (mixed / nullary / Char / poly / Boolean / constraint)" do
+  -- their order, nullary constants, `Char` vs `Int`, `String` (marshalled), type
+  -- variables, `Boolean` (opaque), and a constraint (a leading dictionary param).
+  it "extracts diverse calling conventions (mixed / nullary / Char / String / poly / Boolean / constraint)" do
     decodeExterns "compiler/test/fixtures/Example.Foreigns.externs.cbor" >>= case _ of
       Left err -> fail err
       Right ef -> do
@@ -76,10 +76,11 @@ spec = describe "PureScript.Backend.Wasm.Externs (field reps)" do
           sigs = foreignSigs [ ef ]
           sig n params result = Object.lookup ("Example.Foreigns." <> n) sigs
             `shouldEqual` Just { moduleName: "Example.Foreigns", base: n, params, result }
-        sig "addOne" [ I32 ] I32 -- scalar i32
-        sig "scale" [ I32, F64 ] F64 -- mixed reps, in order (Int -> Number -> Number)
-        sig "maxInt" [] I32 -- nullary constant
-        sig "toChar" [ I32 ] I32 -- Char is i32
-        sig "identityF" [ Boxed ] Boxed -- forall peeled; a type var is boxed
-        sig "flag" [] Boxed -- Boolean is not scalar-unboxed → boxed (nullary)
-        sig "showIt" [ Boxed, Boxed ] Boxed -- constraint = a leading boxed dict param
+        sig "addOne" [ MI32 ] MI32 -- scalar i32
+        sig "scale" [ MI32, MF64 ] MF64 -- mixed reps, in order (Int -> Number -> Number)
+        sig "maxInt" [] MI32 -- nullary constant
+        sig "toChar" [ MI32 ] MI32 -- Char is i32
+        sig "shout" [ MStr ] MStr -- String is marshalled
+        sig "identityF" [ MOpaque ] MOpaque -- forall peeled; a type var is opaque
+        sig "flag" [] MOpaque -- Boolean is not scalar-unboxed → opaque (nullary)
+        sig "showIt" [ MOpaque, MOpaque ] MStr -- constraint = leading opaque dict param; result String marshalled
