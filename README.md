@@ -25,8 +25,8 @@ Key architectural decisions are recorded as ADRs under
 - [x] [strings](./docs/supported-features.md#strings), [arrays](./docs/supported-features.md#arrays) and [records](./docs/supported-features.md#records)
 - [x] [ADT and pattern matching](./docs/supported-features.md#algebraic-data-types-and-pattern-matching)
 - [x] [Recursive let-bindings](./docs/supported-features.md#recursive-let-bindings)
-- [x] [Basic typeclass resolution](./docs/supported-features.md#typeclass-dictionaries-not-optimized) (no cyclic dependencies like `Effect`'s Functor/Applicative/Monad instances')
-- [x] User-defined FFI (beyond the built-in intrinsics table)
+- [x] [Basic typeclass resolution](./docs/supported-features.md#typeclass-dictionaries) (no cyclic dependencies like `Effect`'s Functor/Applicative/Monad instances')
+- [x] [User-defined FFI](./docs/supported-features.md#foreign-function-interface)
 
 ### Optimizations
 
@@ -51,11 +51,6 @@ Please refer to the [docs/optimizations.md](./docs/optimizations.md) for detaile
 
 ## TODO
 
-- [ ] Write a developer guide documentation which includes
-  - runtime representations of PureScript values
-  - JS<->WASM interop: *How to send to and receive from wasm world?*
-  - compilation pipeline overview
-  - optimizations in detail
 - [ ] Provide one-stop CLI for tryout (via Nix)
 
 ## Benchmarks
