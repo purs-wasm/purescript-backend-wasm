@@ -32,6 +32,14 @@ Key architectural decisions are recorded as ADRs under
       unboxed/immediate enum constructors (OCaml-style constant constructors)
 - [ ] Multiple platform support (browser/node/native)
 
+## TODO
+
+- [ ] Write a developer guide documentation which includes
+  - runtime representations of PureScript values
+  - interop between JS<->WASM
+  - compilation pipeline overview
+- [ ] Provide one-stop CLI for tryout (via Nix)
+
 ## Benchmarks
 
 The **same PureScript source** compiled three ways and timed on one machine (lower

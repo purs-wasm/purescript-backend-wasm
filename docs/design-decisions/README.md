@@ -41,6 +41,7 @@ history.
 | 0011 | [Packaging, platform targets, and host imports](0011-packaging-platform-and-host-imports.md) | Proposed |
 | 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Proposed |
 | 0013 | [Unboxing `Int` and `Number`](0013-int-number-unboxing.md) | Approved |
+| 0014 | [User FFI: a foreign-provider ladder and the JS marshalling boundary](0014-user-ffi-resolution-and-marshalling.md) | Proposed |
 
 ## Scope
 
