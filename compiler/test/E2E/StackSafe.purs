@@ -21,8 +21,8 @@ spec =
   describe "Stack safety (e2e): a deep State-monad loop must run in constant stack"
     $ before
         ( liftEffect
-            ( instantiateLinked [ [ "StackSafe" ] ]
-                [ "compiler/test/fixtures/StackSafe.corefn.json"
+            ( instantiateLinked [ [ "CountState" ] ]
+                [ "compiler/test/fixtures/CountState.corefn.json"
                 , "compiler/test/fixtures/Data.Functor.corefn.json"
                 , "compiler/test/fixtures/Control.Apply.corefn.json"
                 , "compiler/test/fixtures/Control.Applicative.corefn.json"
