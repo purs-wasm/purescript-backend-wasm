@@ -43,7 +43,7 @@ import PureScript.Backend.Wasm.Codegen.Imports (importRuntime, internStrName, pr
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
 import PureScript.Backend.Wasm.Codegen.Value (atomRep, boxInt, coerce, genAtom, genAtomAs, slotRep, unboxBoolExpr)
-import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), ForeignImport, FuncName(..), IRFunc, LitBranch(..), LitPat(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..), marshalRep)
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), ForeignImport, FuncName(..), IRFunc, LitBranch(..), LitPat(..), MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..), marshalRep)
 import PureScript.Backend.Wasm.Lower.Reps (primRep)
 
 -- | Build a Binaryen module from the IR `Program`: enable GC, build the
@@ -60,7 +60,7 @@ buildModule prog = do
   let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, sigs, dataBase: dataGroup.base, dataStructs: dataGroup.structs }
   importRuntime ctx
   addForeignImports ctx prog
-  addInternStr ctx prog.labels
+  addInternStr ctx (needsInternStr prog) prog.labels
   addNullaryGlobals ctx (nullaryTags prog)
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx) prog.funcs
@@ -120,6 +120,21 @@ foreignImports = foldProgramRhs collect Object.empty
 -- | The internal wasm name of a foreign import: its qualified `Module.ident`.
 foreignName :: ForeignImport -> String
 foreignName sig = sig.moduleName <> "." <> sig.base
+
+-- | Whether any foreign marshals a record (so the JS glue needs `internStr` to map
+-- | field names to interned ids; ADR 0014).
+needsInternStr :: Program -> Boolean
+needsInternStr = foldProgramRhs collect false
+  where
+  collect rhs acc = acc || case rhs of
+    RCallForeign sig _ -> Array.any kindHasRecord sig.params || kindHasRecord sig.result
+    _ -> false
+
+kindHasRecord :: MarshalKind -> Boolean
+kindHasRecord = case _ of
+  MRecord _ -> true
+  MArray k -> kindHasRecord k
+  _ -> false
 
 -- | Every constructor field-rep signature constructed or projected in the program,
 -- | so a `$Data_<sig>` struct type is generated for exactly those.
@@ -187,11 +202,14 @@ addNullaryGlobals ctx tags = traverse_ addOne (Set.toUnfoldable tags :: Array In
 -- | `labels` (ending in `unreachable` — a queried label is always interned). Used
 -- | by `Record.Unsafe`'s string-keyed access to reach the id-keyed record helpers.
 -- | (Binaryen prunes it when no record op references it.)
-addInternStr :: Ctx -> Array (Tuple String Int) -> Effect Unit
-addInternStr ctx labels = do
+addInternStr :: Ctx -> Boolean -> Array (Tuple String Int) -> Effect Unit
+addInternStr ctx exportIt labels = do
   miss <- B.unreachable ctx.mod
   body <- foldr step (pure miss) labels
   _ <- B.addFunction ctx.mod internStrName (B.createType [ B.eqref ]) B.i32 [] body
+  -- exported when a record/object foreign needs name→id resolution from the JS
+  -- marshalling glue (ADR 0014); otherwise internal (and Binaryen-pruned if unused)
+  when exportIt (void (B.addFunctionExport ctx.mod internStrName "internStr"))
   pure unit
   where
   step (Tuple label labelId) accM = do

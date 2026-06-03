@@ -22,17 +22,14 @@ import Data.Argonaut.Decode (printJsonDecodeError)
 import Data.Argonaut.Parser (jsonParser)
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
-import Data.Foldable (foldl)
-import Data.Maybe (Maybe(..), fromMaybe)
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import Foreign (Foreign, unsafeToForeign)
-import Foreign.Object (Object)
+import Foreign (Foreign)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import Data.Traversable (traverse)
 import PureScript.Backend.Wasm.Externs (foreignSigs)
-import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), Program)
+import PureScript.Backend.Wasm.Lower.IR (Program, foreignManifestJson)
 import PureScript.Backend.Wasm.Lower (lowerModule, lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd (optimizeModule, optimizeProgram)
 import PureScript.CoreFn (Module)
@@ -116,20 +113,7 @@ instantiateForeignStr externs userForeigns roots paths = do
         throwException (error ("module failed validation:\n" <> wat))
       binary <- B.emitBinary mod
       B.dispose mod
-      instantiateMarshalled binary userForeigns (unsafeToForeign (marshalManifest sigs))
-
--- | The JS-shaped marshal manifest from the foreign signatures: `{ Module: { base:
--- | { params: ["string"|"raw"…], result: "string"|"raw" } } }`.
-marshalManifest :: Object ForeignImport -> Object (Object { params :: Array String, result :: String })
-marshalManifest = foldl add Object.empty <<< Object.values
-  where
-  add acc s = Object.alter
-    (Just <<< Object.insert s.base { params: map kindStr s.params, result: kindStr s.result } <<< fromMaybe Object.empty)
-    s.moduleName
-    acc
-  kindStr = case _ of
-    MStr -> "string"
-    _ -> "raw"
+      instantiateMarshalled binary userForeigns (foreignManifestJson (Object.values sigs))
 
 -- | A live `WebAssembly.Instance`.
 foreign import data Instance :: Type
@@ -142,9 +126,10 @@ foreign import instantiate :: Uint8Array -> Effect Instance
 -- | Instantiate with the runtime plus user host imports (the foreign impls).
 foreign import instantiateWith :: Uint8Array -> Foreign -> Effect Instance
 
--- | Instantiate with String-marshalling host imports: `instantiateMarshalled bytes
--- | userForeigns manifest` (ADR 0014, L2).
-foreign import instantiateMarshalled :: Uint8Array -> Foreign -> Foreign -> Effect Instance
+-- | Instantiate with marshalling host imports: `instantiateMarshalled bytes
+-- | userForeigns manifestJson` — the glue parses the JSON manifest and marshals
+-- | String/Array/Record per kind (ADR 0014).
+foreign import instantiateMarshalled :: Uint8Array -> Foreign -> String -> Effect Instance
 
 foreign import callI32x0 :: Instance -> String -> Effect Int
 foreign import callI32x1 :: Instance -> String -> Int -> Effect Int

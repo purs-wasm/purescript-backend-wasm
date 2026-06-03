@@ -21,6 +21,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), Rep(..))
 import PureScript.ExternsFile (ExternsDeclaration(..), ExternsFile(..))
 import PureScript.ExternsFile.Names (Ident(..), ModuleName(..), ProperName(..), Qualified(..), QualifiedBy(..))
+import PureScript.ExternsFile.PSString (toString)
 import PureScript.ExternsFile.Types as T
 
 -- | Map every data constructor (by qualified name, `Module.Ctor`) to the wasm
@@ -85,15 +86,30 @@ foreignResult = case _ of
   t -> marshalKind t
 
 -- | The FFI marshal kind of a concrete type at the boundary: scalars cross as a JS
--- | `number` (`MI32`/`MF64`), `String` is marshalled to/from a JS `string` (`MStr`),
--- | everything else is an opaque reference (`MOpaque`).
+-- | `number` (`MI32`/`MF64`), `String` to/from a JS `string` (`MStr`), `Array a` to/
+-- | from a JS array (`MArray`, recursing on the element), everything else opaque
+-- | (`MOpaque`).
 marshalKind :: forall a. T.Type a -> MarshalKind
 marshalKind = case _ of
+  T.TypeApp _ (T.TypeConstructor _ ctor) arg
+    | named "Array" ctor -> MArray (marshalKind arg)
+    | named "Record" ctor -> MRecord (rowFields arg)
   T.TypeConstructor _ (Qualified _ (ProperName n))
     | n == "Int" || n == "Char" -> MI32
     | n == "Number" -> MF64
     | n == "String" -> MStr
   _ -> MOpaque
+
+named :: String -> Qualified ProperName -> Boolean
+named n = case _ of
+  Qualified _ (ProperName m) -> m == n
+
+-- | The fields of a record's row type `( l :: T, … )`, encoded as nested `RCons`
+-- | terminated by `REmpty` (an open row's tail var is ignored).
+rowFields :: forall a. T.Type a -> Array (Tuple String MarshalKind)
+rowFields = case _ of
+  T.RCons _ (T.Label pss) ty rest -> Array.cons (Tuple (toString pss) (marshalKind ty)) (rowFields rest)
+  _ -> []
 
 -- | The argument types of a curried function type, in order. A constructor's
 -- | externs type is `field0 -> field1 -> … -> T`, encoded as nested `TypeApp`s of

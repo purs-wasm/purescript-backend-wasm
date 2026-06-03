@@ -8,11 +8,12 @@ import Data.Array as Array
 import Data.Either (Either(..))
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Foldable (for_)
-import Data.Maybe (Maybe(..), isNothing)
+import Data.Maybe (Maybe(..), isNothing, maybe)
 import Data.List.NonEmpty as NEL
 import Data.String (Pattern(..))
 import Data.String as Str
 import Data.Traversable (for)
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_, throwError, try)
 import Effect.Class (liftEffect)
@@ -31,7 +32,7 @@ import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Compiler (compileModules, parseModule)
 import PureScript.Backend.Wasm.Externs (foreignSigs)
-import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..))
+import PureScript.Backend.Wasm.Lower.IR (ForeignImport, foreignManifestJson)
 import PureScript.CoreFn (ModuleName, toModuleName)
 import PureScript.ExternsFile.Decoder.Class (decoder)
 import PureScript.ExternsFile.Decoder.Monad (runDecoder)
@@ -174,21 +175,50 @@ buildCmd args = do
       -- self-contained program (only intrinsic / runtime foreigns)
       foreignMods <- liftEffect (importModulesImpl bytes)
       FS.writeFile appPath (unsafeCoerce bytes)
-      execFile wasmMergeBin [ appPath, "app", runtimeWasm, "rt", "-o", wasmPath, "--all-features" ]
+      -- Resolve each foreign module along the ADR 0014 ladder, packaging stage: a
+      -- `foreign.wasm`/`foreign.wat` provider is merged in (self-contained, no
+      -- marshalling — it speaks the internal ABI); otherwise it falls back to JS
+      -- (`foreign.js`, satisfied by the generated loader).
+      providers <- for foreignMods (resolveForeign args.input bundleDir)
+      let wasmProvided = Array.mapMaybe (\p -> Tuple p.name <$> p.wasm) providers
+      let jsProvided = Array.mapMaybe (\p -> if isNothing p.wasm then Just p.name else Nothing) providers
+      let mergeForeigns = wasmProvided >>= \(Tuple name wp) -> [ wp, name ]
+      execFile wasmMergeBin ([ appPath, "app", runtimeWasm, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
       FS.unlink appPath
+      for_ providers \p -> when p.assembled (maybe (pure unit) FS.unlink p.wasm)
       if args.text then do
         let watPath = Path.concat [ bundleDir, "index.wat" ]
         execFile wasmDisBin [ wasmPath, "-o", watPath, "--all-features" ]
         FS.unlink wasmPath
         Console.log (Fmt.fmt @"Wrote {file}" { file: watPath })
       else do
-        when (not (Array.null foreignMods)) (emitLoader bundleDir args.input foreignMods (foreignSigs externs))
+        when (not (Array.null jsProvided)) (emitLoader bundleDir args.input jsProvided (foreignSigs externs))
         Console.log (Fmt.fmt @"Wrote {file}" { file: wasmPath })
   where
   -- Resolved against the current working directory (run `bin` from the repo root).
   runtimeWasm = "runtime/runtime.wasm"
   wasmMergeBin = "binaryen/node_modules/binaryen/bin/wasm-merge"
   wasmDisBin = "binaryen/node_modules/binaryen/bin/wasm-dis"
+  wasmAsBin = "binaryen/node_modules/binaryen/bin/wasm-as"
+
+  -- The foreign provider for a module (ADR 0014): a `foreign.wasm` (used directly)
+  -- or `foreign.wat` (assembled to a temp `.wasm` in the bundle) is the in-wasm
+  -- provider that gets merged; otherwise `wasm` is `Nothing` and it falls back to
+  -- the JS loader.
+  resolveForeign input bundleDir m = do
+    let wasmSrc = Path.concat [ input, m, "foreign.wasm" ]
+    hasWasm <- exists wasmSrc
+    if hasWasm then pure { name: m, wasm: Just wasmSrc, assembled: false }
+    else do
+      let watSrc = Path.concat [ input, m, "foreign.wat" ]
+      hasWat <- exists watSrc
+      if hasWat then do
+        let out = Path.concat [ bundleDir, m <> ".foreign.wasm" ]
+        execFile wasmAsBin [ watSrc, "-o", out, "--all-features" ]
+        pure { name: m, wasm: Just out, assembled: true }
+      else pure { name: m, wasm: Nothing, assembled: false }
+    where
+    exists p = isNothing <$> FS.access p
 
 -- | Emit the JS loader for a program that has host imports (ADR 0014): copy each
 -- | used module's `foreign.js` into `<bundle>/foreign/<Module>.js`, then write a
@@ -204,23 +234,13 @@ emitLoader bundleDir input mods sigs = do
   FS.writeTextFile UTF8 (Path.concat [ bundleDir, "index.mjs" ]) (loaderSource (manifestJs mods sigs))
   Console.log (Fmt.fmt @"Wrote {file} (+ {n} foreign module(s))" { file: Path.concat [ bundleDir, "index.mjs" ], n: Array.length mods })
 
--- | The String-marshalling manifest as a JS object literal, keyed by import name
--- | `Module.base`: `{ "M.f": { params: ["string"|"raw"…], result: … } }` (ADR 0014
--- | L2). Restricted to the foreign modules actually linked.
+-- | The marshalling manifest as a JSON object literal, keyed by import name
+-- | `Module.base`: `{ "M.f": { "params": [<kind>…], "result": <kind> } }` (ADR 0014).
+-- | Each `<kind>` is an `encodeMarshalKind` value (`"i"`/`"s"` leaves, `{"a":…}`
+-- | array, `{"r":{…}}` record). Restricted to the foreign modules actually linked.
 manifestJs :: Array String -> Object ForeignImport -> String
 manifestJs mods sigs =
-  "{" <> Str.joinWith "," (map entry (Array.filter (\s -> Array.elem s.moduleName mods) (Object.values sigs))) <> "}"
-  where
-  entry s = jsStr (s.moduleName <> "." <> s.base)
-    <> ":{params:["
-    <> Str.joinWith "," (map (jsStr <<< kindStr) s.params)
-    <> "],result:"
-    <> jsStr (kindStr s.result)
-    <> "}"
-  kindStr = case _ of
-    MStr -> "string"
-    _ -> "raw"
-  jsStr x = "\"" <> x <> "\""
+  foreignManifestJson (Array.filter (\s -> Array.elem s.moduleName mods) (Object.values sigs))
 
 -- | The generated loader (ADR 0014): instantiate the GC wasm, discover its host
 -- | imports, satisfy each from `./foreign/<Module>.js`, and wrap String-typed
@@ -241,22 +261,63 @@ const mod = await WebAssembly.compile(bytes);
 let inst;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const fromStr = (ref) => {
+const strToJs = (ref) => {
   const n = inst.exports.strLen(ref);
   const b = new Uint8Array(n);
   for (let i = 0; i < n; i++) b[i] = inst.exports.strByteAt(ref, i);
   return dec.decode(b);
 };
-const toStr = (s) => {
+const strFromJs = (s) => {
   const b = enc.encode(s);
   const ref = inst.exports.strNew(b.length);
   for (let i = 0; i < b.length; i++) inst.exports.strSetByte(ref, i, b[i]);
   return ref;
 };
+// `k` is a parsed encodeMarshalKind value: a string leaf ("i"/"f"/"s"/"o"), {a:k}
+// (array), or {r:{field:k}} (record). eqref (a boxed, nested value) → JS, by kind.
+const eqrefToJs = (k, ref) => {
+  if (typeof k === "string") {
+    if (k === "i") return inst.exports.unboxInt(ref);
+    if (k === "s") return strToJs(ref);
+    return ref;
+  }
+  if (k.a !== undefined) {
+    const n = inst.exports.arrayLen(ref);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = eqrefToJs(k.a, inst.exports.arrayGet(ref, i));
+    return out;
+  }
+  // record: read each known field by its interned label id
+  const out = {};
+  for (const name of Object.keys(k.r)) {
+    out[name] = eqrefToJs(k.r[name], inst.exports.proj(ref, inst.exports.internStr(strFromJs(name))));
+  }
+  return out;
+};
+// JS → eqref (a boxed, nested value), by kind.
+const eqrefFromJs = (k, val) => {
+  if (typeof k === "string") {
+    if (k === "i") return inst.exports.boxInt(val);
+    if (k === "s") return strFromJs(val);
+    return val;
+  }
+  if (k.a !== undefined) {
+    const ref = inst.exports.arrayNew(val.length);
+    for (let i = 0; i < val.length; i++) inst.exports.arraySet(ref, i, eqrefFromJs(k.a, val[i]));
+    return ref;
+  }
+  // record: recSet each field onto an empty record, keyed by interned label id
+  let ref = inst.exports.recEmpty();
+  for (const name of Object.keys(k.r)) {
+    ref = inst.exports.recSet(ref, inst.exports.internStr(strFromJs(name)), eqrefFromJs(k.r[name], val[name]));
+  }
+  return ref;
+};
+const isRaw = (k) => k === "i" || k === "f";
 const wrap = (fn, sig) => (...args) => {
-  const xs = args.map((a, i) => (sig.params[i] === "string" ? fromStr(a) : a));
+  const xs = args.map((a, i) => (isRaw(sig.params[i]) ? a : eqrefToJs(sig.params[i], a)));
   const r = fn(...xs);
-  return sig.result === "string" ? toStr(r) : r;
+  return isRaw(sig.result) ? r : eqrefFromJs(sig.result, r);
 };
 
 const importObject = {};

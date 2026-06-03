@@ -8,7 +8,8 @@ import Prelude
 import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe)
 import Data.Show.Generic (genericShow)
-import Data.Tuple (Tuple)
+import Data.String (joinWith)
+import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic)
 
 -- | The wasm-level representation chosen for a value.
@@ -254,18 +255,22 @@ type ForeignImport =
 
 -- | How a value crosses the wasm↔JS FFI boundary (ADR 0014). It refines `Rep`:
 -- | `MI32`/`MF64` are raw scalars that *are* a JS `number` (no marshalling); `MStr`
--- | is a `$Str` that the loader converts to/from a JS `string`; `MOpaque` is any
--- | other `eqref` (passed through as a reference — full marshalling is future work).
+-- | is a `$Str` converted to/from a JS `string`; `MArray` is a `$Vals` array
+-- | converted to/from a JS array, each element marshalled by the inner kind;
+-- | `MOpaque` is any other `eqref` (passed through as a reference — e.g. records, not
+-- | yet marshalled).
 data MarshalKind
   = MI32 -- Int, Char
   | MF64 -- Number
   | MStr -- String
+  | MArray MarshalKind -- Array a (elements marshalled by the inner kind)
+  | MRecord (Array (Tuple String MarshalKind)) -- a record { l :: T … } (fields by name)
   | MOpaque -- any other boxed value
 
 derive instance eqMarshalKind :: Eq MarshalKind
 derive instance genericMarshalKind :: Generic MarshalKind _
 instance showMarshalKind :: Show MarshalKind where
-  show = genericShow
+  show m = genericShow m
 
 -- | The wasm representation a `MarshalKind` lowers to: scalars stay raw, everything
 -- | else is the boxed `eqref`.
@@ -274,4 +279,35 @@ marshalRep = case _ of
   MI32 -> I32
   MF64 -> F64
   MStr -> Boxed
+  MArray _ -> Boxed
+  MRecord _ -> Boxed
   MOpaque -> Boxed
+
+-- | A JSON encoding of a `MarshalKind` for the JS marshalling glue (ADR 0014): the
+-- | leaves are the strings `"i"`/`"f"`/`"s"`/`"o"`; an array is `{"a":<kind>}`; a
+-- | record is `{"r":{<field>:<kind>,…}}`. The glue dispatches on `typeof`/`.a`/`.r`
+-- | and marshals recursively.
+encodeMarshalKind :: MarshalKind -> String
+encodeMarshalKind = case _ of
+  MI32 -> "\"i\""
+  MF64 -> "\"f\""
+  MStr -> "\"s\""
+  MArray k -> "{\"a\":" <> encodeMarshalKind k <> "}"
+  MRecord fields -> "{\"r\":{" <> joinWith "," (map field fields) <> "}}"
+  MOpaque -> "\"o\""
+  where
+  field (Tuple name k) = "\"" <> name <> "\":" <> encodeMarshalKind k
+
+-- | The FFI marshal manifest as a JSON object literal (valid JS), keyed by import
+-- | name `Module.base`, each entry `{"params":[<kind>…],"result":<kind>}` (ADR
+-- | 0014). The production loader bakes it; the harness JSON.parses it. The glue
+-- | looks up `manifest[module + "." + name]` per host import.
+foreignManifestJson :: Array ForeignImport -> String
+foreignManifestJson sigs = "{" <> joinWith "," (map entry sigs) <> "}"
+  where
+  entry s =
+    "\"" <> s.moduleName <> "." <> s.base <> "\":{\"params\":["
+      <> joinWith "," (map encodeMarshalKind s.params)
+      <> "],\"result\":"
+      <> encodeMarshalKind s.result
+      <> "}"

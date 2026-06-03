@@ -81,16 +81,20 @@
         (br_if $stop (i32.ge_u (array.get $LabelIds (local.get $ids) (local.get $pos)) (local.get $id)))
         (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
         (br $loop)))
-    ;; replace: pos in range and the id already present
-    (if (i32.and (i32.lt_u (local.get $pos) (local.get $n))
-                 (i32.eq (array.get $LabelIds (local.get $ids) (local.get $pos)) (local.get $id)))
+    ;; replace: pos in range and the id already present. The bounds check must
+    ;; short-circuit — `i32.and` evaluates both operands, so a single `and` would
+    ;; still execute `ids[pos]` when `pos == n` (e.g. an empty record), reading out
+    ;; of bounds. Nesting guards the `array.get` behind the range test.
+    (if (i32.lt_u (local.get $pos) (local.get $n))
       (then
-        (local.set $nids (array.new $LabelIds (i32.const 0) (local.get $n)))
-        (array.copy $LabelIds $LabelIds (local.get $nids) (i32.const 0) (local.get $ids) (i32.const 0) (local.get $n))
-        (local.set $nvals (array.new $Vals (ref.null none) (local.get $n)))
-        (array.copy $Vals $Vals (local.get $nvals) (i32.const 0) (local.get $vals) (i32.const 0) (local.get $n))
-        (array.set $Vals (local.get $nvals) (local.get $pos) (local.get $val))
-        (return (struct.new $Rec (local.get $nids) (local.get $nvals)))))
+        (if (i32.eq (array.get $LabelIds (local.get $ids) (local.get $pos)) (local.get $id))
+          (then
+            (local.set $nids (array.new $LabelIds (i32.const 0) (local.get $n)))
+            (array.copy $LabelIds $LabelIds (local.get $nids) (i32.const 0) (local.get $ids) (i32.const 0) (local.get $n))
+            (local.set $nvals (array.new $Vals (ref.null none) (local.get $n)))
+            (array.copy $Vals $Vals (local.get $nvals) (i32.const 0) (local.get $vals) (i32.const 0) (local.get $n))
+            (array.set $Vals (local.get $nvals) (local.get $pos) (local.get $val))
+            (return (struct.new $Rec (local.get $nids) (local.get $nvals)))))))
     ;; insert at pos: [0,pos) copied, [pos] new, [pos,n) shifted right by one
     (local.set $nids (array.new $LabelIds (i32.const 0) (i32.add (local.get $n) (i32.const 1))))
     (local.set $nvals (array.new $Vals (ref.null none) (i32.add (local.get $n) (i32.const 1))))
@@ -98,8 +102,14 @@
     (array.copy $Vals $Vals (local.get $nvals) (i32.const 0) (local.get $vals) (i32.const 0) (local.get $pos))
     (array.set $LabelIds (local.get $nids) (local.get $pos) (local.get $id))
     (array.set $Vals (local.get $nvals) (local.get $pos) (local.get $val))
-    (array.copy $LabelIds $LabelIds (local.get $nids) (i32.add (local.get $pos) (i32.const 1)) (local.get $ids) (local.get $pos) (i32.sub (local.get $n) (local.get $pos)))
-    (array.copy $Vals $Vals (local.get $nvals) (i32.add (local.get $pos) (i32.const 1)) (local.get $vals) (local.get $pos) (i32.sub (local.get $n) (local.get $pos)))
+    ;; shift the tail [pos,n) right by one — only when there IS a tail. Appending at
+    ;; the end (pos == n, e.g. building from `recEmpty`) would otherwise issue an
+    ;; `array.copy` with dest_offset == new length and len 0, which V8 traps on at the
+    ;; boundary despite the spec permitting it.
+    (if (i32.lt_u (local.get $pos) (local.get $n))
+      (then
+        (array.copy $LabelIds $LabelIds (local.get $nids) (i32.add (local.get $pos) (i32.const 1)) (local.get $ids) (local.get $pos) (i32.sub (local.get $n) (local.get $pos)))
+        (array.copy $Vals $Vals (local.get $nvals) (i32.add (local.get $pos) (i32.const 1)) (local.get $vals) (local.get $pos) (i32.sub (local.get $n) (local.get $pos)))))
     (struct.new $Rec (local.get $nids) (local.get $nvals)))
 
   ;; $rt.recDelete(rec, id) -> eqref : Record.Unsafe's `unsafeDelete`. Returns the
@@ -169,6 +179,30 @@
     (struct.new $Str (array.new $Bytes (i32.const 0) (local.get $len))))
   (func $strSetByte (export "strSetByte") (param $s eqref) (param $i i32) (param $b i32)
     (array.set $Bytes (struct.get $Str 0 (ref.cast (ref $Str) (local.get $s))) (local.get $i) (local.get $b)))
+
+  ;; Array ($Vals) access for FFI marshalling (ADR 0014): len/get to read a wasm
+  ;; array into a JS array, new/set to build one from JS. Elements are boxed eqrefs
+  ;; (the array is homogeneous), so the host marshals each element recursively.
+  (func $arrayLen (export "arrayLen") (param $a eqref) (result i32)
+    (array.len (ref.cast (ref $Vals) (local.get $a))))
+  (func $arrayGet (export "arrayGet") (param $a eqref) (param $i i32) (result eqref)
+    (array.get $Vals (ref.cast (ref $Vals) (local.get $a)) (local.get $i)))
+  (func $arrayNew (export "arrayNew") (param $len i32) (result eqref)
+    (array.new $Vals (ref.null none) (local.get $len)))
+  (func $arraySet (export "arraySet") (param $a eqref) (param $i i32) (param $v eqref)
+    (array.set $Vals (ref.cast (ref $Vals) (local.get $a)) (local.get $i) (local.get $v)))
+
+  ;; Box / unbox a $Int — the host marshals a boxed Int array element / record field
+  ;; to a JS number and back.
+  (func $boxInt (export "boxInt") (param $n i32) (result eqref)
+    (struct.new $Int (local.get $n)))
+  (func $unboxInt (export "unboxInt") (param $b eqref) (result i32)
+    (struct.get $Int 0 (ref.cast (ref $Int) (local.get $b))))
+
+  ;; An empty record ($Rec): the host builds a record by `recSet`ting fields onto it
+  ;; (keyed by interned label id). Read access reuses $rt.proj (ADR 0014).
+  (func $recEmpty (export "recEmpty") (result eqref)
+    (struct.new $Rec (array.new_fixed $LabelIds 0) (array.new_fixed $Vals 0)))
 
   ;; $rt.strCmp(a, b) -> i32 (-1 / 0 / 1): lexicographic byte comparison. On UTF-8
   ;; bytes this is code-point order (UTF-8 preserves it); it diverges from JS's

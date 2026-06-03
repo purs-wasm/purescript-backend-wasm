@@ -9,6 +9,7 @@ import Prelude
 
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
+import Data.Tuple (Tuple(..))
 import Effect.Aff (Aff)
 import Effect.Class (liftEffect)
 import Foreign.Object as Object
@@ -84,3 +85,8 @@ spec = describe "PureScript.Backend.Wasm.Externs (field reps)" do
         sig "shout" [ MStr ] MStr -- String is marshalled
         sig "identityF" [ MOpaque ] MOpaque -- forall peeled; a type var is opaque
         sig "flag" [] MOpaque -- Boolean is not scalar-unboxed → opaque (nullary)
+        sig "sumArr" [ MArray MI32 ] MI32 -- Array Int → array of i32-marshalled elements
+        sig "joinArr" [ MArray MStr ] MStr -- Array String → array of strings
+        sig "nestedArr" [ MArray (MArray MI32) ] MI32 -- nested arrays recurse
+        -- a record param: fields by name + kind, in the row's order
+        sig "describe" [ MRecord [ Tuple "name" MStr, Tuple "age" MI32 ] ] MStr

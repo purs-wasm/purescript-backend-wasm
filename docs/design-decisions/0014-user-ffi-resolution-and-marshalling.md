@@ -100,9 +100,15 @@ end-to-end FFI call works early and the hard part is de-risked incrementally:
   glue reads a `$Str` with `strLen`/`strByteAt` to build a JS string, and builds a
   `$Str` from a JS string via an exported constructor. (These primitives already
   exist in the runtime.)
-- **L3 — `Array` / record / closure (later):** `Array` ⇄ `[]`, record ⇄ object,
-  closure ⇄ JS `function` (a `call_ref` trampoline, possibly passing PureScript
-  closures to JS as opaque references the glue can re-enter). Each is additive.
+- **L3 — `Array` / record / closure (later):** `Array` ⇄ `[]` (**done** — recursive
+  element marshalling via `arrayLen`/`arrayGet`/`arrayNew`/`arraySet`), record ⇄
+  object (**done** — field-by-field, each field recursing into its own kind; the glue
+  reads with `proj` and builds from `recEmpty` via `recSet`, keying on `internStr`
+  applied to the type's field names), closure ⇄ JS `function` (a `call_ref`
+  trampoline, possibly passing PureScript closures to JS as opaque references the glue
+  can re-enter; still later). `Object a` (dynamic string keys) is **deferred** — its
+  representation differs from a static-label `$Rec` and needs a separate decision.
+  Each is additive.
 
 The marshalling glue is **generated JS** that calls exported runtime helpers; it is
 the same machinery the reverse direction (host calling wasm exports with real values)
