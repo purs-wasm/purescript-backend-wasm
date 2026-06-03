@@ -18,6 +18,7 @@ import Data.Maybe (fromMaybe)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift (lambdaLiftModule)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
 
@@ -41,12 +42,16 @@ optimizeProgram dictElim modules =
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
   lifted = map lambdaLiftModule mir
 
+  -- each round: specialize higher-order calls (idempotent once rewritten), then run
+  -- the simplifier (dictionary elimination + beta etc.), which inlines the
+  -- specialization's lambda body and saturates its operations
   fixpoint :: Int -> Array M.Module -> Array M.Module
   fixpoint n prog
     | n <= 0 = prog
     | otherwise =
         let
-          prog' = map (DictElim.simplifyModule (DictElim.buildCtx prog)) prog
+          specialized = specializeProgram prog
+          prog' = map (DictElim.simplifyModule (DictElim.buildCtx specialized)) specialized
         in
           if prog' == prog then prog else fixpoint (n - 1) prog'
 

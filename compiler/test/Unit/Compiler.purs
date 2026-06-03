@@ -13,6 +13,7 @@ import Test.Unit.PureScript.Backend.Wasm.Lower.Match as Match
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift as LambdaLift
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.FreeVars as FreeVars
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify as Simplify
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize as Specialize
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Transl as Transl
 import Test.Unit.PureScript.CoreFn as CoreFn
 import Test.Unit.PureScript.ExternsFile as ExternsFile
@@ -27,4 +28,5 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Transl.spec
   LambdaLift.spec
   Simplify.spec
+  Specialize.spec
   FreeVars.spec
