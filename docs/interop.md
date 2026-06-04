@@ -67,7 +67,7 @@ each kind has a conversion:
 | `Record { … }` | `MRecord` | `$Rec` ⇄ JS `{}` | field-by-field: read via `proj`, build from `recEmpty` via `recSet`, keyed by `internStr` of the type's field names; recurses on each field's kind |
 | `a -> b` | `MFunc` | `$Clo` → JS `function` | the closure is wrapped in a JS function that, when called, marshals its argument in, applies the closure via the runtime trampoline `applyClo`, and marshals the result out |
 | `Effect a` | `MEffect` | the foreign's thunk is **run on the JS side** | the JS impl (`s => () => …`) is applied to its value args, then the returned thunk is performed (`()`) by the glue, and only the inner result `a` is marshalled back (ADR 0015) — wasm never holds the JS thunk, sidestepping closure direction 2 |
-| anything else | `MOpaque` | passed through as an opaque `eqref` reference | — |
+| anything else | `MOpaque` | passed through as an opaque `eqref` reference | — (but a **JS-originated** opaque value cannot cross back into wasm — see limitations) |
 
 The runtime (`runtime/runtime.wat`) exposes the read/build primitives above as exports
 so the JS glue can call them on the live instance.
@@ -215,6 +215,21 @@ function and can be called on the raw instance with no loader.
   host-import trampoline so wasm can hold and re-enter a JS callable; the glue raises a
   clear error meanwhile. (A foreign that merely *returns a function*, `a -> (b -> c)`,
   is not this case: it is the same type as the uncurried `a -> b -> c`.)
+- **JS-originated opaque values round-tripping through wasm.** A foreign whose result is
+  an opaque value *created on the JS side* — most importantly `foreign import data` whose
+  instances are JS objects, e.g. `Effect.Ref`'s `Ref` (`new` returns `{ value }`) — cannot
+  be held by wasm and passed back to another foreign (`read`/`write`). `MOpaque` is carried
+  as the internal GC `eqref`, but a JS object is an `externref`; returning it to a wasm
+  `(result eqref)` import throws `TypeError: type incompatibility when transforming from/to
+  JS` at run time. It is *not* caught at build time — the wasm builds and only traps when the
+  value crosses. The general fix (carry JS-origin opaques as `externref`, boxed in a wasm
+  struct) is blocked on a representation question: a *polymorphically*-opaque value that is
+  really a wasm-GC value (e.g. the `s` read back out of a `Ref s` that holds an `Int`) must
+  stay an `eqref` so it can still be `ref.cast` to its concrete type, yet a genuinely
+  JS-native opaque must be `externref` — and the marshalling boundary cannot tell them apart.
+  So such libraries are better provided **wasm-natively** (a runtime intrinsic or a ulib
+  `foreign.wat`, ADR 0012) than through the JS ladder; `Effect.Ref` in particular is a pure
+  mutable cell that needs no host at all and is slated for native support.
 - **`Object a`** (dynamic string keys) — its representation differs from the
   static-label `$Rec` and needs a separate decision.
 - **`main :: Effect Unit` auto-run on load** — an `Effect`-typed export is exposed as a
