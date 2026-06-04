@@ -9,6 +9,7 @@ module PureScript.Backend.Wasm.Externs
   ( ctorFieldReps
   , ForeignSig
   , foreignSigs
+  , effectfulForeignNamesFromSigs
   , effectfulForeignNamesFromExterns
   ) where
 
@@ -68,22 +69,21 @@ foreignSigs externs = Object.fromFoldable (externs >>= declsOf)
       Just (Tuple (mn <> "." <> ident) { moduleName: mn, base: ident, params: foreignParams ty, result: foreignResult ty })
     _ -> Nothing
 
--- | The qualified names (`Module.ident`) of `foreign import`s whose *running* performs a
--- | side effect — i.e. whose result type is `Effect _` (detected as an `MEffect` result).
--- | The seed the middle-end purity analysis (ADR 0015) needs so a host effect like `log`
--- | is preserved rather than dropped/reordered. (Ordinary `Effect`-valued top-level
--- | functions are a harmless over-approximation: they are not foreign-resolved.)
-effectfulForeignNamesFromExterns :: Array ExternsFile -> Set String
-effectfulForeignNamesFromExterns externs = Set.fromFoldable (externs >>= declsOf)
+-- | The qualified names (`Module.ident`) of foreign signatures whose *running* performs a
+-- | side effect — i.e. whose result is an `MEffect`. The seed the middle-end purity
+-- | analysis (ADR 0015) needs so a host effect like `log` is preserved rather than
+-- | dropped/reordered. Operates on `ForeignSig`s, so it works for both the externs- and
+-- | source-derived (ADR 0016) sets.
+effectfulForeignNamesFromSigs :: Object ForeignSig -> Set String
+effectfulForeignNamesFromSigs sigs = Set.fromFoldable (Array.mapMaybe pick (Object.toUnfoldable sigs))
   where
-  declsOf (ExternsFile _ (ModuleName mn) _ _ _ _ decls _) = Array.mapMaybe (valueOf mn) decls
-  valueOf mn = case _ of
-    EDValue (Ident ident) ty
-      | isEffectResult (foreignResult ty) -> Just (mn <> "." <> ident)
+  pick (Tuple key sig) = case sig.result of
+    MEffect _ -> Just key
     _ -> Nothing
-  isEffectResult = case _ of
-    MEffect _ -> true
-    _ -> false
+
+-- | The effectful foreign names from externs (the externs-only path, e.g. the e2e harness).
+effectfulForeignNamesFromExterns :: Array ExternsFile -> Set String
+effectfulForeignNamesFromExterns = effectfulForeignNamesFromSigs <<< foreignSigs
 
 -- | The marshal kind of each parameter of a foreign's type, in order. `forall`
 -- | quantifiers are transparent (a foreign may be polymorphic, e.g. `forall a. a ->

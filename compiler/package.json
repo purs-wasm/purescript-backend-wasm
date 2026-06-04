@@ -9,7 +9,7 @@
     "test:unit": "spago test --monochrome",
     "test:e2e": "npm run build:runtime && spago test -m Test.E2E.Compiler --monochrome",
     "test:shownumber": "npm run build:runtime && node test/showNumber.mjs",
-    "test:bin": "npm run build:runtime && node test/effectMain.mjs",
+    "test:bin": "npm run build:runtime && node test/effectMain.mjs && node test/sourceForeign.mjs",
     "test": "npm run test:unit && npm run test:e2e && npm run test:shownumber && npm run test:bin",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test"

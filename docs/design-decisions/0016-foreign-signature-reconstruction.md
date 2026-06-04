@@ -52,15 +52,19 @@ source of truth for a foreign's type and which *does* contain private foreigns. 
   `Number`→MF64, `Boolean`→MBool, `String`→MStr, `Array`→MArray, `Record`→MRecord,
   `Effect`→MEffect; `forall`/parens/constraints peeled; otherwise MOpaque) — mirroring
   `Externs.marshalKind` over a different syntax tree.
-- The source file is located via the **sourcemap already emitted beside the other
-  artifacts**: `output/<Module>/index.js.map` carries `sources[0]` = the original `.purs`
-  path (relative to the map). So the bin reads it from the *same `-I` input dir* it already
-  scans for `corefn.json`/`externs.cbor` — no separate source-root flag. This is what makes
-  it work in a spago **monorepo**, where each package's sources live in different trees: the
-  per-module map pins each module's source wherever it is. Source signatures **override**
-  externs (source is complete and authoritative — it has private foreigns); externs fills any
-  module whose map/source is absent. If a module has no sourcemap, it silently falls back to
-  externs-only, so the change is backward compatible.
+- Each module's source file is located via spago's **`cache-db.json`** (the build cache,
+  sitting beside the artifacts in the `-I` dir): it maps every module to its source files,
+  e.g. `"Data.Int": { ".spago/p/integers-…/src/Data/Int.purs": [timestamp, hash], … }`. The
+  bin reads that one file and, per module, takes the `.purs` entry. The paths are clean and
+  relative to the build's working directory (= the bin's cwd, where `-I`/`-O` are also
+  relative), so they resolve directly — and because `cache-db.json` knows every linked
+  module's source regardless of which package it lives in, this works in a spago **monorepo**
+  with no source-root configuration. Source signatures **override** externs (source is
+  complete and authoritative — it has private foreigns); externs fills any module absent from
+  the cache-db, so the change is backward compatible. (The per-module sourcemap `index.js.map`
+  was considered but its `sources` path is calibrated oddly under `--output` — many spurious
+  `../` — whereas `cache-db.json`'s paths are clean and it additionally carries the hashes
+  the staleness check below would use.)
 - This is a **packaging-stage** concern: the compiler core stays agnostic, taking a merged
   `Object ForeignSig`; only the bin reads source and builds it. The effectful-foreign set
   (purity, ADR 0015) is derived from the merged signatures, so private effectful foreigns are
@@ -87,14 +91,16 @@ that.
   `MFunc` from the source type (impossible without the type).
 - The pass is pure and unit-testable (`String -> Object ForeignSig`), independent of the
   build pipeline.
-- Requires source availability at build time and that sourcemaps were emitted (`purs`
-  `-g sourcemaps`, spago's default); a module lacking a sourcemap falls back to externs-only.
+- Requires source availability at build time and that `cache-db.json` is present (spago writes
+  it on every build); a module absent from the cache-db, or whose source file is unreadable,
+  falls back to externs-only.
 - Introduces a source/compiled-output skew risk (the `.purs` must match the compiled
   `corefn.json`). Low in practice — PureScript has no macros/preprocessing, so source is
-  truth — but real if a stale source tree is pointed at. *Future enhancement:* consult
-  spago's `output/cache-db.json` and skip reconstruction for a module whose source is newer
-  than its compiled artifact (surfacing the skew rather than silently using a mismatched
-  type); deferred — not needed for correctness in the normal build-then-bundle flow.
+  truth — but real if a stale source tree is pointed at. *Future enhancement:* `cache-db.json`
+  already records each source's `[timestamp, hash]`, so reconstruction can compare against the
+  compiled artifact and skip (surfacing the skew rather than silently using a mismatched type)
+  for a module whose source is newer; deferred — not needed for correctness in the normal
+  build-then-bundle flow.
 - Adds a second parser path (CST) beside the externs decoder; the CST→`MarshalKind` map must
   evolve in lockstep with the marshal-kind set (kept a mirror of `Externs.marshalKind`).
 - Parsing all `.purs` under the roots adds some build time — cheap, since only foreign
@@ -117,5 +123,10 @@ that.
   consumes `Object ForeignSig`, so feed that representation directly.
 - **An explicit `-S/--src` source-root flag.** Rejected: in a spago monorepo the sources of
   the linked modules are scattered across packages (`.spago/p/*/src`, each app's `src`), so a
-  caller-supplied root list is fragile and easy to get wrong. The per-module `index.js.map`
-  already pinpoints each source exactly, with zero configuration.
+  caller-supplied root list is fragile and easy to get wrong. `cache-db.json` already pinpoints
+  each module's source exactly, with zero configuration.
+- **The per-module sourcemap (`index.js.map`, `sources[0]`).** Also zero-config, but under a
+  custom `--output` its `sources` path is calibrated oddly (a long run of spurious `../`
+  overshooting the repo root), needing a fragile strip-and-reanchor heuristic. `cache-db.json`
+  gives clean working-dir-relative paths in one file and carries the hashes the staleness
+  enhancement wants. Rejected in favour of the cache-db.

@@ -141,6 +141,19 @@
         "test": {
           "dependencies": []
         }
+      },
+      "examples-priv": {
+        "path": "examples/priv",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
       }
     },
     "package_set": {

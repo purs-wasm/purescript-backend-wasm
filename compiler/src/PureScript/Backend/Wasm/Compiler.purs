@@ -17,8 +17,9 @@ import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
 import Data.Set as Set
 import Effect (Effect)
+import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Codegen (buildModule)
-import PureScript.Backend.Wasm.Externs (ctorFieldReps, effectfulForeignNamesFromExterns, foreignSigs)
+import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram)
@@ -47,6 +48,9 @@ type CompileOptions = { optimize :: Boolean, optimizeMir :: Boolean }
 -- | `emitBinary` or `emitText`). `roots` are the entry modules whose functions
 -- | stay exported; everything else is internal and so removed by the optimizer's
 -- | DCE (ADR 0009). Linking or validation failures come back as a message.
+-- | `foreignSigs` is the foreign-import calling conventions to resolve against — the
+-- | caller merges any source-reconstructed signatures (ADR 0016) over the externs-derived
+-- | ones, so private foreigns are covered. `externs` still supplies constructor field reps.
 withCompiledModule
   :: forall a
    . CompileOptions
@@ -54,8 +58,9 @@ withCompiledModule
   -> Array ModuleName
   -> Array Module
   -> Array ExternsFile
+  -> Object ForeignSig
   -> Effect (Either String a)
-withCompiledModule opts emit roots modules externs = case lowerModules opts.optimizeMir (ctorFieldReps externs) (foreignSigs externs) roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromExterns externs)) modules) of
+withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')) modules) of
   Left err -> pure (Left ("linking failed: " <> show err))
   Right program -> do
     mod <- buildModule program
@@ -73,9 +78,9 @@ withCompiledModule opts emit roots modules externs = case lowerModules opts.opti
 -- | Link the given modules into one wasm and return its binary bytes. `externs`
 -- | supplies type information for type-directed lowering (front B); pass `[]` to
 -- | build without it (everything stays boxed).
-compileModules :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Effect (Either String Uint8Array)
+compileModules :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Object ForeignSig -> Effect (Either String Uint8Array)
 compileModules opts = withCompiledModule opts B.emitBinary
 
 -- | Link the given modules into one wasm and return its WAT (text) form.
-compileModulesText :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Effect (Either String String)
+compileModulesText :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Object ForeignSig -> Effect (Either String String)
 compileModulesText opts = withCompiledModule opts B.emitText

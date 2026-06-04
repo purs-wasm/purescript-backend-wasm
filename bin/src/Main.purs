@@ -5,7 +5,7 @@ import Prelude
 import ArgParse.Basic (ArgParser)
 import ArgParse.Basic as ArgParser
 import Data.Array as Array
-import Data.Either (Either(..))
+import Data.Either (Either(..), either)
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Foldable (for_)
 import Data.Maybe (Maybe(..), isNothing, maybe)
@@ -32,6 +32,7 @@ import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Compiler (compileModules, parseModule)
 import PureScript.Backend.Wasm.Externs (foreignSigs)
+import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson, exportManifestJson)
 import PureScript.CoreFn (ModuleName, toModuleName)
 import PureScript.ExternsFile.Decoder.Class (decoder)
@@ -48,6 +49,10 @@ execFile cmd args = liftEffect (execFileImpl cmd args)
 -- | The host-import module names a wasm binary declares (the user `foreign import`
 -- | modules a JS loader must satisfy; ADR 0014).
 foreign import importModulesImpl :: Uint8Array -> Effect (Array String)
+
+-- | Module name → its `.purs` source path, parsed from spago's `cache-db.json` (ADR
+-- | 0016). Paths are relative to the build's working directory (our cwd).
+foreign import cacheDbSourcesImpl :: String -> Object String
 
 type BuildOption =
   { input :: FilePath
@@ -156,6 +161,20 @@ buildCmd args = do
     pure case result of
       Right (Right ef) -> Just ef
       _ -> Nothing
+  -- Reconstruct foreign signatures from `.purs` source (ADR 0016): externs omit private
+  -- `*Impl` foreigns, but the source has them. `cache-db.json` (beside the artifacts) maps
+  -- each module to its source path; read + parse those. Source-derived sigs override
+  -- externs; a module absent from the cache-db falls back to externs (as before).
+  cacheDbTxt <- try (FS.readTextFile UTF8 (Path.concat [ args.input, "cache-db.json" ]))
+  let sourcePaths = either (const Object.empty) cacheDbSourcesImpl cacheDbTxt
+  srcSigsByMod <- for mods \mod -> case Object.lookup (printModname mod) sourcePaths of
+    Nothing -> pure Object.empty
+    Just path -> do
+      result <- try (FS.readTextFile UTF8 path)
+      pure (either (const Object.empty) parseForeignSigs result)
+  -- source wins over externs (`Object.union` is left-biased); both keyed by `Module.ident`
+  let srcSigs = Array.foldl Object.union Object.empty srcSigsByMod
+  let allSigs = Object.union srcSigs (foreignSigs externs)
   let roots = map entryRoot (Array.fromFoldable args.entryModules)
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
   -- one bundle per build: place it in a directory named after the (first) entry
@@ -168,7 +187,7 @@ buildCmd args = do
   -- self-contained wasm (imports resolved); `--text` disassembles that result.
   let appPath = Path.concat [ bundleDir, "app.wasm" ]
   let wasmPath = Path.concat [ bundleDir, "index.wasm" ]
-  liftEffect (compileModules opts roots modules externs) >>= case _ of
+  liftEffect (compileModules opts roots modules externs allSigs) >>= case _ of
     Left err -> throwError (error err)
     Right bytes -> do
       -- the user `foreign import` modules the wasm needs (ADR 0014); empty for a
@@ -193,8 +212,9 @@ buildCmd args = do
         Console.log (Fmt.fmt @"Wrote {file}" { file: watPath })
       else do
         -- emit the JS loader when there are JS foreign imports to satisfy, or when any
-        -- entry export needs marshalling (a non-`i32`/`f64` param/result); ADR 0014
-        let allSigs = foreignSigs externs
+        -- entry export needs marshalling (a non-`i32`/`f64` param/result); ADR 0014.
+        -- `allSigs` (source ∪ externs, ADR 0016) is the manifest source so private
+        -- foreigns are marshalled too.
         let exportSigs = rootExportSigs roots allSigs
         let needLoader = not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
         when needLoader (emitLoader bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
