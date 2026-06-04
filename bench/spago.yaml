@@ -2,3 +2,4 @@ package:
   name: bench
   dependencies:
     - prelude
+    - effect
