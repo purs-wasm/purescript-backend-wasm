@@ -42,7 +42,8 @@ history.
 | 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Proposed |
 | 0013 | [Unboxing `Int` and `Number`](0013-int-number-unboxing.md) | Approved |
 | 0014 | [User FFI: a foreign-provider ladder and the JS marshalling boundary](0014-user-ffi-resolution-and-marshalling.md) | Proposed |
-| 0015 | [Effect reflection: collapsing function-represented monads to straight-line code](0015-effect-native-support.md) | Proposed |
+| 0015 | [Effect reflection: collapsing function-represented monads to straight-line code](0015-effect-native-support.md) | Accepted |
+| 0016 | [Reconstructing foreign signatures from `.purs` source](0016-foreign-signature-reconstruction.md) | Accepted |
 
 ## Scope
 
