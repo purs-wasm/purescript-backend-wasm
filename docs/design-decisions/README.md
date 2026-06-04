@@ -44,6 +44,9 @@ history.
 | 0014 | [User FFI: a foreign-provider ladder and the JS marshalling boundary](0014-user-ffi-resolution-and-marshalling.md) | Proposed |
 | 0015 | [Effect reflection: collapsing function-represented monads to straight-line code](0015-effect-native-support.md) | Accepted |
 | 0016 | [Reconstructing foreign signatures from `.purs` source](0016-foreign-signature-reconstruction.md) | Accepted |
+| 0017 | [Native `Effect.Ref` mutable references](0017-native-mutable-references.md) | Accepted |
+| 0018 | [Native `effect`-package control-flow and `EffectFn` primitives](0018-native-effect-primitives.md) | Accepted |
+| 0019 | [A faithful, uniform `Effect` lowering (correctness before collapse)](0019-faithful-effect-lowering.md) | Proposed |
 
 ## Scope
 

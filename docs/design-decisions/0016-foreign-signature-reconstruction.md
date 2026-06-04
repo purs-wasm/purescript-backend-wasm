@@ -41,8 +41,8 @@ source of truth for a foreign's type and which *does* contain private foreigns. 
 
 ## Decision
 
-**Reconstruct foreign signatures by parsing the `.purs` source, and merge them
-(source-wins) with the externs-derived ones.**
+**Reconstruct foreign signatures by parsing the `.purs` source for the private foreigns
+externs omit, and merge them under externs (externs-wins).**
 
 - A new **pure pass** (`SourceForeigns.parseForeignSigs :: String -> Object ForeignSig`)
   parses a source module with `PureScript.CST.parseModule`, takes the module name from the
@@ -51,7 +51,11 @@ source of truth for a foreign's type and which *does* contain private foreigns. 
   **same `MarshalKind`** the externs path uses (function arrows → params; `Int`/`Char`→MI32,
   `Number`→MF64, `Boolean`→MBool, `String`→MStr, `Array`→MArray, `Record`→MRecord,
   `Effect`→MEffect; `forall`/parens/constraints peeled; otherwise MOpaque) — mirroring
-  `Externs.marshalKind` over a different syntax tree.
+  `Externs.marshalKind` over a different syntax tree. **Only canonical types are recognised:**
+  the CST is *not* desugared, so a type synonym (`type Handler = …`) or an infix type
+  operator (`TypeOp`) is not expanded — it falls through to `MOpaque`. Function arrows are
+  the one structural form (`->` is a dedicated CST node, not a `TypeOp`), so arity is always
+  recovered correctly; only the kind of an aliased/operator *position* degrades to opaque.
 - Each module's source file is located via spago's **`cache-db.json`** (the build cache,
   sitting beside the artifacts in the `-I` dir): it maps every module to its source files,
   e.g. `"Data.Int": { ".spago/p/integers-…/src/Data/Int.purs": [timestamp, hash], … }`. The
@@ -59,12 +63,20 @@ source of truth for a foreign's type and which *does* contain private foreigns. 
   relative to the build's working directory (= the bin's cwd, where `-I`/`-O` are also
   relative), so they resolve directly — and because `cache-db.json` knows every linked
   module's source regardless of which package it lives in, this works in a spago **monorepo**
-  with no source-root configuration. Source signatures **override** externs (source is
-  complete and authoritative — it has private foreigns); externs fills any module absent from
-  the cache-db, so the change is backward compatible. (The per-module sourcemap `index.js.map`
-  was considered but its `sources` path is calibrated oddly under `--output` — many spurious
-  `../` — whereas `cache-db.json`'s paths are clean and it additionally carries the hashes
-  the staleness check below would use.)
+  with no source-root configuration. (The per-module sourcemap `index.js.map` was considered
+  but its `sources` path is calibrated oddly under `--output` — many spurious `../` — whereas
+  `cache-db.json`'s paths are clean and it additionally carries the hashes the staleness check
+  below would use.)
+- **Externs win over source; source only fills the private foreigns externs omit.** The
+  merge is `externs ∪ source` (externs-biased): the externs type is already *desugared by
+  `purs`* (synonyms expanded, operators resolved), so it is authoritative for any **exported**
+  foreign — and using it avoids the CST's no-desugaring limitation regressing an exported
+  foreign's marshal kinds to opaque. Source contributes only the keys externs lack, i.e. the
+  private `*Impl` foreigns. This also reverses the original (source-wins) draft.
+- **Source is parsed lazily, only when it can matter.** Before reading any `.purs`, the bin
+  compares a module's CoreFn `foreignNames` against the externs sigs; it parses the source
+  **only if some declared foreign is missing from externs** (a private one). A module whose
+  foreigns are all exported never pays the parse cost — the common case is free.
 - This is a **packaging-stage** concern: the compiler core stays agnostic, taking a merged
   `Object ForeignSig`; only the bin reads source and builds it. The effectful-foreign set
   (purity, ADR 0015) is derived from the merged signatures, so private effectful foreigns are
@@ -74,6 +86,15 @@ source of truth for a foreign's type and which *does* contain private foreigns. 
   off the wasm's import section, not off externs). **Intrinsics thereby become a performance
   optimisation, not a correctness necessity** — a foreign without an intrinsic still runs via
   the JS ladder once its source signature is known.
+- **Reconstruction failure degrades to opaque, it does not stop the build.** If a declared
+  foreign still has no signature after the merge (source unparsable, cache-db absent, …),
+  lowering — which knows the full set of CoreFn `foreignNames` — synthesises an **all-opaque**
+  host import (`MOpaque` params/result, arity taken from the call site) instead of throwing
+  `unknown callee`. The program builds and links; the foreign is callable but unmarshalled
+  (bare `eqref` across the boundary), so a scalar foreign may then misbehave at runtime. This
+  is the accepted trade-off: an opaque-but-built program over a hard build failure. The
+  fallback is **gated on `foreignNames`** so a genuinely unknown callee (a real bug, not a
+  foreign) still fails loudly rather than silently becoming a missing host import.
 
 Why source rather than fixing externs: externs are the public interface by design (omitting
 private declarations is correct for typechecking), and we cannot change `purs`. CoreFn knows
@@ -93,7 +114,12 @@ that.
   build pipeline.
 - Requires source availability at build time and that `cache-db.json` is present (spago writes
   it on every build); a module absent from the cache-db, or whose source file is unreadable,
-  falls back to externs-only.
+  falls back to externs-only, and any private foreign then left without a signature degrades
+  to the opaque host-import fallback above rather than failing the build.
+- A type synonym or infix type operator in a **private** foreign's type is not desugared by
+  the CST pass, so such a position becomes `MOpaque` (arity is still correct). Exported
+  foreigns are unaffected — they take the desugared externs sig under the externs-wins merge.
+  Accepted: the `*Impl` idiom overwhelmingly uses canonical scalar/`Effect`/function types.
 - Introduces a source/compiled-output skew risk (the `.purs` must match the compiled
   `corefn.json`). Low in practice — PureScript has no macros/preprocessing, so source is
   truth — but real if a stale source tree is pointed at. *Future enhancement:* `cache-db.json`
