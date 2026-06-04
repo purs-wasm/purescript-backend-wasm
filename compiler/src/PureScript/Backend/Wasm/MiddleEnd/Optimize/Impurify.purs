@@ -90,6 +90,7 @@ descend = case _ of
   M.App f args -> M.App (go f) (map go args)
   M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
   M.Let bs body -> M.Let (map goBind bs) (go body)
+  M.Perform e -> M.Perform (go e)
   where
   goAlt alt = alt
     { result = case alt.result of
@@ -114,10 +115,10 @@ reapply f extra
 thunk :: M.Expr -> M.Expr
 thunk body = M.Abs [ fresh (allVars body) "$ev" ] body
 
--- | Run a thunk: apply it to an (ignored) unit. The encoded thunk ignores its
--- | argument, so a literal serves and avoids a `Data.Unit` dependency.
+-- | Run a thunk: the distinct `Perform` node (lowered to applying it to a unit). Kept
+-- | distinct from a bare `e(unit)` so the simplifier can reason about a *run*'s purity.
 perform :: M.Expr -> M.Expr
-perform e = M.App e [ M.Lit (LitInt 0) ]
+perform e = M.Perform e
 
 bindBody :: M.Expr -> M.Expr -> M.Expr
 bindBody m k = case k of

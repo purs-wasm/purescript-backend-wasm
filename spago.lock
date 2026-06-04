@@ -5,6 +5,7 @@
         "path": "bench",
         "core": {
           "dependencies": [
+            "effect",
             "prelude"
           ]
         },
@@ -116,6 +117,7 @@
         "path": "example",
         "core": {
           "dependencies": [
+            "effect",
             "prelude"
           ]
         },

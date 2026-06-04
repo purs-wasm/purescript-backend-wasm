@@ -30,6 +30,7 @@ exprSize = case _ of
   M.Update e _ kvs -> 1 + exprSize e + sum (map (exprSize <<< snd) kvs)
   M.Abs _ b -> 1 + exprSize b
   M.App f args -> 1 + exprSize f + sum (map exprSize args)
+  M.Perform e -> 1 + exprSize e
   M.Case scruts alts -> 1 + sum (map exprSize scruts) + sum (map altSize alts)
   M.Let binds body -> 1 + sum (map bindSize binds) + exprSize body
   where
@@ -51,6 +52,7 @@ references = case _ of
   M.Update e _ kvs -> references e <> (kvs >>= references <<< snd)
   M.Abs _ b -> references b
   M.App f args -> references f <> (args >>= references)
+  M.Perform e -> references e
   M.Case scruts alts -> (scruts >>= references) <> (alts >>= altExprs >>= references)
   M.Let binds body -> (binds >>= bindExprs >>= references) <> references body
   where

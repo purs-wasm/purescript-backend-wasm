@@ -10,7 +10,7 @@ module Test.E2E.Eff (spec) where
 import Prelude
 
 import Effect.Class (liftEffect)
-import Test.E2E.Wasm (callI32x1, instantiateLinked)
+import Test.E2E.Wasm (callI32x1, callI32x2, instantiateLinked)
 import Test.Spec (Spec, before, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -31,13 +31,32 @@ spec =
                 , "compiler/test/fixtures/Data.Semiring.corefn.json"
                 , "compiler/test/fixtures/Data.Unit.corefn.json"
                 , "compiler/test/fixtures/Data.Function.corefn.json"
+                , "compiler/test/fixtures/Data.Ord.corefn.json"
+                , "compiler/test/fixtures/Data.Ordering.corefn.json"
+                , "compiler/test/fixtures/Data.Eq.corefn.json"
+                , "compiler/test/fixtures/Data.Ring.corefn.json"
                 ]
             )
         )
     $ do
-        it "runs a pure Effect computation: runEff n = n + 1" \inst -> do
+        it "runs a pure Effect do-block (bind): runEff n = n + 1" \inst -> do
           r <- liftEffect (callI32x1 inst "runEff" 41)
           r `shouldEqual` 42
-        it "is correct for another input" \inst -> do
-          r <- liftEffect (callI32x1 inst "runEff" 0)
-          r `shouldEqual` 1
+          r0 <- liftEffect (callI32x1 inst "runEff" 0)
+          r0 `shouldEqual` 1
+        -- Functor instance (functorEffect.map = liftA1 → apply + pure)
+        it "runs Functor (map) over Effect: mapEff n = n + 1" \inst -> do
+          r <- liftEffect (callI32x1 inst "mapEff" 9)
+          r `shouldEqual` 10
+        -- Apply (applyEffect.apply = ap → bind) + Applicative (pure)
+        it "runs Apply/Applicative over Effect: applyEff a b = a + b" \inst -> do
+          r <- liftEffect (callI32x2 inst "applyEff" 3 4)
+          r `shouldEqual` 7
+        -- Bind instance, explicit (>>=)
+        it "runs Bind over Effect: bindEff n = n * 2" \inst -> do
+          r <- liftEffect (callI32x1 inst "bindEff" 21)
+          r `shouldEqual` 42
+        -- a pure Effect loop (recursion through bind) must run in constant stack
+        it "runs a deep Effect loop without overflowing (constant stack)" \inst -> do
+          r <- liftEffect (callI32x1 inst "countEff" 1000000)
+          r `shouldEqual` 1000000

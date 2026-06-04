@@ -53,6 +53,13 @@ data Expr
   | Update Expr (Maybe (Array String)) (Array (Tuple String Expr))
   | Case (Array Expr) (Array Alt)
   | Let (Array Bind) Expr
+  -- | **Run** an `Effect` (ADR 0015): performing the thunk an impurified `Effect a`
+  -- | reduces to (`perform e ≅ e(unit)`). Kept as a distinct node — rather than a bare
+  -- | over-application — so the optimizer can tell a *run* from an ordinary call and
+  -- | decide its purity: `Perform` of a provably-pure thunk reduces away (the pure
+  -- | `Effect` collapse), `Perform` of anything else is an effectful barrier the
+  -- | reordering/dropping reductions must respect. Lowered as `e` applied to a unit.
+  | Perform Expr
 
 derive instance Generic Expr _
 derive instance Eq Expr

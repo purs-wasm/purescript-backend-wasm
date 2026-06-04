@@ -100,6 +100,7 @@ isApplied p = go
     M.Abs ps b -> not (Array.elem p ps) && go b
     M.Lit lit -> Array.any go (litExprs lit)
     M.Accessor _ e -> go e
+    M.Perform e -> go e
     M.Update e _ kvs -> go e || Array.any (go <<< snd) kvs
     M.Case ss alts -> Array.any go ss || Array.any altGo alts
     M.Let bs b -> Array.any bindGo bs || (not (Array.elem p (bs >>= boundNames)) && go b)
@@ -123,6 +124,7 @@ allSelfCallsPass qname i p = go
     M.Abs _ b -> go b
     M.Lit lit -> Array.all go (litExprs lit)
     M.Accessor _ e -> go e
+    M.Perform e -> go e
     M.Update e _ kvs -> go e && Array.all (go <<< snd) kvs
     M.Case ss alts -> Array.all go ss && Array.all altGo alts
     M.Let bs b -> Array.all bindGo bs && go b
@@ -170,6 +172,7 @@ specExpr funcs = go
     M.Update e cf kvs -> M.Update <$> go e <*> pure cf <*> traverse (traverse go) kvs
     M.Abs ps b -> M.Abs ps <$> go b
     M.App f args -> M.App <$> go f <*> traverse go args
+    M.Perform e -> M.Perform <$> go e
     M.Case ss alts -> M.Case <$> traverse go ss <*> traverse goAlt alts
     M.Let bs b -> M.Let <$> traverse goBind bs <*> go b
   goAlt alt = case alt.result of
@@ -231,6 +234,7 @@ rewriteSelfCalls fqname specName k frees = go
     e@(M.Var _) -> e
     e@(M.Constructor _ _ _) -> e
     M.Accessor l e -> M.Accessor l (go e)
+    M.Perform e -> M.Perform (go e)
     M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
     M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
     M.Let bs b -> M.Let (map goBind bs) (go b)
@@ -270,6 +274,7 @@ substVar name repl = go
     M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
     M.Abs ps b -> if Array.elem name ps then M.Abs ps b else M.Abs ps (go b)
     M.App f a -> mkApp (go f) (map go a)
+    M.Perform e -> M.Perform (go e)
     M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
     M.Let bs body ->
       if Array.elem name (bs >>= boundNames) then M.Let bs body

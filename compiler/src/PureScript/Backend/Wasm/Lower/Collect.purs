@@ -147,6 +147,7 @@ collectLabels modules =
       exprLabels e <> fromMaybe [] copyFields <> (kvs >>= \(Tuple l v) -> Array.cons l (exprLabels v))
     M.Abs _ b -> exprLabels b
     M.App f args -> exprLabels f <> (args >>= exprLabels)
+    M.Perform e -> exprLabels e
     M.Var _ -> []
     M.Case ss alts -> (ss >>= exprLabels) <> (alts >>= altLabels)
     M.Let binds b -> (binds >>= bindLabels) <> exprLabels b
@@ -179,6 +180,7 @@ qualifiedRefs = go
     M.Update e _ kvs -> go e <> (kvs >>= \(Tuple _ v) -> go v)
     M.Abs _ b -> go b
     M.App f args -> go f <> (args >>= go)
+    M.Perform e -> go e
     M.Case ss alts -> (ss >>= go) <> (alts >>= altRefs)
     M.Let binds b -> (binds >>= bindRefs) <> go b
   altRefs alt = case alt.result of

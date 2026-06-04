@@ -23,6 +23,7 @@ import Prelude
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Foldable (foldMap, sum)
+import Data.Traversable (traverse)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -77,6 +78,7 @@ simplifyExpr ctx = fixpoint maxPasses
     M.Update e cf kvs -> M.Update (pass e) cf (map (map pass) kvs)
     M.Abs ps b -> M.Abs ps (pass b)
     M.App f args -> M.App (pass f) (map pass args)
+    M.Perform e -> M.Perform (pass e)
     M.Case ss alts -> M.Case (map pass ss) (map passAlt alts)
     M.Let bs body -> M.Let (map passBind bs) (pass body)
 
@@ -103,6 +105,13 @@ simplifyExpr ctx = fixpoint maxPasses
     -- params of the same name (which would change which binder a use refers to).
     M.Abs ps (M.Abs qs b)
       | Array.null (Array.intersect ps qs) -> Just (M.Abs (ps <> qs) b)
+    -- running an `Effect` is applying its thunk to a (unit) argument (ADR 0015).
+    -- Reducing `Perform` to that application lets the ordinary rules take over: a pure
+    -- `\$ev -> b` β-reduces away (the pure-`Effect` collapse), and a recursive
+    -- `perform(go(…))` app-flattens to a saturated `go(…, unit)` that TCEs. (Step 2 will
+    -- gate this on the run being pure, leaving a genuinely effectful `Perform` as a
+    -- barrier the reordering/dropping rules must respect; until then every run is pure.)
+    M.Perform e -> Just (M.App e [ M.Lit (LitInt 0) ])
     -- short-circuit the boolean operators: `a || b` / `a && b` evaluate `b` only
     -- when needed, matching PureScript/JS semantics (and saving work — e.g. the
     -- three comparisons in nqueens' `safe` stop at the first that holds). The
@@ -115,6 +124,14 @@ simplifyExpr ctx = fixpoint maxPasses
     -- applied function (e.g. `ordIntImpl(LT, EQ, GT)`) saturates once its remaining
     -- arguments arrive and is recognised as the intrinsic rather than a closure
     M.App (M.App f as) bs -> Just (M.App f (as <> bs))
+    -- float a `let` out of the function position of an application, so the lambda it
+    -- wraps meets its arguments and β-reduces — e.g. `map`/`apply` over `Effect`
+    -- inline to `(let bind = … in \f a -> …)(args)`; floating gives `let bind = … in
+    -- (\f a -> …)(args)`, which then saturates (ADR 0015). Only when the let's bound
+    -- names do not occur free in the arguments (else floating would capture them).
+    M.App (M.Let bs body) args
+      | Set.isEmpty (Set.intersection (Set.fromFoldable (bs >>= boundNames)) (Set.fromFoldable (args >>= freeVars []))) ->
+          Just (M.Let bs (M.App body args))
     -- commuting conversion: push an application down into a `case`'s branches, so a
     -- branch ending in a (self-)call becomes a tail call rather than the result of an
     -- applied-`case` — e.g. a State worker's `(case … of _ -> \s -> go(n,s'))(s)`
@@ -143,12 +160,28 @@ simplifyExpr ctx = fixpoint maxPasses
     -- that `substMany` is capture-avoiding (its `s` field can sit under a `\s`).
     M.Let [ M.NonRec _ x e ] body
       | trivialRecord e -> Just (substMany (Map.singleton x e) body)
+    -- inline a let-bound *small lambda* even when used several times: duplicating a
+    -- lambda copies code, not runtime work (the work is its eventual application), and
+    -- a small one is cheap to copy — this collapses the residual `let bind = … in
+    -- bind(…, … bind(…))` that `Effect`'s `map`/`apply` reduce to (the `ap`/`liftA1`
+    -- chain uses the impurified `bind` twice), so each copy then saturates (ADR 0015).
+    M.Let [ M.NonRec _ x e ] body
+      | smallLambda e -> Just (substMany (Map.singleton x e) body)
     M.Accessor l (M.Lit (LitObject kvs)) -> lookupField l kvs
     -- project a method out of a known plain-record instance by name
     M.Accessor l (M.Var q)
       | Just key <- qkey q
       , Just kvs <- Map.lookup key ctx.instanceFields -> lookupField l kvs
-    M.Case scruts alts -> caseOfKnown ctx scruts alts
+    M.Case scruts alts -> case caseOfKnown ctx scruts alts of
+      Just e -> Just e
+      -- float a common single-parameter lambda out of every branch:
+      -- `case s of … -> \p -> bᵢ` → `\p' -> case s of … -> bᵢ`. An impurified
+      -- `Effect`-returning recursive worker is `\acc -> case … of _ -> \$ev -> …`;
+      -- floating the `\$ev` lets the lambda-merge rule fold it into the worker's
+      -- parameter list, so the self-call (applied to the perform unit) saturates and
+      -- becomes a constant-stack tail call instead of returning-a-thunk-then-applying
+      -- it — the same collapse the State monad gets, now for `Effect` (ADR 0015).
+      Nothing -> floatAbsOutOfCase scruts alts
     _ -> Nothing
 
 -- | `(\ps -> b)(args)`: substitute as many params as there are args. Extra args
@@ -262,6 +295,38 @@ trivialRecord = case _ of
   M.Lit (LitObject kvs) -> Array.all (trivialExpr <<< snd) kvs
   _ -> false
 
+-- | A lambda small enough to inline at every use site (the body's node count is under
+-- | a cap). Copying it duplicates only code, never runtime work — the actual work
+-- | happens when the copy is applied — so a few small copies are cheap and let each
+-- | one saturate against its arguments.
+smallLambda :: M.Expr -> Boolean
+smallLambda = case _ of
+  M.Abs _ b -> nodeCount b <= lambdaInlineCap
+  _ -> false
+
+lambdaInlineCap :: Int
+lambdaInlineCap = 24
+
+nodeCount :: M.Expr -> Int
+nodeCount = case _ of
+  M.Var _ -> 1
+  M.Constructor _ _ _ -> 1
+  M.Lit lit -> 1 + sum (map nodeCount (litExprs lit))
+  M.Accessor _ e -> 1 + nodeCount e
+  M.Update e _ kvs -> 1 + nodeCount e + sum (map (nodeCount <<< snd) kvs)
+  M.Abs _ b -> 1 + nodeCount b
+  M.App f args -> 1 + nodeCount f + sum (map nodeCount args)
+  M.Perform e -> 1 + nodeCount e
+  M.Case ss alts -> 1 + sum (map nodeCount ss) + sum (map altNodes alts)
+  M.Let bs body -> 1 + sum (map bindNodes bs) + nodeCount body
+  where
+  altNodes alt = case alt.result of
+    Right e -> nodeCount e
+    Left gs -> sum (map (\g -> nodeCount g.guard + nodeCount g.expression) gs)
+  bindNodes = case _ of
+    M.NonRec _ _ e -> nodeCount e
+    M.Rec rs -> sum (map (nodeCount <<< _.expr) rs)
+
 trivialExpr :: M.Expr -> Boolean
 trivialExpr = case _ of
   M.Var _ -> true
@@ -271,6 +336,22 @@ trivialExpr = case _ of
   M.Lit (LitChar _) -> true
   M.Lit (LitBoolean _) -> true
   _ -> false
+
+-- | `case s of … -> \p -> bᵢ` (every branch a single-parameter lambda, no guards) →
+-- | `\p' -> case s of … -> bᵢ[p := p']`, lifting the shared lambda over the `case`.
+-- | Sound because scrutinees are pure and do not mention the floated parameter; `p'`
+-- | is chosen fresh so renaming each branch's own parameter to it cannot capture.
+floatAbsOutOfCase :: Array M.Expr -> Array M.Alt -> Maybe M.Expr
+floatAbsOutOfCase scruts alts = do
+  stripped <- traverse stripAlt alts
+  let
+    p' = freshName (Set.union (foldMap allIdents scruts) (foldMap altIdents alts)) "$eta"
+    alts' = map (\s -> s.alt { result = Right (substMany (Map.singleton s.param (M.Var (Qualified Nothing p'))) s.body) }) stripped
+  pure (M.Abs [ p' ] (M.Case scruts alts'))
+  where
+  stripAlt alt = case alt.result of
+    Right (M.Abs [ param ] body) -> Just { alt, param, body }
+    _ -> Nothing
 
 -- | Whether `App (Case … alts) args` may be pushed into the branches: the arguments
 -- | are trivial (no work duplicated by copying them per branch) and no branch's
@@ -328,6 +409,7 @@ occurrences x = go
     M.Update e _ kvs -> go e + sum (map (go <<< snd) kvs)
     M.Abs _ b -> go b
     M.App f args -> go f + sum (map go args)
+    M.Perform e -> go e
     M.Case ss alts -> sum (map go ss) + sum (map goAlt alts)
     M.Let bs body -> sum (map goBind bs) + go body
   goAlt alt = case alt.result of
@@ -336,10 +418,6 @@ occurrences x = go
   goBind = case _ of
     M.NonRec _ _ e -> go e
     M.Rec rs -> sum (map (go <<< _.expr) rs)
-  litExprs = case _ of
-    LitArray es -> es
-    LitObject kvs -> map snd kvs
-    _ -> []
 
 -- substitution ----------------------------------------------------------------
 
@@ -367,6 +445,7 @@ substMany subs0 = go (scopeOf subs0) subs0
         M.Accessor l e -> M.Accessor l (go inScope subs e)
         M.Update e cf kvs -> M.Update (go inScope subs e) cf (map (map (go inScope subs)) kvs)
         M.App f args -> M.App (go inScope subs f) (map (go inScope subs) args)
+        M.Perform e -> M.Perform (go inScope subs e)
         M.Abs ps b ->
           let
             sc = enterScope inScope subs (allIdents b) ps
@@ -437,6 +516,7 @@ allIdents = case _ of
   M.Update e _ kvs -> Set.union (allIdents e) (foldMap (allIdents <<< snd) kvs)
   M.Abs ps b -> Set.union (Set.fromFoldable ps) (allIdents b)
   M.App f args -> Set.union (allIdents f) (foldMap allIdents args)
+  M.Perform e -> allIdents e
   M.Case ss alts -> Set.union (foldMap allIdents ss) (foldMap altIdents alts)
   M.Let bs body -> Set.union (foldMap bindIdents bs) (allIdents body)
   where

@@ -147,6 +147,9 @@ lowerArg env expr k = case expr of
   -- update): bind the groups, then reduce the body to an atom for `k`.
   M.Let binds body -> lowerCoreLetK env binds body \env' body' -> lowerArg env' body' k
   M.App head args -> lowerApp env { head, args } k
+  -- run an `Effect`: apply the thunk to a unit (ADR 0015). Survives lowering only for
+  -- genuinely effectful runs — the pure-`Effect` collapse removes it in the simplifier.
+  M.Perform e -> lowerApp env { head: e, args: [ M.Lit (LitInt 0) ] } k
   -- An (uncurried) lambda lowers to a closure; closures are arity-1, so a
   -- multi-parameter lambda peels one parameter and the rest stay an inner lambda.
   M.Abs params body -> case Array.uncons params of

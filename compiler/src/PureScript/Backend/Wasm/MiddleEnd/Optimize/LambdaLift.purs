@@ -64,6 +64,7 @@ liftExpr modName = go
     M.Update e cf kvs -> M.Update <$> go e <*> pure cf <*> traverse (traverse go) kvs
     M.Abs ps b -> M.Abs ps <$> go b
     M.App f a -> M.App <$> go f <*> traverse go a
+    M.Perform e -> M.Perform <$> go e
     e@(M.Var _) -> pure e
     M.Case ss alts -> M.Case <$> traverse go ss <*> traverse goAlt alts
     M.Let binds body -> liftLet modName binds body
@@ -183,6 +184,7 @@ substVar name repl = go
     M.Abs ps b -> if Array.elem name ps then M.Abs ps b else M.Abs ps (go b)
     -- a substituted head may itself be an application; keep `App` flat
     M.App f a -> mkApp (go f) (map go a)
+    M.Perform e -> M.Perform (go e)
     M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
     M.Let binds body ->
       if Array.elem name (binds >>= boundNames) then M.Let binds body

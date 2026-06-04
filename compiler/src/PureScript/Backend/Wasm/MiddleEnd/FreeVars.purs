@@ -33,6 +33,7 @@ freeVars bound = Array.nub <<< goExpr bound
     M.Update e _ updates -> goExpr bnd e <> (updates >>= \(Tuple _ v) -> goExpr bnd v)
     M.Abs params e -> goExpr (bnd <> params) e
     M.App head args -> goExpr bnd head <> (args >>= goExpr bnd)
+    M.Perform e -> goExpr bnd e
     M.Case scruts alts -> (scruts >>= goExpr bnd) <> (alts >>= goAlt bnd)
     M.Let binds body ->
       -- Conservative scoping: every let-bound name is in scope for both the

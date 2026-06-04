@@ -40,6 +40,7 @@ printExpr ind = case _ of
     atom ind e <> " { " <> joinWith ", " (map (\(Tuple l v) -> l <> " = " <> printExpr ind v) updates) <> " }"
   M.Abs params body -> "\\" <> joinWith " " params <> " -> " <> printExpr ind body
   M.App head args -> atom ind head <> "(" <> joinWith ", " (map (printExpr ind) args) <> ")"
+  M.Perform e -> "perform(" <> printExpr ind e <> ")"
   M.Case scrutinees alternatives ->
     "case " <> joinWith ", " (map (atom ind) scrutinees) <> " of\n"
       <> joinWith "\n" (map (printAlt (ind + 1)) alternatives)
