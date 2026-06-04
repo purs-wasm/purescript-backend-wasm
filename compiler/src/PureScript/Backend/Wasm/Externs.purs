@@ -11,11 +11,15 @@ module PureScript.Backend.Wasm.Externs
   , foreignSigs
   , effectfulForeignNamesFromSigs
   , effectfulForeignNamesFromExterns
+  , effectfulForeignAritiesFromSigs
+  , effectfulForeignAritiesFromExterns
   ) where
 
 import Prelude
 
 import Data.Array as Array
+import Data.Map (Map)
+import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set (Set)
 import Data.Set as Set
@@ -84,6 +88,19 @@ effectfulForeignNamesFromSigs sigs = Set.fromFoldable (Array.mapMaybe pick (Obje
 -- | The effectful foreign names from externs (the externs-only path, e.g. the e2e harness).
 effectfulForeignNamesFromExterns :: Array ExternsFile -> Set String
 effectfulForeignNamesFromExterns = effectfulForeignNamesFromSigs <<< foreignSigs
+
+-- | Each effectful foreign signature (`MEffect` result) → its value-parameter count. Used by
+-- | generalized effect reflection (ADR 0019): a host foreign applied to exactly this many
+-- | arguments is a complete `Effect` value, so it is reflected to a thunk.
+effectfulForeignAritiesFromSigs :: Object ForeignSig -> Map String Int
+effectfulForeignAritiesFromSigs sigs = Map.fromFoldable (Array.mapMaybe pick (Object.toUnfoldable sigs))
+  where
+  pick (Tuple key sig) = case sig.result of
+    MEffect _ -> Just (Tuple key (Array.length sig.params))
+    _ -> Nothing
+
+effectfulForeignAritiesFromExterns :: Array ExternsFile -> Map String Int
+effectfulForeignAritiesFromExterns = effectfulForeignAritiesFromSigs <<< foreignSigs
 
 -- | The marshal kind of each parameter of a foreign's type, in order. `forall`
 -- | quantifiers are transparent (a foreign may be polymorphic, e.g. `forall a. a ->

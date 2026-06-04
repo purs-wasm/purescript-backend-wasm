@@ -9,6 +9,7 @@ import Prelude
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), isJust, maybe)
+import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
@@ -184,13 +185,13 @@ lower :: Array CF.Bind -> Either LowerError Program
 lower decls = lowerModule true (translModule (moduleNamed [ "T" ] decls))
 
 lowerMany :: Array (Array String) -> Array CF.Module -> Either LowerError Program
-lowerMany roots modules = lowerModules true Object.empty Object.empty roots (map translModule modules)
+lowerMany roots modules = lowerModules true Object.empty Object.empty Set.empty roots (map translModule modules)
 
 -- | Lower a single `T` module with a foreign-import signature table (ADR 0014): a
 -- | reference to a name in the table resolves to a host-import call
 -- | (`RCallForeign`) rather than `UnsupportedExpr`.
 lowerForeign :: Object ForeignImport -> Array CF.Bind -> Either LowerError Program
-lowerForeign foreigns decls = lowerModules true Object.empty foreigns [ [ "T" ] ] [ translModule (moduleNamed [ "T" ] decls) ]
+lowerForeign foreigns decls = lowerModules true Object.empty foreigns Set.empty [ [ "T" ] ] [ translModule (moduleNamed [ "T" ] decls) ]
 
 -- --- IR inspection helpers --------------------------------------------------
 

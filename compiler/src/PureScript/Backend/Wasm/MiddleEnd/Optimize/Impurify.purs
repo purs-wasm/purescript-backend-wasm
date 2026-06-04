@@ -21,7 +21,9 @@ import Prelude
 
 import Data.Array as Array
 import Data.Either (Either(..))
-import Data.Maybe (Maybe(..))
+import Data.Map (Map)
+import Data.Map as Map
+import Data.Maybe (Maybe(..), isJust)
 import Data.Set (Set)
 import Data.Set as Set
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (freeVars)
@@ -38,33 +40,101 @@ bindEKey = "Effect.bindE"
 performKey :: String
 performKey = "Effect.Unsafe.unsafePerformEffect"
 
-impurifyProgram :: Array M.Module -> Array M.Module
-impurifyProgram = map \m -> m { decls = map impurifyBind m.decls }
+-- | The `Effect` `Functor`/`Apply` instance dictionaries. Their `map`/`apply` methods are
+-- | `liftA1`/`ap`, which only reach `bindE`/`pureE` after the simplifier inlines them — too
+-- | late, because the same simplifier pass can DCE a discarded `map`/`apply` (still in plain
+-- | application form, no `Perform` yet) before impurify marks it (ADR 0019). So we impurify
+-- | the method *accessor* (`functorEffect.map`, `applyEffect.apply`) directly, to the same
+-- | thunk/`perform` encoding `bind`/`pure` get, so the `Perform` exists from the start.
+functorEffectKey :: String
+functorEffectKey = "Effect.functorEffect"
+
+applyEffectKey :: String
+applyEffectKey = "Effect.applyEffect"
+
+-- | Rewrite each module's bindings, threading `effArities` (effectful **host** foreign →
+-- | value-parameter count) so generalized effect reflection can recognise a fully-applied
+-- | effect (ADR 0019).
+impurifyProgram :: Map String Int -> Array M.Module -> Array M.Module
+impurifyProgram effArities = map \m -> m { decls = map impurifyBind m.decls }
   where
   impurifyBind = case _ of
     M.NonRec meta i e -> M.NonRec meta i (go e)
     M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
 
--- | Rewrite top-down: an *applied* primitive is recognized at the `App` node (so its
--- | head `Var` is not eta-expanded first), recursing into the arguments; an *unapplied*
--- | reference (e.g. the residual `bind = Effect.bindE` alias dict-elim leaves, or
--- | `bindE` sitting inside an instance record) is eta-expanded to its lambda form so it
--- | never reaches lowering as a bare foreign.
-go :: M.Expr -> M.Expr
-go expr = case expr of
-  M.App (M.Var q) args
-    | qkey q == Just pureEKey
-    , Just { head: a, tail } <- Array.uncons args -> reapply (thunk (go a)) (map go tail)
-    | qkey q == Just performKey
-    , Just { head: e, tail } <- Array.uncons args -> reapply (perform (go e)) (map go tail)
-    | qkey q == Just bindEKey
-    , Just { head: m, tail: t1 } <- Array.uncons args
-    , Just { head: k, tail: rest } <- Array.uncons t1 -> reapply (thunk (bindBody (go m) (go k))) (map go rest)
-  M.Var q
-    | qkey q == Just pureEKey -> etaPure
-    | qkey q == Just bindEKey -> etaBind
-    | qkey q == Just performKey -> etaPerform
-  _ -> descend expr
+  -- The value-arity of an effectful **host** foreign (so a full application is an `Effect`
+  -- value). The monad-glue foreigns (`bindE`/`pureE`/`unsafePerformEffect`) are excluded —
+  -- they have their own rewrites above and must not be reflected.
+  effArity :: Qualified String -> Maybe Int
+  effArity q = case qkey q of
+    Just k | k /= bindEKey, k /= pureEKey, k /= performKey -> Map.lookup k effArities
+    _ -> Nothing
+
+  -- Rewrite top-down: an applied primitive is recognised at the `App` node; an unapplied
+  -- reference is eta-expanded to its lambda form so it never reaches lowering as a bare
+  -- foreign. Performed host foreigns are kept (not re-reflected — keeps reflection idempotent
+  -- across rounds); host foreigns in value position are reflected to a thunk.
+  go expr = case expr of
+    -- a host foreign already under a run stays performed (recurse args only). This is what
+    -- makes the reflection below idempotent: `Π(reflect \_ -> Π(f)) → Π(f)` (Simplify β),
+    -- and re-running impurify must not wrap it again.
+    M.Perform (M.App (M.Var q) args) | isJust (effArity q) -> M.Perform (M.App (M.Var q) (map go args))
+    M.Perform (M.Var q) | effArity q == Just 0 -> M.Perform (M.Var q)
+    M.App (M.Var q) args
+      | qkey q == Just pureEKey
+      , Just { head: a, tail } <- Array.uncons args -> reapply (thunk (go a)) (map go tail)
+      | qkey q == Just performKey
+      , Just { head: e, tail } <- Array.uncons args -> reapply (perform (go e)) (map go tail)
+      | qkey q == Just bindEKey
+      , Just { head: m, tail: t1 } <- Array.uncons args
+      , Just { head: k, tail: rest } <- Array.uncons t1 -> reapply (thunk (bindBody (go m) (go k))) (map go rest)
+      -- generalized effect reflection (ADR 0019): a fully-applied effectful host foreign is
+      -- already an opaque `Effect` (`log "a" ≡ reflect (\_ -> Π(log "a"))`), so in value
+      -- position it becomes a thunk; a directly-performed one β-reduces back (Simplify ~130).
+      | Just n <- effArity q, Array.length args == n -> reflect (M.App (M.Var q) (map go args))
+    -- `functorEffect.map f m` = `bindE m (\a -> pure (f a))` → `\$ev -> let a = perform m in f a`
+    M.App (M.Accessor "map" (M.Var q)) args
+      | qkey q == Just functorEffectKey
+      , Just { head: f, tail: t1 } <- Array.uncons args
+      , Just { head: m, tail: rest } <- Array.uncons t1 -> reapply (mapBody (go f) (go m)) (map go rest)
+    -- `applyEffect.apply mf ma` = `bindE mf (\f -> bindE ma (\a -> pure (f a)))`
+    M.App (M.Accessor "apply" (M.Var q)) args
+      | qkey q == Just applyEffectKey
+      , Just { head: mf, tail: t1 } <- Array.uncons args
+      , Just { head: ma, tail: rest } <- Array.uncons t1 -> reapply (applyBody (go mf) (go ma)) (map go rest)
+    M.Var q
+      | qkey q == Just pureEKey -> etaPure
+      | qkey q == Just bindEKey -> etaBind
+      | qkey q == Just performKey -> etaPerform
+      -- a nullary effectful host foreign (e.g. `random :: Effect a`) is itself an `Effect`
+      | effArity q == Just 0 -> reflect (M.Var q)
+    _ -> descend expr
+
+  descend = case _ of
+    M.Lit lit -> M.Lit (mapLit go lit)
+    e@(M.Var _) -> e
+    e@(M.Constructor _ _ _) -> e
+    M.Accessor l e -> M.Accessor l (go e)
+    M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
+    M.Abs ps b -> M.Abs ps (go b)
+    M.App f args -> M.App (go f) (map go args)
+    M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
+    M.Let bs body -> M.Let (map goBind bs) (go body)
+    M.Perform e -> M.Perform (go e)
+    where
+    goAlt alt = alt
+      { result = case alt.result of
+          Right e -> Right (go e)
+          Left gs -> Left (map (\g -> { guard: go g.guard, expression: go g.expression }) gs)
+      }
+    goBind = case _ of
+      M.NonRec meta i e -> M.NonRec meta i (go e)
+      M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
+
+-- | Reflect an `Effect` value into its thunk encoding: `reflect m = \$ev -> Π(m)` — a thunk
+-- | that, when performed, runs `m` (ADR 0019).
+reflect :: M.Expr -> M.Expr
+reflect e = thunk (perform e)
 
 -- | Eta-expansions of the unapplied primitives, into their thunk encoding.
 etaPure :: M.Expr
@@ -78,28 +148,6 @@ etaPerform = M.Abs [ "$e" ] (perform (local "$e"))
 
 local :: String -> M.Expr
 local n = M.Var (Qualified Nothing n)
-
-descend :: M.Expr -> M.Expr
-descend = case _ of
-  M.Lit lit -> M.Lit (mapLit go lit)
-  e@(M.Var _) -> e
-  e@(M.Constructor _ _ _) -> e
-  M.Accessor l e -> M.Accessor l (go e)
-  M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
-  M.Abs ps b -> M.Abs ps (go b)
-  M.App f args -> M.App (go f) (map go args)
-  M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
-  M.Let bs body -> M.Let (map goBind bs) (go body)
-  M.Perform e -> M.Perform (go e)
-  where
-  goAlt alt = alt
-    { result = case alt.result of
-        Right e -> Right (go e)
-        Left gs -> Left (map (\g -> { guard: go g.guard, expression: go g.expression }) gs)
-    }
-  goBind = case _ of
-    M.NonRec meta i e -> M.NonRec meta i (go e)
-    M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
 
 -- | Re-apply any leftover (over-applied) arguments to the rewritten primitive (the
 -- | simplifier's app-flattening can merge a `perform`'s applied unit onto a primitive,
@@ -130,6 +178,29 @@ bindBody m k = case k of
     in
       M.Let [ M.NonRec Nothing x (perform m) ]
         (perform (M.App k [ M.Var (Qualified Nothing x) ]))
+
+-- | `map f m` over `Effect`: a thunk that performs `m`, then applies `f` to the result —
+-- | `\$ev -> let a = perform m in f a` (ADR 0019). `perform m` keeps the effect visible.
+mapBody :: M.Expr -> M.Expr -> M.Expr
+mapBody f m =
+  let
+    a = fresh (Set.union (allVars f) (allVars m)) "$a"
+  in
+    thunk (M.Let [ M.NonRec Nothing a (perform m) ] (M.App f [ M.Var (Qualified Nothing a) ]))
+
+-- | `apply mf ma` over `Effect`: perform `mf` then `ma`, then apply — `\$ev -> let f =
+-- | perform mf in let a = perform ma in f a` (ADR 0019).
+applyBody :: M.Expr -> M.Expr -> M.Expr
+applyBody mf ma =
+  let
+    used = Set.union (allVars mf) (allVars ma)
+    f = fresh used "$f"
+    a = fresh (Set.insert f used) "$a"
+  in
+    thunk
+      ( M.Let [ M.NonRec Nothing f (perform mf) ]
+          (M.Let [ M.NonRec Nothing a (perform ma) ] (M.App (M.Var (Qualified Nothing f)) [ M.Var (Qualified Nothing a) ]))
+      )
 
 mapLit :: (M.Expr -> M.Expr) -> Literal M.Expr -> Literal M.Expr
 mapLit f = case _ of

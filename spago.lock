@@ -115,6 +115,19 @@
           ]
         }
       },
+      "examples-effect-prim": {
+        "path": "examples/effect-prim",
+        "core": {
+          "dependencies": [
+            "effect",
+            "prelude",
+            "refs"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-effect-random": {
         "path": "examples/effect-random",
         "core": {
@@ -129,21 +142,22 @@
           "dependencies": []
         }
       },
-      "examples-helloworld": {
-        "path": "examples/helloworld",
+      "examples-effect-ref": {
+        "path": "examples/effect-ref",
         "core": {
           "dependencies": [
             "console",
             "effect",
-            "prelude"
+            "prelude",
+            "refs"
           ]
         },
         "test": {
           "dependencies": []
         }
       },
-      "examples-priv": {
-        "path": "examples/priv",
+      "examples-helloworld": {
+        "path": "examples/helloworld",
         "core": {
           "dependencies": [
             "console",

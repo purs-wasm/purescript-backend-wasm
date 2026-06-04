@@ -6,6 +6,7 @@ module PureScript.Backend.Wasm.Compiler
   , parseModule
   , compileModules
   , compileModulesText
+  , mirTrace
   ) where
 
 import Prelude
@@ -16,13 +17,14 @@ import Data.Argonaut.Parser (jsonParser)
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
 import Data.Set as Set
+import Data.String (joinWith)
 import Effect (Effect)
 import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Codegen (buildModule)
-import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignNamesFromSigs)
+import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
-import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram)
+import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram, optimizeProgramTrace)
 import PureScript.CoreFn (Module, ModuleName)
 import PureScript.CoreFn.FromJSON (decodeModule)
 import PureScript.ExternsFile (ExternsFile)
@@ -60,7 +62,7 @@ withCompiledModule
   -> Array ExternsFile
   -> Object ForeignSig
   -> Effect (Either String a)
-withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')) modules) of
+withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')) (effectfulForeignAritiesFromSigs foreignSigs') modules) of
   Left err -> pure (Left ("linking failed: " <> show err))
   Right program -> do
     mod <- buildModule program
@@ -74,6 +76,10 @@ withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModu
       result <- emit mod
       B.dispose mod
       pure (Right result)
+  where
+  -- every CoreFn-declared foreign name (qualified); lets lowering fall back to an
+  -- all-opaque host import when a foreign has no reconstructed signature (ADR 0016)
+  foreignNames = Set.fromFoldable (modules >>= \m -> map (\base -> joinWith "." m.name <> "." <> base) m.foreignNames)
 
 -- | Link the given modules into one wasm and return its binary bytes. `externs`
 -- | supplies type information for type-directed lowering (front B); pass `[]` to
@@ -84,3 +90,14 @@ compileModules opts = withCompiledModule opts B.emitBinary
 -- | Link the given modules into one wasm and return its WAT (text) form.
 compileModulesText :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Object ForeignSig -> Effect (Either String String)
 compileModulesText opts = withCompiledModule opts B.emitText
+
+-- | Trace how the named module's middle IR (MIR) changes after every optimizer sub-stage
+-- | (specialize / simplify / impurify) of every round — the `--trace-mir` companion to the
+-- | normal build, using the *same* effectful-foreign set/arities so the trace matches the
+-- | real pipeline. `target` is a dotted module name (e.g. `Examples.EffRef.Main`).
+mirTrace :: CompileOptions -> Array Module -> Object ForeignSig -> String -> String
+mirTrace opts modules foreignSigs' target =
+  joinWith "\n\n" (optimizeProgramTrace opts.optimizeMir effSet effArities target modules)
+  where
+  effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
+  effArities = effectfulForeignAritiesFromSigs foreignSigs'

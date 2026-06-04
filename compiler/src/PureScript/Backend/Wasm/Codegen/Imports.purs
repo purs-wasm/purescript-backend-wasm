@@ -30,6 +30,16 @@ module PureScript.Backend.Wasm.Codegen.Imports
   , intModHelperName
   , intDivHelperName
   , intDegreeHelperName
+  , refNewHelperName
+  , refReadHelperName
+  , refWriteHelperName
+  , refNewWithSelfHelperName
+  , refModifyHelperName
+  , forEHelperName
+  , foreachEHelperName
+  , whileEHelperName
+  , untilEHelperName
+  , applyCloHelperName
   ) where
 
 import Prelude
@@ -73,6 +83,19 @@ importRuntime ctx = do
   imp intModHelperName "intMod" [ B.i32, B.i32 ] B.i32
   imp intDivHelperName "intDiv" [ B.i32, B.i32 ] B.i32
   imp intDegreeHelperName "intDegree" [ B.i32 ] B.i32
+  -- Effect.Ref / ST.STRef native cell ops (ADR 0017)
+  imp refNewHelperName "refNew" [ B.eqref ] B.eqref
+  imp refReadHelperName "refRead" [ B.eqref ] B.eqref
+  imp refWriteHelperName "refWrite" [ B.eqref, B.eqref ] B.i32
+  imp refNewWithSelfHelperName "refNewWithSelf" [ B.eqref ] B.eqref
+  imp refModifyHelperName "refModify" [ B.eqref, B.eqref, B.i32, B.i32 ] B.eqref
+  -- `effect` package control-flow primitives (ADR 0018)
+  imp forEHelperName "forE" [ B.i32, B.i32, B.eqref ] B.i32
+  imp foreachEHelperName "foreachE" [ B.eqref, B.eqref ] B.i32
+  imp whileEHelperName "whileE" [ B.eqref, B.eqref ] B.i32
+  imp untilEHelperName "untilE" [ B.eqref ] B.i32
+  -- the closure-apply trampoline, reused by `runEffectFnN` (ADR 0018)
+  imp applyCloHelperName "applyClo" [ B.eqref, B.eqref ] B.eqref
 
 -- | The shared record/dictionary projection helper.
 projHelperName :: String
@@ -164,3 +187,39 @@ intDivHelperName = "$rt.intDiv"
 
 intDegreeHelperName :: String
 intDegreeHelperName = "$rt.intDegree"
+
+-- | `Effect.Ref` / `Control.Monad.ST` native mutable-cell ops (defined in
+-- | `runtime.wat`, ADR 0017). `refWrite` returns the `Unit` `i32` `0`; `refModify`
+-- | takes the interned `state`/`value` label ids resolved at lowering.
+refNewHelperName :: String
+refNewHelperName = "$rt.refNew"
+
+refReadHelperName :: String
+refReadHelperName = "$rt.refRead"
+
+refWriteHelperName :: String
+refWriteHelperName = "$rt.refWrite"
+
+refNewWithSelfHelperName :: String
+refNewWithSelfHelperName = "$rt.refNewWithSelf"
+
+refModifyHelperName :: String
+refModifyHelperName = "$rt.refModify"
+
+-- | `effect` package control-flow primitives (defined in `runtime.wat`, ADR 0018).
+forEHelperName :: String
+forEHelperName = "$rt.forE"
+
+foreachEHelperName :: String
+foreachEHelperName = "$rt.foreachE"
+
+whileEHelperName :: String
+whileEHelperName = "$rt.whileE"
+
+untilEHelperName :: String
+untilEHelperName = "$rt.untilE"
+
+-- | The runtime closure-apply trampoline (`$callClo1`, exported as `applyClo`), reused by
+-- | `runEffectFnN` to apply the uncurried function's arguments one at a time (ADR 0018).
+applyCloHelperName :: String
+applyCloHelperName = "$callClo1"

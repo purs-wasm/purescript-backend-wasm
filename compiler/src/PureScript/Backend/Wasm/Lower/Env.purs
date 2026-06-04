@@ -2,6 +2,7 @@ module PureScript.Backend.Wasm.Lower.Env where
 
 import Prelude
 
+import Data.Set (Set)
 import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Lower.IR (Atom, ForeignImport)
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
@@ -21,4 +22,8 @@ type Env =
   -- | `foreign import`s (by qualified name) that resolve to a wasm host import,
   -- | with their calling convention (ADR 0014).
   , foreignSigs :: Object ForeignImport
+  -- | Every `foreign import` name declared in CoreFn (`m.foreignNames`, qualified). A
+  -- | foreign with no entry in `foreignSigs` (reconstruction failed; ADR 0016) is still
+  -- | here, so it falls back to an all-opaque host import instead of failing the build.
+  , foreignNames :: Set String
   }

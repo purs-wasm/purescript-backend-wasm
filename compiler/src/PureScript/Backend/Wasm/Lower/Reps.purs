@@ -33,6 +33,12 @@ primRep = case _ of
   UnitValue -> I32
   IncrCtr -> I32 -- Unit, as the i32 `0`
   ReadCtr -> I32 -- the counter, an unboxed i32
+  RefWrite -> I32 -- Effect.Ref.write returns Unit, as the i32 `0` (ADR 0017)
+  -- the `effect` control-flow loops return Unit (i32 0); ADR 0018
+  ForE -> I32
+  ForeachE -> I32
+  WhileE -> I32
+  UntilE -> I32
   NumAdd -> F64
   NumSub -> F64
   NumMul -> F64
@@ -70,4 +76,6 @@ primOperandReps = case _ of
   -- unsafeCompareImpl lt eq gt x y: the selected values are boxed, the operands typed
   OrdInt -> [ Boxed, Boxed, Boxed, I32, I32 ]
   OrdNumber -> [ Boxed, Boxed, Boxed, F64, F64 ]
+  -- forE lo hi f (perform-unit): the bounds are unboxed i32, the body closure boxed
+  ForE -> [ I32, I32, Boxed, Boxed ]
   _ -> []

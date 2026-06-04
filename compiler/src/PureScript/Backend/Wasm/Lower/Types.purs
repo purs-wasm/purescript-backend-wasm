@@ -16,6 +16,7 @@ module PureScript.Backend.Wasm.Lower.Types
 import Prelude
 
 import Data.Maybe (Maybe(..))
+import Data.Set (Set)
 import Data.String (joinWith)
 import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Lower.IR (FuncName(..), ForeignImport, Rep)
@@ -56,6 +57,9 @@ type ModuleInfo =
   -- | `foreign import`s that resolve to wasm host imports (ADR 0014), by qualified
   -- | name → calling convention; from the externs (`Externs.foreignSigs`).
   , foreignSigs :: Object ForeignImport
+  -- | Every CoreFn-declared foreign name (qualified), used to fall back to an all-opaque
+  -- | host import when a foreign has no reconstructed signature (ADR 0016).
+  , foreignNames :: Set String
   }
 
 -- | The globally-unique key/name for a module-qualified top-level identifier:

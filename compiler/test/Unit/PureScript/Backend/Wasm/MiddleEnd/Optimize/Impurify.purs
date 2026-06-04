@@ -8,6 +8,7 @@ module Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify (spec) wher
 import Prelude
 
 import Data.Array as Array
+import Data.Map as Map
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Tuple (snd)
@@ -39,7 +40,7 @@ perform e = M.Perform e
 impurify :: M.Expr -> M.Expr
 impurify e =
   fromMaybe e do
-    m <- Array.head (impurifyProgram [ { name: [ "T" ], decls: [ M.NonRec Nothing "t" e ] } ])
+    m <- Array.head (impurifyProgram Map.empty [ { name: [ "T" ], decls: [ M.NonRec Nothing "t" e ] } ])
     decl <- Array.head m.decls
     case decl of
       M.NonRec _ _ e' -> Just e'

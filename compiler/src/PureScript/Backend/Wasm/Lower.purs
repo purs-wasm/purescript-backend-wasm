@@ -43,12 +43,16 @@ import Data.Array as Array
 import Data.Char (toCharCode)
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
-import Data.Maybe (Maybe(..), maybe)
+import Control.Alt ((<|>))
+import Data.Maybe (Maybe(..), isJust, maybe)
+import Data.Set (Set)
+import Data.Set as Set
+import Data.String (joinWith)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), fst)
 import Foreign.Object (Object)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic)
+import PureScript.Backend.Wasm.Intrinsics (effectIntrinsic, foreignIntrinsic)
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
@@ -91,6 +95,19 @@ etaExpand callable arity = M.Abs params (M.App callable (map localVar params))
   params = (\i -> "$x" <> show i) <$> Array.range 0 (arity - 1)
   localVar p = M.Var (Qualified Nothing p)
 
+-- | A best-effort `ForeignImport` for a declared foreign whose real signature could not
+-- | be reconstructed (ADR 0016): every parameter and the result are `MOpaque` (passed as
+-- | bare `eqref`, no marshalling). `arity` is supplied by the call site. A `Nothing`
+-- | module cannot occur (the name came from a module's `foreignNames`); it degrades to an
+-- | empty module name rather than partially.
+opaqueForeign :: Qualified String -> Int -> ForeignImport
+opaqueForeign (Qualified mModule base) arity =
+  { moduleName: maybe "" (joinWith ".") mModule
+  , base
+  , params: Array.replicate arity MOpaque
+  , result: MOpaque
+  }
+
 -- | Reduce an expression to a trivial `Atom`, threading any computation into
 -- | `Let`s that wrap the continuation `k`.
 -- | Whether `e` is (an application of) a host foreign whose result is `Effect _` — so a
@@ -102,11 +119,18 @@ isEffectForeignApp env = case _ of
   M.Var q -> isEff q
   _ -> false
   where
-  isEff q = case Object.lookup (qualifiedKeyOf q) env.foreignSigs of
-    Just sig -> case sig.result of
-      MEffect _ -> true
-      _ -> false
-    Nothing -> false
+  -- An intrinsic (incl. the `Effect.Ref` ops and `modifyImpl`, ADR 0017) is NOT a host
+  -- foreign: it is performed via the unit-application path (so its arity includes the
+  -- perform-unit), even though source reconstruction (ADR 0016) also lists it in
+  -- `foreignSigs` with an `MEffect` result. Exclude it here so that path is taken.
+  isEff q@(Qualified _ ident)
+    | isJust (effectIntrinsic (qualifiedKeyOf q)) = false
+    | isJust (foreignIntrinsic ident) = false
+    | otherwise = case Object.lookup (qualifiedKeyOf q) env.foreignSigs of
+        Just sig -> case sig.result of
+          MEffect _ -> true
+          _ -> false
+        Nothing -> false
 
 lowerArg :: Env -> M.Expr -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerArg env expr k = case expr of
@@ -144,8 +168,9 @@ lowerArg env expr k = case expr of
     -- (via the erasure in `lowerApp`) to the identity closure `\x -> x`.
     | ident == "unsafeCoerce" -> lowerArg env (etaExpand expr 1) k
     -- A nullary foreign (e.g. `Data.Bounded.topInt`) is a constant value, not a
-    -- callable, so it materializes directly rather than eta-expanding.
-    | Just (Tuple intr arity) <- foreignIntrinsic ident ->
+    -- callable, so it materializes directly rather than eta-expanding. The qualified
+    -- `Effect.Ref` ops (ADR 0017) take precedence over the bare-ident `Prelude` table.
+    | Just (Tuple intr arity) <- effectIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident ->
         if arity == 0 then bindRhs (RPrim intr []) k
         else lowerArg env (etaExpand expr arity) k
     -- a `foreign import` with no intrinsic: a wasm host import (ADR 0014). A nullary
@@ -153,6 +178,10 @@ lowerArg env expr k = case expr of
     | Just sig <- Object.lookup (qualifiedKeyOf q) env.foreignSigs ->
         if Array.null sig.params then bindRhs (RCallForeign sig []) k
         else lowerArg env (etaExpand expr (Array.length sig.params)) k
+    -- a declared foreign with no reconstructed signature (ADR 0016), used unapplied: with
+    -- no arity to recover, treat it as a nullary opaque constant rather than fail the build
+    | Set.member (qualifiedKeyOf q) env.foreignNames ->
+        bindRhs (RCallForeign (opaqueForeign q 0) []) k
     | otherwise -> throw (UnsupportedExpr ("unapplied top-level reference: " <> qualifiedKeyOf q))
   M.Accessor label record -> lowerArg env record \recAtom -> do
     labelId <- internLabel env label
@@ -264,10 +293,18 @@ lowerApp env { head, args } k = case head of
     | ident == "unsafeCoerce", Just { head: arg, tail } <- Array.uncons args -> case tail of
         [] -> lowerArg env arg k
         _ -> lowerApp env { head: arg, args: tail } k
-    | Just (Tuple intr arity) <- foreignIntrinsic ident -> applyArity arity (RPrim intr)
+    -- the qualified `Effect.Ref` ops (ADR 0017) take precedence over the bare-ident table
+    | Just (Tuple intr arity) <- effectIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident -> applyArity arity (RPrim intr)
     -- an applied `foreign import` (no intrinsic): a wasm host import (ADR 0014)
     | Just sig <- Object.lookup (qualifiedKeyOf q) env.foreignSigs ->
         applyArity (Array.length sig.params) (RCallForeign sig)
+    -- a declared foreign whose signature could not be reconstructed (ADR 0016): fall back
+    -- to an all-opaque host import with the call-site arity rather than failing the build
+    | Set.member (qualifiedKeyOf q) env.foreignNames ->
+        let
+          arity = Array.length args
+        in
+          applyArity arity (RCallForeign (opaqueForeign q arity))
     | otherwise -> throw (UnsupportedExpr ("unknown callee: " <> qualifiedKeyOf q))
   _ ->
     lowerArg env head \fAtom ->
@@ -487,6 +524,7 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
       , enumCtors: info.enumCtors
       , labelIds: info.labelIds
       , foreignSigs: info.foreignSigs
+      , foreignNames: info.foreignNames
       }
   modify_ _ { slot = Array.length params }
   block <- lowerTail env body
@@ -506,8 +544,8 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
 -- | `roots` modules are lowered (so a `Prelude` module's unused — and possibly
 -- | unsupported — instances are never visited); the roots' own functions are
 -- | exported, the rest are internal.
-lowerModules :: Boolean -> Object (Array Rep) -> Object ForeignImport -> Array (Array String) -> Array Module -> Either LowerError Program
-lowerModules optimize fieldReps foreignSigs roots modules = do
+lowerModules :: Boolean -> Object (Array Rep) -> Object ForeignImport -> Set String -> Array (Array String) -> Array Module -> Either LowerError Program
+lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
   let
     dictCtors = collectDictCtors modules
     info =
@@ -517,6 +555,7 @@ lowerModules optimize fieldReps foreignSigs roots modules = do
       , enumCtors: collectEnumCtors modules
       , labelIds: collectLabels modules
       , foreignSigs
+      , foreignNames
       }
     entries = modules >>= \m ->
       let
@@ -552,4 +591,4 @@ lowerModules optimize fieldReps foreignSigs roots modules = do
 -- | Lower a single MIR module to a backend IR `Program`, exporting its top-level
 -- | functions (the single-module case of `lowerModules`).
 lowerModule :: Boolean -> Module -> Either LowerError Program
-lowerModule optimize m = lowerModules optimize Object.empty Object.empty [ m.name ] [ m ]
+lowerModule optimize m = lowerModules optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]

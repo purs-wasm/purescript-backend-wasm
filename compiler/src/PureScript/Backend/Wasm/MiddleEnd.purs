@@ -8,16 +8,19 @@
 -- | (whole-program simplification driven by a context built from every module).
 module PureScript.Backend.Wasm.MiddleEnd
   ( optimizeProgram
+  , optimizeProgramTrace
   , optimizeModule
   ) where
 
 import Prelude
 
 import Data.Array as Array
+import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
+import Data.String (joinWith)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify (impurifyProgram)
@@ -25,6 +28,7 @@ import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline as Inline
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift (lambdaLiftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram)
+import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
 
@@ -41,19 +45,43 @@ import PureScript.CoreFn (Module)
 -- | point); lambda lifting always runs, since it is what makes deep tail recursion
 -- | run in constant stack (disabling it would overflow). Pass `false` to build an
 -- | unoptimized baseline.
-optimizeProgram :: Boolean -> Set String -> Array Module -> Array M.Module
-optimizeProgram dictElim effectfulForeigns modules =
-  if dictElim then fixpoint maxRounds lifted else lifted
+optimizeProgram :: Boolean -> Set String -> Map String Int -> Array Module -> Array M.Module
+optimizeProgram dictElim eff arities modules = (runOpt dictElim eff arities Nothing modules).modules
+
+-- | Like `optimizeProgram`, but also returns a human-readable trace of how the named
+-- | module's MIR changes after every sub-stage (specialize / simplify / impurify) of every
+-- | round — for inspecting the optimizer (`bin --trace-mir`, cf. purs-backend-es
+-- | `--trace-rewrites`). The trace is empty unless a target module is given.
+optimizeProgramTrace :: Boolean -> Set String -> Map String Int -> String -> Array Module -> Array String
+optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff arities (Just target) modules).trace
+
+-- | The whole-program optimizer core. `traceTarget` (a dotted module name) enables the MIR
+-- | trace; when `Nothing` the trace stays empty and costs nothing.
+runOpt :: Boolean -> Set String -> Map String Int -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String }
+runOpt dictElim effectfulForeigns effArities traceTarget modules =
+  if dictElim then fixpoint maxRounds 1 lifted (snap "initial (translated + lifted)" lifted)
+  else { modules: lifted, trace: snap "initial (translated + lifted)" lifted }
   where
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
   lifted = map lambdaLiftModule mir
 
+  -- a labelled snapshot of the traced module's MIR (empty when not tracing)
+  snap :: String -> Array M.Module -> Array String
+  snap label prog = case traceTarget of
+    Nothing -> []
+    Just t ->
+      let
+        body = maybe ("(module " <> t <> " not found)") printModule
+          (Array.find (\m -> joinWith "." m.name == t) prog)
+      in
+        [ "=== " <> label <> " ===\n" <> body ]
+
   -- each round: specialize higher-order calls (idempotent once rewritten), then run
   -- the simplifier (dictionary elimination + beta etc.), which inlines the
   -- specialization's lambda body and saturates its operations
-  fixpoint :: Int -> Array M.Module -> Array M.Module
-  fixpoint n prog
-    | n <= 0 = prog
+  fixpoint :: Int -> Int -> Array M.Module -> Array String -> { modules :: Array M.Module, trace :: Array String }
+  fixpoint n r prog trace
+    | n <= 0 = { modules: prog, trace }
     | otherwise =
         let
           specialized = specializeProgram prog
@@ -74,9 +102,14 @@ optimizeProgram dictElim effectfulForeigns modules =
           -- after dict-elim resolves `bind`/`pure` over `Effect` to the `bindE`/`pureE`
           -- foreigns, impurify rewrites them to the thunk encoding; the next round's
           -- simplifier collapses the resulting lambdas/applications (ADR 0015)
-          prog' = impurifyProgram (map (DictElim.simplifyModule ctx) specialized)
+          simplified = map (DictElim.simplifyModule ctx) specialized
+          prog' = impurifyProgram effArities simplified
+          trace' = trace
+            <> snap ("round " <> show r <> " · after specialize") specialized
+            <> snap ("round " <> show r <> " · after simplify") simplified
+            <> snap ("round " <> show r <> " · after impurify") prog'
         in
-          if prog' == prog then prog else fixpoint (n - 1) prog'
+          if prog' == prog then { modules: prog, trace: trace' } else fixpoint (n - 1) (r + 1) prog' trace'
 
 -- | A generous ceiling on whole-program simplification rounds; dictionary
 -- | elimination converges in a few, this only bounds pathological cases.
@@ -87,4 +120,4 @@ maxRounds = 8
 -- | for callers with one module; cross-module dictionary elimination needs
 -- | `optimizeProgram` over all linked modules.
 optimizeModule :: Module -> M.Module
-optimizeModule m = fromMaybe { name: m.name, decls: [] } (Array.head (optimizeProgram true Set.empty [ m ]))
+optimizeModule m = fromMaybe { name: m.name, decls: [] } (Array.head (optimizeProgram true Set.empty Map.empty [ m ]))

@@ -13,12 +13,14 @@ module PureScript.Backend.Wasm.Codegen.Prim
 import Prelude
 
 import Binaryen as B
+import Data.Array as Array
+import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, counterGlobalName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
-import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtomAs, strBytes, unboxBoolExpr)
-import PureScript.Backend.Wasm.Lower.IR (Atom, Rep(..))
+import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtom, genAtomAs, strBytes, unboxBoolExpr)
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), Rep(..))
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 
 genPrim :: Ctx -> Intrinsic -> Array Atom -> Effect B.Expression
@@ -168,6 +170,56 @@ genPrim ctx intr args = case intr, args of
     unitE <- B.i32Const ctx.mod 0
     B.block ctx.mod [ setE, unitE ] B.i32
   ReadCtr, _ -> B.globalGet ctx.mod counterGlobalName B.i32
+  -- `Effect.Ref` native cell ops (ADR 0017): a `$Ref` struct touched only by the
+  -- runtime helpers. The trailing `Effect` perform-unit operand is ignored (`_`).
+  RefNew, [ v, _ ] -> do
+    ev <- genAtomAs ctx Boxed v
+    B.call ctx.mod refNewHelperName [ ev ] B.eqref
+  RefRead, [ r, _ ] -> do
+    er <- genAtomAs ctx Boxed r
+    B.call ctx.mod refReadHelperName [ er ] B.eqref
+  RefWrite, [ v, r, _ ] -> do
+    ev <- genAtomAs ctx Boxed v
+    er <- genAtomAs ctx Boxed r
+    B.call ctx.mod refWriteHelperName [ er, ev ] B.i32
+  RefNewWithSelf, [ f, _ ] -> do
+    ef <- genAtomAs ctx Boxed f
+    B.call ctx.mod refNewWithSelfHelperName [ ef ] B.eqref
+  -- modifyImpl f r (perform-unit ignored): read cell, apply `f`, store the record's
+  -- `state`, return its `value`. The `state`/`value` label ids are resolved through the
+  -- emitted `internStr` (the same id space the record's fields use).
+  RefModify, [ f, r, _ ] -> do
+    er <- genAtomAs ctx Boxed r
+    ef <- genAtomAs ctx Boxed f
+    sId <- genAtom ctx (ALitString "state") >>= \s -> B.call ctx.mod internStrName [ s ] B.i32
+    vId <- genAtom ctx (ALitString "value") >>= \s -> B.call ctx.mod internStrName [ s ] B.i32
+    B.call ctx.mod refModifyHelperName [ er, ef, sId, vId ] B.eqref
+  -- `effect` control-flow loops (ADR 0018): native wasm loops via runtime helpers; the
+  -- trailing perform-unit operand is dropped (`_`).
+  ForE, [ lo, hi, f, _ ] -> do
+    elo <- genAtomAs ctx I32 lo
+    ehi <- genAtomAs ctx I32 hi
+    ef <- genAtomAs ctx Boxed f
+    B.call ctx.mod forEHelperName [ elo, ehi, ef ] B.i32
+  ForeachE, [ arr, f, _ ] -> do
+    earr <- genAtomAs ctx Boxed arr
+    ef <- genAtomAs ctx Boxed f
+    B.call ctx.mod foreachEHelperName [ earr, ef ] B.i32
+  WhileE, [ cond, body, _ ] -> do
+    ec <- genAtomAs ctx Boxed cond
+    eb <- genAtomAs ctx Boxed body
+    B.call ctx.mod whileEHelperName [ ec, eb ] B.i32
+  UntilE, [ act, _ ] -> do
+    ea <- genAtomAs ctx Boxed act
+    B.call ctx.mod untilEHelperName [ ea ] B.i32
+  -- `Effect.Uncurried` (ADR 0018): `EffectFnN` is the curried closure, so `mkEffectFnN` is
+  -- identity; `runEffectFnN g x₁…x_N` applies `g` to the N args (the result is the `Effect`).
+  MkEffectFn, [ x ] -> genAtomAs ctx Boxed x
+  RunEffectFn, args' -> case Array.uncons args' of
+    Just { head: g, tail: xs } -> do
+      g0 <- genAtomAs ctx Boxed g
+      applyEffectFnArgs g0 xs
+    Nothing -> throwException (error "Codegen: runEffectFn with no operands")
   -- `Record.Unsafe`: resolve the `String` key to its label id, then read / rebuild
   -- the record through the id-keyed runtime helpers.
   UnsafeGet, [ key, rec ] -> do
@@ -222,6 +274,14 @@ genPrim ctx intr args = case intr, args of
   internId key = do
     ek <- genAtomAs ctx Boxed key
     B.call ctx.mod internStrName [ ek ] B.i32
+  -- apply a closure expression to each remaining argument atom in turn (the curried
+  -- application `runEffectFnN` performs), via the runtime `applyClo` trampoline (ADR 0018)
+  applyEffectFnArgs acc xs = case Array.uncons xs of
+    Nothing -> pure acc
+    Just { head: x, tail } -> do
+      ex <- genAtomAs ctx Boxed x
+      acc' <- B.call ctx.mod applyCloHelperName [ acc, ex ] B.eqref
+      applyEffectFnArgs acc' tail
   intBinop op a b = do
     ea <- intArg a
     eb <- intArg b

@@ -9,16 +9,20 @@
 module PureScript.Backend.Wasm.Intrinsics
   ( Intrinsic(..)
   , foreignIntrinsic
+  , effectIntrinsic
   , effectfulForeignNames
   ) where
 
 import Prelude
 
 import Data.Generic.Rep (class Generic)
+import Data.Int as Int
 import Data.Maybe (Maybe(..))
 import Data.Set (Set)
 import Data.Set as Set
 import Data.Show.Generic (genericShow)
+import Data.String (stripPrefix)
+import Data.String (Pattern(..)) as Str
 import Data.Tuple (Tuple(..))
 
 data Intrinsic
@@ -104,6 +108,28 @@ data Intrinsic
   -- | `n` is an integer in the `Int32` range (matching JS `(n | 0) === n`), else
   -- | `nothing`; `just` is applied via the closure trampoline.
   | FromNumberImpl
+  -- | `Effect.Ref` / `Control.Monad.ST` native mutable cell (ADR 0017). The cell is a
+  -- | wasm `$Ref` struct, so no value crosses to JS. Each consumes the trailing
+  -- | `Effect`/`ST` perform-unit operand (dropped in codegen). `RefNew`/`RefRead`/
+  -- | `RefNewWithSelf` return an `eqref`; `RefWrite` returns `Unit` (`i32` 0); `RefModify`
+  -- | takes `[f, ref, stateId, valueId]` (the label ids resolved at lowering) and returns
+  -- | the record's `value`.
+  | RefNew
+  | RefRead
+  | RefWrite
+  | RefNewWithSelf
+  | RefModify
+  -- | `effect` package control-flow primitives (ADR 0018): native wasm loops applying the
+  -- | body/condition closure. Each returns `Unit` and consumes the trailing perform-unit.
+  | ForE
+  | ForeachE
+  | WhileE
+  | UntilE
+  -- | `Effect.Uncurried` (ADR 0018). `EffectFnN` IS the curried closure, so `mkEffectFnN`
+  -- | is identity; `runEffectFnN g x₁…x_N` applies `g` to the N args (an `applyClo` chain),
+  -- | yielding the `Effect` thunk (the caller performs it).
+  | MkEffectFn
+  | RunEffectFn
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -201,9 +227,62 @@ foreignIntrinsic = case _ of
   "readCtr" -> Just (Tuple ReadCtr 1)
   _ -> Nothing
 
+-- | `Effect.Ref` / `Control.Monad.ST` native cell ops (ADR 0017), keyed by their
+-- | **qualified** name. Unlike the bare-ident table above, these must be qualified:
+-- | `read` / `write` / `_new` are too generic to claim globally. `modifyImpl` is not
+-- | here — it is desugared in `Lower` (it needs the record's `state`/`value` label ids),
+-- | so it is recognised there by qualified name instead. The arity counts each op's
+-- | value parameters plus the trailing `Effect`/`ST` perform-unit (so `read`/`_new` are
+-- | 2, `write` is 3); the unit operand is dropped in codegen.
+-- | The `effect`-package intrinsics, keyed by **qualified** name (ADR 0017 / 0018): the
+-- | `Effect.Ref` cell ops, the `Effect` control-flow loops, and `Effect.Uncurried`'s
+-- | `mkEffectFnN`/`runEffectFnN`. Qualified (not the bare-ident table) because names like
+-- | `read`/`write`/`new`/`forE` are too generic to claim globally.
+-- |
+-- | The arity counts value parameters plus the trailing `Effect` perform-unit for the ops
+-- | whose result is `Effect Unit` (`Ref.write`, `forE`, …): they are performed via the
+-- | unit-application path, and the unit operand is dropped in codegen. `modifyImpl` is
+-- | arity 3 so an unperformed `modify' = modifyImpl` eta-expands to a proper thunk.
+-- | `mkEffectFnN` is arity 1 (identity); `runEffectFnN` is arity N+1 (the function + N
+-- | args), matched by stripping the numeric suffix so all N = 1..10 resolve.
+-- |
+-- | (`Control.Monad.ST` shares the `$Ref` representation and is a natural follow-up once
+-- | its foreign names/shapes are confirmed; not wired here yet.)
+effectIntrinsic :: String -> Maybe (Tuple Intrinsic Int)
+effectIntrinsic = case _ of
+  "Effect.Ref._new" -> Just (Tuple RefNew 2)
+  "Effect.Ref.read" -> Just (Tuple RefRead 2)
+  "Effect.Ref.write" -> Just (Tuple RefWrite 3)
+  "Effect.Ref.newWithSelf" -> Just (Tuple RefNewWithSelf 2)
+  "Effect.Ref.modifyImpl" -> Just (Tuple RefModify 3)
+  "Effect.forE" -> Just (Tuple ForE 4) -- lo, hi, f, perform-unit
+  "Effect.foreachE" -> Just (Tuple ForeachE 3) -- arr, f, perform-unit
+  "Effect.whileE" -> Just (Tuple WhileE 3) -- cond, body, perform-unit
+  "Effect.untilE" -> Just (Tuple UntilE 2) -- action, perform-unit
+  name -> case stripPrefix (Str.Pattern "Effect.Uncurried.mkEffectFn") name of
+    Just _ -> Just (Tuple MkEffectFn 1)
+    Nothing -> case stripPrefix (Str.Pattern "Effect.Uncurried.runEffectFn") name of
+      -- runEffectFnN: the function + its N arguments (N parsed from the suffix); no unit —
+      -- the result is the `Effect`, performed by the caller
+      Just suffix | Just n <- Int.fromString suffix -> Just (Tuple RunEffectFn (n + 1))
+      _ -> Nothing
+
 -- | The qualified names of `foreign import`s whose *running* performs a side effect —
--- | the seed set for the middle-end's purity analysis (ADR 0015). Currently just the
--- | test-only counter primitives; real effectful FFI (Console, Ref, EffectFnN) will be
--- | derived from externs types when added.
+-- | the seed set for the middle-end's purity analysis (ADR 0015): the test-only counter
+-- | primitives plus the `Effect.Ref` / `ST` cell ops (ADR 0017), so a `Perform` of a
+-- | ref op is preserved. Other effectful FFI (Console, EffectFnN) is derived from
+-- | externs/source types (`effectfulForeignNamesFromSigs`).
 effectfulForeignNames :: Set String
-effectfulForeignNames = Set.fromFoldable [ "Counter.incrCtr", "Counter.readCtr" ]
+effectfulForeignNames = Set.fromFoldable
+  [ "Counter.incrCtr"
+  , "Counter.readCtr"
+  , "Effect.Ref._new"
+  , "Effect.Ref.read"
+  , "Effect.Ref.write"
+  , "Effect.Ref.modifyImpl"
+  , "Effect.Ref.newWithSelf"
+  , "Effect.forE"
+  , "Effect.foreachE"
+  , "Effect.whileE"
+  , "Effect.untilE"
+  ]

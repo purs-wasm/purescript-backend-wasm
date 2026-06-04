@@ -130,6 +130,8 @@ needsInternStr prog = foldProgramRhs collect false prog || Array.any sigHasRecor
   where
   collect rhs acc = acc || case rhs of
     RCallForeign sig _ -> sigHasRecord sig
+    -- modifyImpl (ADR 0017) resolves the record's `state`/`value` ids via `internStr`
+    RPrim RefModify _ -> true
     _ -> false
   sigHasRecord sig = Array.any kindHasRecord sig.params || kindHasRecord sig.result
 

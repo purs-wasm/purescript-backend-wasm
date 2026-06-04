@@ -30,7 +30,7 @@ import Node.Process as Process
 import Node.Cbor (decodeFirst)
 import Foreign.Object (Object)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Compiler (compileModules, parseModule)
+import PureScript.Backend.Wasm.Compiler (compileModules, mirTrace, parseModule)
 import PureScript.Backend.Wasm.Externs (foreignSigs)
 import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson, exportManifestJson)
@@ -61,6 +61,7 @@ type BuildOption =
   , text :: Boolean
   , debug :: Boolean
   , noOpt :: Boolean
+  , traceMir :: Maybe String
   }
 
 buildOptionsParser :: ArgParser BuildOption
@@ -93,6 +94,12 @@ buildOptionsParser =
           "Skip the middle-end optimization (dictionary elimination); lambda lifting\n\
           \still runs. Use to build an unoptimized baseline for benchmarking."
           # ArgParser.boolean
+    , traceMir:
+        ArgParser.argument [ "--trace-mir" ]
+          "Trace how the given module's middle IR (MIR) changes after every optimizer\n\
+          \sub-stage (specialize/simplify/impurify) of every round, written to\n\
+          \./mir-trace.txt (debugging; cf. purs-backend-es --trace-rewrites)."
+          # ArgParser.optional
     }
 
 data Command = Build BuildOption
@@ -162,21 +169,35 @@ buildCmd args = do
       Right (Right ef) -> Just ef
       _ -> Nothing
   -- Reconstruct foreign signatures from `.purs` source (ADR 0016): externs omit private
-  -- `*Impl` foreigns, but the source has them. `cache-db.json` (beside the artifacts) maps
-  -- each module to its source path; read + parse those. Source-derived sigs override
-  -- externs; a module absent from the cache-db falls back to externs (as before).
+  -- `*Impl` foreigns, but the source has them. We only parse a module's source when its
+  -- CoreFn `foreignNames` mentions a foreign that externs do NOT cover (i.e. a private one),
+  -- so the common all-exported-foreigns module never pays the parse cost. `cache-db.json`
+  -- (beside the artifacts) maps each module to its source path.
+  let externsSigs = foreignSigs externs
   cacheDbTxt <- try (FS.readTextFile UTF8 (Path.concat [ args.input, "cache-db.json" ]))
   let sourcePaths = either (const Object.empty) cacheDbSourcesImpl cacheDbTxt
-  srcSigsByMod <- for mods \mod -> case Object.lookup (printModname mod) sourcePaths of
-    Nothing -> pure Object.empty
-    Just path -> do
-      result <- try (FS.readTextFile UTF8 path)
-      pure (either (const Object.empty) parseForeignSigs result)
-  -- source wins over externs (`Object.union` is left-biased); both keyed by `Module.ident`
+  srcSigsByMod <- for modules \m -> do
+    let mn = printModname m.name
+    let hasPrivate = Array.any (\base -> not (Object.member (mn <> "." <> base) externsSigs)) m.foreignNames
+    case Tuple hasPrivate (Object.lookup mn sourcePaths) of
+      Tuple true (Just path) -> do
+        result <- try (FS.readTextFile UTF8 path)
+        pure (either (const Object.empty) parseForeignSigs result)
+      _ -> pure Object.empty
+  -- externs win over source (`Object.union` is left-biased): externs types are already
+  -- desugared by `purs`, so they are authoritative for *exported* foreigns; source only
+  -- fills the private foreigns externs omit (ADR 0016). Both keyed by `Module.ident`.
   let srcSigs = Array.foldl Object.union Object.empty srcSigsByMod
-  let allSigs = Object.union srcSigs (foreignSigs externs)
+  let allSigs = Object.union externsSigs srcSigs
   let roots = map entryRoot (Array.fromFoldable args.entryModules)
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
+  -- `--trace-mir <Module>`: dump that module's MIR after every optimizer sub-stage to
+  -- ./mir-trace.txt (debugging the optimizer; cf. purs-backend-es --trace-rewrites).
+  case args.traceMir of
+    Nothing -> pure unit
+    Just target -> do
+      FS.writeTextFile UTF8 "mir-trace.txt" (mirTrace opts modules allSigs target)
+      Console.log ("Wrote MIR trace for " <> target <> " to ./mir-trace.txt")
   -- one bundle per build: place it in a directory named after the (first) entry
   -- module, mirroring purs / backend-es (`<output>/<Entry>/index.{wasm,wat}`), so
   -- companion artifacts (a .wat, a future JS loader / source map) sit together.
