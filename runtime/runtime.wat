@@ -22,6 +22,7 @@
   (type $Num (struct (field f64)))                                  ;; boxed Number (host marshals nested f64)
   (type $Clo (struct (field funcref) (field (ref $Vals))))          ;; closure: code + captured env
   (type $Code (func (param (ref $Clo) eqref) (result eqref)))       ;; lifted closure-body signature
+  (type $Ref (struct (field (mut eqref))))                          ;; Effect.Ref / ST.STRef: a single mutable cell (ADR 0017)
 
   ;; $rt.proj(rec, target) -> eqref : linear-search the record's interned label-id
   ;; array for `target`, returning the parallel value (ADR 0007). Records are never
@@ -289,6 +290,79 @@
     (local $c (ref $Clo))
     (local.set $c (ref.cast (ref $Clo) (local.get $f)))
     (call_ref $Code (local.get $c) (local.get $x) (ref.cast (ref $Code) (struct.get $Clo 0 (local.get $c)))))
+
+  ;; Effect.Ref / Control.Monad.ST native cell (ADR 0017). A `Ref` is a one-field
+  ;; mutable `$Ref` struct holding the boxed value; the operations are wasm-native, so
+  ;; nothing crosses to JS (the JS-origin-opaque limitation in docs/interop.md). The
+  ;; `Effect` perform-unit is handled at the call site (the unit operand is dropped),
+  ;; so these helpers are plain value functions.
+  (func $rt.refNew (export "refNew") (param $v eqref) (result eqref)
+    (struct.new $Ref (local.get $v)))
+  (func $rt.refRead (export "refRead") (param $r eqref) (result eqref)
+    (struct.get $Ref 0 (ref.cast (ref $Ref) (local.get $r))))
+  ;; write returns Unit, encoded as the i32 `0` (matching the other Unit-result ops).
+  (func $rt.refWrite (export "refWrite") (param $r eqref) (param $v eqref) (result i32)
+    (struct.set $Ref 0 (ref.cast (ref $Ref) (local.get $r)) (local.get $v))
+    (i32.const 0))
+  ;; newWithSelf: the cell must exist before `f` runs (knot-tying), so allocate it with
+  ;; a null placeholder, apply `f` to the (self) ref, then fill it in.
+  (func $rt.refNewWithSelf (export "refNewWithSelf") (param $f eqref) (result eqref)
+    (local $r (ref $Ref))
+    (local.set $r (struct.new $Ref (ref.null none)))
+    (struct.set $Ref 0 (local.get $r) (call $callClo1 (local.get $f) (local.get $r)))
+    (local.get $r))
+  ;; modifyImpl f r: apply `f` to the current value to get a `{ state, value }` record,
+  ;; store `state` back, return `value`. The label ids are resolved by the caller (via
+  ;; `internLabel`, the same ids the record's fields use) and passed in.
+  (func $rt.refModify (export "refModify") (param $r eqref) (param $f eqref) (param $stateId i32) (param $valueId i32) (result eqref)
+    (local $rec eqref)
+    (local.set $rec (call $callClo1 (local.get $f)
+                      (struct.get $Ref 0 (ref.cast (ref $Ref) (local.get $r)))))
+    (struct.set $Ref 0 (ref.cast (ref $Ref) (local.get $r))
+      (call $rt.proj (local.get $rec) (local.get $stateId)))
+    (call $rt.proj (local.get $rec) (local.get $valueId)))
+
+  ;; `effect` package control-flow primitives (ADR 0018). Each is a wasm loop that applies
+  ;; the body/condition closure with the trampoline `$callClo1`. An `Effect a` argument is a
+  ;; thunk ($Clo); *performing* it is `$callClo1(thunk, unit)` (the unit is ignored by the
+  ;; thunk, so any eqref serves — an i31 0). All return Unit as the i32 0.
+  (func $rt.forE (export "forE") (param $lo i32) (param $hi i32) (param $f eqref) (result i32)
+    (local $i i32)
+    (local.set $i (local.get $lo))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_s (local.get $i) (local.get $hi)))
+        (drop (call $callClo1
+          (call $callClo1 (local.get $f) (call $boxInt (local.get $i)))
+          (ref.i31 (i32.const 0))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 0))
+  (func $rt.foreachE (export "foreachE") (param $arr eqref) (param $f eqref) (result i32)
+    (local $i i32) (local $n i32)
+    (local.set $n (call $arrayLen (local.get $arr)))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+        (drop (call $callClo1
+          (call $callClo1 (local.get $f) (call $arrayGet (local.get $arr) (local.get $i)))
+          (ref.i31 (i32.const 0))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 0))
+  (func $rt.whileE (export "whileE") (param $cond eqref) (param $body eqref) (result i32)
+    (block $done
+      (loop $loop
+        (br_if $done (i32.eqz (call $unboxBool (call $callClo1 (local.get $cond) (ref.i31 (i32.const 0))))))
+        (drop (call $callClo1 (local.get $body) (ref.i31 (i32.const 0))))
+        (br $loop)))
+    (i32.const 0))
+  (func $rt.untilE (export "untilE") (param $act eqref) (result i32)
+    (block $done
+      (loop $loop
+        (br_if $done (call $unboxBool (call $callClo1 (local.get $act) (ref.i31 (i32.const 0)))))
+        (br $loop)))
+    (i32.const 0))
 
   ;; $rt.arrayMap(f, xs) -> eqref (Data.Functor's arrayMap): map `f` over the array.
   (func $rt.arrayMap (export "arrayMap") (param $f eqref) (param $xs eqref) (result eqref)
