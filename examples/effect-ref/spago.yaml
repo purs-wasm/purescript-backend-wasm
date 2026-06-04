@@ -1,0 +1,7 @@
+package:
+  name: examples-effect-ref
+  dependencies:
+    - console
+    - effect
+    - prelude
+    - refs

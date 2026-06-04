@@ -1,0 +1,6 @@
+package:
+  name: examples-effect-prim
+  dependencies:
+    - effect
+    - prelude
+    - refs
