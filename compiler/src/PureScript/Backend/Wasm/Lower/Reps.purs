@@ -31,6 +31,8 @@ primRep = case _ of
   TopChar -> I32
   BottomChar -> I32
   UnitValue -> I32
+  IncrCtr -> I32 -- Unit, as the i32 `0`
+  ReadCtr -> I32 -- the counter, an unboxed i32
   NumAdd -> F64
   NumSub -> F64
   NumMul -> F64

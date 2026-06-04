@@ -59,6 +59,7 @@ module Binaryen
   , addFunctionImport
   , addGlobal
   , globalGet
+  , globalSet
   , optimize
   , validate
   , emitText
@@ -531,6 +532,13 @@ foreign import globalGetImpl :: Module -> String -> Type -> Effect Expression
 -- | Read a module global: `globalGet mod name type`.
 globalGet :: Module -> String -> Type -> Effect Expression
 globalGet = globalGetImpl
+
+foreign import globalSetImpl :: Module -> String -> Expression -> Effect Expression
+
+-- | Write a module global: `globalSet mod name value` (a void statement; sequence it
+-- | inside a `block` to follow it with a value).
+globalSet :: Module -> String -> Expression -> Effect Expression
+globalSet = globalSetImpl
 
 foreign import optimizeImpl :: Module -> Effect Unit
 

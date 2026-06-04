@@ -16,12 +16,14 @@ import Prelude
 import Data.Array as Array
 import Data.Map as Map
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
 import Data.Set as Set
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify (impurifyProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline as Inline
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift (lambdaLiftModule)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
@@ -39,8 +41,8 @@ import PureScript.CoreFn (Module)
 -- | point); lambda lifting always runs, since it is what makes deep tail recursion
 -- | run in constant stack (disabling it would overflow). Pass `false` to build an
 -- | unoptimized baseline.
-optimizeProgram :: Boolean -> Array Module -> Array M.Module
-optimizeProgram dictElim modules =
+optimizeProgram :: Boolean -> Set String -> Array Module -> Array M.Module
+optimizeProgram dictElim effectfulForeigns modules =
   if dictElim then fixpoint maxRounds lifted else lifted
   where
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
@@ -59,9 +61,15 @@ optimizeProgram dictElim modules =
           -- inlining (ordinary small / single-use, acyclic top-level bindings) and
           -- user newtype transparency, all driving the same simplifier (ADR 0005)
           base = DictElim.buildCtx specialized
+          -- whole-program purity (ADR 0015): which top-level bindings are effectful to
+          -- run, so the simplifier preserves effectful `Perform`s while still collapsing
+          -- pure `Effect` (a binding absent from the set is pure-running)
+          impure = Purity.impureKeys effectfulForeigns specialized
           ctx = base
             { inline = Map.union base.inline (Inline.inlineCandidates specialized)
             , newtypeCtors = Set.union base.newtypeCtors (Inline.newtypeCtorNames specialized)
+            , effectfulForeigns = effectfulForeigns
+            , impureBindings = impure
             }
           -- after dict-elim resolves `bind`/`pure` over `Effect` to the `bindE`/`pureE`
           -- foreigns, impurify rewrites them to the thunk encoding; the next round's
@@ -79,4 +87,4 @@ maxRounds = 8
 -- | for callers with one module; cross-module dictionary elimination needs
 -- | `optimizeProgram` over all linked modules.
 optimizeModule :: Module -> M.Module
-optimizeModule m = fromMaybe { name: m.name, decls: [] } (Array.head (optimizeProgram true [ m ]))
+optimizeModule m = fromMaybe { name: m.name, decls: [] } (Array.head (optimizeProgram true Set.empty [ m ]))

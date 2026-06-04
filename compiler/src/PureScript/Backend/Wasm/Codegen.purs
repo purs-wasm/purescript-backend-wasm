@@ -39,7 +39,8 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (importRuntime, internStrName, projHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (counterGlobalName, importRuntime, internStrName, projHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
 import PureScript.Backend.Wasm.Codegen.Value (atomRep, boxInt, coerce, genAtom, genAtomAs, slotRep, unboxBoolExpr)
@@ -62,6 +63,7 @@ buildModule prog = do
   addForeignImports ctx prog
   addInternStr ctx (needsInternStr prog) prog.labels
   addNullaryGlobals ctx (nullaryTags prog)
+  when (needsCounter prog) (addCounterGlobal ctx)
   traverse_ (addFunc ctx) prog.funcs
   traverse_ (addExportWrapper ctx prog.exportSigs) prog.funcs
   pure mod
@@ -190,6 +192,22 @@ fieldWasmType = case _ of
 -- | The struct type for a constructor signature (the base for the empty signature).
 dataStructFor :: Ctx -> Array Rep -> DataStruct
 dataStructFor ctx sig = fromMaybe ctx.dataBase (Map.lookup sig ctx.dataStructs)
+
+-- | Whether the program uses the test-only effectful counter primitives, so its
+-- | mutable backing global is emitted only when needed.
+needsCounter :: Program -> Boolean
+needsCounter = foldProgramRhs collect false
+  where
+  collect rhs acc = acc || case rhs of
+    RPrim IncrCtr _ -> true
+    RPrim ReadCtr _ -> true
+    _ -> false
+
+-- | Declare the mutable global `$ctr` (init 0) backing `incrCtr` / `readCtr`.
+addCounterGlobal :: Ctx -> Effect Unit
+addCounterGlobal ctx = do
+  initE <- B.i32Const ctx.mod 0
+  B.addGlobal ctx.mod counterGlobalName B.i32 true initE
 
 addNullaryGlobals :: Ctx -> Set Int -> Effect Unit
 addNullaryGlobals ctx tags = traverse_ addOne (Set.toUnfoldable tags :: Array Int)

@@ -15,6 +15,7 @@ import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.FreeVars as FreeVars
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify as Simplify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize as Specialize
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify as Impurify
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Transl as Transl
 import Test.Unit.PureScript.CoreFn as CoreFn
 import Test.Unit.PureScript.ExternsFile as ExternsFile
@@ -31,4 +32,5 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Simplify.spec
   Specialize.spec
   Impurify.spec
+  Purity.spec
   FreeVars.spec

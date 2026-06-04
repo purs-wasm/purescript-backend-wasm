@@ -37,6 +37,8 @@ ctx =
   , dataCtors: Set.fromFoldable [ "T.A", "T.B" ]
   , inline: Map.singleton "T.Eq$Dict" (M.Abs [ "x" ] (loc "x"))
   , instanceFields: Map.singleton "T.heytingBool" [ Tuple "disj" (tv "boolDisj") ]
+  , effectfulForeigns: Set.empty
+  , impureBindings: Set.empty
   }
 
 spec :: Spec Unit

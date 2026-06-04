@@ -33,6 +33,7 @@ import Data.String (joinWith)
 import Data.Tuple (Tuple(..), snd)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (binderVars, freeVars)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity (PCtx, exprPure, runPure)
 import PureScript.CoreFn (Ann, Binder(..), Literal(..), Qualified(..))
 
 type Ctx =
@@ -45,6 +46,11 @@ type Ctx =
   -- the field directly, without materialising the whole record (so a record that
   -- references itself through another field, like `implies`, never expands).
   , instanceFields :: Map String (Array (Tuple String M.Expr))
+  -- purity (ADR 0015): the effectful-foreign seed set and the whole-program set of
+  -- effectful (impure-running) top-level bindings. Together they decide whether a
+  -- `Perform` may be collapsed and whether a binding may be inlined/reordered/dropped.
+  , effectfulForeigns :: Set String
+  , impureBindings :: Set String
   }
 
 -- | A generous ceiling on simplification passes; dictionary elimination converges in
@@ -59,6 +65,10 @@ maxPasses = 1000
 simplifyExpr :: Ctx -> M.Expr -> M.Expr
 simplifyExpr ctx = fixpoint maxPasses
   where
+  -- the purity view (ADR 0015): used to gate effect-sensitive reductions
+  pctx :: PCtx
+  pctx = { eff: ctx.effectfulForeigns, impure: ctx.impureBindings }
+
   fixpoint :: Int -> M.Expr -> M.Expr
   fixpoint n e
     | n <= 0 = e
@@ -96,7 +106,10 @@ simplifyExpr ctx = fixpoint maxPasses
     M.Var q
       | Just key <- qkey q
       , Just body <- Map.lookup key ctx.inline -> Just body
-    M.App (M.Abs ps b) args -> Just (betaApp ps b args)
+    -- β, but not when an argument is effectful to evaluate (substituting it could
+    -- drop, duplicate, or reorder its effect); such an application stays a closure call
+    M.App (M.Abs ps b) args
+      | Array.all (exprPure pctx) args -> Just (betaApp ps b args)
     -- merge a curried lambda introduced by optimization back into one parameter list,
     -- so a saturated self-call becomes a direct (tail-callable) call rather than a
     -- call returning a closure that is then applied — e.g. a State worker collapsed to
@@ -111,7 +124,18 @@ simplifyExpr ctx = fixpoint maxPasses
     -- `perform(go(…))` app-flattens to a saturated `go(…, unit)` that TCEs. (Step 2 will
     -- gate this on the run being pure, leaving a genuinely effectful `Perform` as a
     -- barrier the reordering/dropping rules must respect; until then every run is pure.)
-    M.Perform e -> Just (M.App e [ M.Lit (LitInt 0) ])
+    -- running a literal thunk just evaluates its body (the unit binder is unused) —
+    -- always sound, even for an effectful body, so this is never gated. Peels one
+    -- parameter (a multi-parameter thunk performed once yields the rest as a function).
+    M.Perform (M.Abs ps b)
+      | Just { head: p, tail } <- Array.uncons ps
+      , not (Set.member p (Set.fromFoldable (freeVars [] b))) ->
+          Just (if Array.null tail then b else M.Abs tail b)
+    -- running any other producer is applying it to the unit; collapse it ONLY when the
+    -- run is pure, so an effectful `Perform` stays a recognisable barrier the
+    -- drop/reorder/duplicate rules respect (it is applied to the unit only at lowering)
+    M.Perform e
+      | runPure pctx e -> Just (M.App e [ M.Lit (LitInt 0) ])
     -- short-circuit the boolean operators: `a || b` / `a && b` evaluate `b` only
     -- when needed, matching PureScript/JS semantics (and saving work — e.g. the
     -- three comparisons in nqueens' `safe` stop at the first that holds). The
@@ -152,7 +176,7 @@ simplifyExpr ctx = fixpoint maxPasses
     -- ordIntImpl(LT, EQ, GT) in … cmp(x, y) …`) flow into its one application and
     -- saturate, instead of staying a heap-allocated closure called via `call_ref`
     M.Let [ M.NonRec _ x e ] body
-      | occurrences x body <= 1 -> Just (substMany (Map.singleton x e) body)
+      | occurrences x body <= 1, exprPure pctx e -> Just (substMany (Map.singleton x e) body)
     -- inline a let-bound record literal whose fields are all trivial (vars/scalars),
     -- even when used several times: duplicating trivial fields is free, and it lets
     -- the accessor rule below project each `.l` directly — so an intermediate record
@@ -181,7 +205,11 @@ simplifyExpr ctx = fixpoint maxPasses
       -- parameter list, so the self-call (applied to the perform unit) saturates and
       -- becomes a constant-stack tail call instead of returning-a-thunk-then-applying
       -- it — the same collapse the State monad gets, now for `Effect` (ADR 0015).
-      Nothing -> floatAbsOutOfCase scruts alts
+      -- only when the scrutinees are pure: floating the lambda out delays their
+      -- evaluation to when it is applied, which would move an effect
+      Nothing
+        | Array.all (exprPure pctx) scruts -> floatAbsOutOfCase scruts alts
+        | otherwise -> Nothing
     _ -> Nothing
 
 -- | `(\ps -> b)(args)`: substitute as many params as there are args. Extra args

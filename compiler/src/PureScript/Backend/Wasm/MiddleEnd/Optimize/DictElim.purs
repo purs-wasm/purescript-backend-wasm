@@ -47,6 +47,10 @@ buildCtx modules =
   -- references itself through a field — `heytingAlgebraBoolean`'s `implies` calls
   -- its own `disj` — is a self-recursive `Rec` binding that `infoOf` skips
   , instanceFields: Map.fromFoldable (modules >>= \m -> m.decls >>= recordFieldsOf m.name)
+  -- purity fields default empty here; `MiddleEnd` fills them from the whole-program
+  -- effectful-foreign seed + purity analysis (ADR 0015)
+  , effectfulForeigns: Set.empty
+  , impureBindings: Set.empty
   }
   where
   recordFieldsOf modName = case _ of

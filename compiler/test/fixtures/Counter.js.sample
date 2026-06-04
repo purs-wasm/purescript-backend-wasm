@@ -1,0 +1,6 @@
+// FFI stubs for Counter.purs.sample — needed ONLY so `purs` accepts the foreign
+// imports when regenerating Counter.corefn.json. The wasm backend resolves `incrCtr`
+// and `readCtr` to its own `IncrCtr`/`ReadCtr` intrinsics (a mutable wasm global), so
+// this JS is never used at runtime.
+export const incrCtr = () => {};
+export const readCtr = () => 0;

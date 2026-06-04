@@ -6,8 +6,8 @@
   "scripts": {
     "compile": "spago build",
     "build:runtime": "../binaryen/node_modules/binaryen/bin/wasm-as --all-features ../runtime/runtime.wat -o ../runtime/runtime.wasm",
-    "test:unit": "spago test",
-    "test:e2e": "npm run build:runtime && spago test -m Test.E2E.Compiler",
+    "test:unit": "spago test --monochrome",
+    "test:e2e": "npm run build:runtime && spago test -m Test.E2E.Compiler --monochrome",
     "test:shownumber": "npm run build:runtime && node test/showNumber.mjs",
     "test": "npm run test:unit && npm run test:e2e && npm run test:shownumber",
     "format": "purs-tidy format-in-place src test",

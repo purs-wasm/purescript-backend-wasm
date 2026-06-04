@@ -7,6 +7,7 @@ module PureScript.Backend.Wasm.Codegen.Imports
   ( runtimeModuleName
   , importRuntime
   , internStrName
+  , counterGlobalName
   , projHelperName
   , recHasHelperName
   , recSetHelperName
@@ -95,6 +96,10 @@ recDeleteHelperName = "$rt.recDelete"
 -- | record intrinsics and the emitter agree.)
 internStrName :: String
 internStrName = "$internStr"
+
+-- | The mutable global backing the test-only effectful counter (`incrCtr`/`readCtr`).
+counterGlobalName :: String
+counterGlobalName = "$ctr"
 
 -- | The shared string byte-equality helper: returns `i32` `1`/`0`.
 strEqHelperName :: String

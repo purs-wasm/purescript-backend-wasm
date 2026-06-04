@@ -18,6 +18,7 @@ import Data.Either (Either(..))
 import Effect (Effect)
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import PureScript.Backend.Wasm.Externs (ctorFieldReps, foreignSigs)
+import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram)
 import PureScript.CoreFn (Module, ModuleName)
@@ -53,7 +54,7 @@ withCompiledModule
   -> Array Module
   -> Array ExternsFile
   -> Effect (Either String a)
-withCompiledModule opts emit roots modules externs = case lowerModules opts.optimizeMir (ctorFieldReps externs) (foreignSigs externs) roots (optimizeProgram opts.optimizeMir modules) of
+withCompiledModule opts emit roots modules externs = case lowerModules opts.optimizeMir (ctorFieldReps externs) (foreignSigs externs) roots (optimizeProgram opts.optimizeMir effectfulForeignNames modules) of
   Left err -> pure (Left ("linking failed: " <> show err))
   Right program -> do
     mod <- buildModule program

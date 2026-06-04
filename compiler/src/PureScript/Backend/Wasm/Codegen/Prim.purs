@@ -15,7 +15,7 @@ import Prelude
 import Binaryen as B
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, counterGlobalName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
 import PureScript.Backend.Wasm.Codegen.Value (genAtomAs, strBytes, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom, Rep(..))
@@ -159,6 +159,15 @@ genPrim ctx intr args = case intr, args of
   BottomNumber, [] -> B.f64Const ctx.mod (-1.0 / 0.0)
   -- `Data.Unit.unit`: a never-inspected `0`.
   UnitValue, [] -> B.i32Const ctx.mod 0
+  -- test-only effectful counter (mutable global `$ctr`); the unit operand is ignored.
+  IncrCtr, _ -> do
+    cur <- B.globalGet ctx.mod counterGlobalName B.i32
+    one <- B.i32Const ctx.mod 1
+    next <- B.i32Add ctx.mod cur one
+    setE <- B.globalSet ctx.mod counterGlobalName next
+    unitE <- B.i32Const ctx.mod 0
+    B.block ctx.mod [ setE, unitE ] B.i32
+  ReadCtr, _ -> B.globalGet ctx.mod counterGlobalName B.i32
   -- `Record.Unsafe`: resolve the `String` key to its label id, then read / rebuild
   -- the record through the id-keyed runtime helpers.
   UnsafeGet, [ key, rec ] -> do

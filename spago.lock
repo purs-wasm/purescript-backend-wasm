@@ -112,18 +112,6 @@
             "tuples"
           ]
         }
-      },
-      "example": {
-        "path": "example",
-        "core": {
-          "dependencies": [
-            "effect",
-            "prelude"
-          ]
-        },
-        "test": {
-          "dependencies": []
-        }
       }
     },
     "package_set": {

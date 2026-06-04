@@ -9,12 +9,15 @@
 module PureScript.Backend.Wasm.Intrinsics
   ( Intrinsic(..)
   , foreignIntrinsic
+  , effectfulForeignNames
   ) where
 
 import Prelude
 
 import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe(..))
+import Data.Set (Set)
+import Data.Set as Set
 import Data.Show.Generic (genericShow)
 import Data.Tuple (Tuple(..))
 
@@ -89,6 +92,13 @@ data Intrinsic
   | UnsafeHas -- String -> Record r -> Boolean
   | UnsafeSet -- String -> a -> Record r1 -> Record r2
   | UnsafeDelete -- String -> Record r1 -> Record r2
+  -- | Test-only effectful primitives backed by a mutable wasm global `$ctr`, used to
+  -- | make `Effect`'s effect ordering/count observable (so the purity analysis that
+  -- | preserves effectful `Perform`s can be verified end-to-end). `IncrCtr` bumps the
+  -- | counter and returns Unit; `ReadCtr` returns its current value. Both take (and
+  -- | ignore) the `perform` unit argument, so their arity is 1.
+  | IncrCtr -- Effect Unit: `$ctr := $ctr + 1`
+  | ReadCtr -- Effect Int: read `$ctr`
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -179,4 +189,14 @@ foreignIntrinsic = case _ of
   "eqI" -> Just (Tuple IntEq 2)
   "intToNum" -> Just (Tuple IntToNum 1)
   "numToInt" -> Just (Tuple NumToInt 1)
+  -- test-only effectful primitives (arity 1: they consume the `perform` unit)
+  "incrCtr" -> Just (Tuple IncrCtr 1)
+  "readCtr" -> Just (Tuple ReadCtr 1)
   _ -> Nothing
+
+-- | The qualified names of `foreign import`s whose *running* performs a side effect —
+-- | the seed set for the middle-end's purity analysis (ADR 0015). Currently just the
+-- | test-only counter primitives; real effectful FFI (Console, Ref, EffectFnN) will be
+-- | derived from externs types when added.
+effectfulForeignNames :: Set String
+effectfulForeignNames = Set.fromFoldable [ "Counter.incrCtr", "Counter.readCtr" ]

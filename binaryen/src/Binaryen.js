@@ -289,6 +289,9 @@ export const addGlobalImpl =
 export const globalGetImpl = (mod) => (name) => (type) => () =>
   mod.global.get(name, type);
 
+export const globalSetImpl = (mod) => (name) => (value) => () =>
+  mod.global.set(name, value);
+
 export const optimizeImpl = (mod) => () => mod.optimize();
 
 // --- Validation & emission --------------------------------------------------
