@@ -24,7 +24,7 @@ rationale lives in the [ADRs](./design-decisions); the mechanism lives in
   - [General known-function inlining](#general-known-function-inlining)
   - [Newtype transparency](#newtype-transparency)
   - [Higher-order specialization](#higher-order-specialization)
-  - [Effect impurification and purity](#effect-impurification-and-purity)
+  - [Effect: impurification, reflection, and purity](#effect-impurification-reflection-and-purity)
 - [Structural transformations](#structural-transformations)
   - [Lambda lifting](#lambda-lifting)
   - [Representation analysis and unboxing](#representation-analysis-and-unboxing)
@@ -212,31 +212,49 @@ arguments vanish, leaving a direct inlined operation. Specializations are de-dup
 by callee and lambda *shape*, so `filterBy(\x -> x <= p)` and `filterBy(\x -> x > p)`
 produce two specializations each taking `p`.
 
-### Effect impurification and purity
+### Effect: impurification, reflection, and purity
 
 `Effect` is opaque, so it cannot collapse the way a transparent `newtype` monad does
-(see the State example). `Optimize/Impurify.purs` makes it transparent by **reifying**
-it into the function encoding `Effect a ≃ Unit -> a` (ADR 0015): the three primitives
-`pureE` / `bindE` / `unsafePerformEffect` are rewritten to thunk lambdas and a distinct
-`Perform` node (`perform e ≃ e(unit)`). After that, the *general* simplifier collapses a
-pure `Effect` do-block exactly like State — no Effect-specific machinery downstream. Two
-small simplifier rules earn their keep here: **floating a common single-parameter lambda
-out of a `case`'s branches** (`case s of … -> \p -> b` → `\p -> case s of … -> b`), which
-lets the vestigial `\$ev` thunk merge into a recursive worker so its self-call TCEs; and
-**floating a `let` out of an application head**, so `map`/`apply` (defined via `liftA1`/
-`ap`) saturate. A pure `Effect` loop then becomes the same constant-stack tail loop a
-`State` loop does.
+(see the State example). Two passes make it transparent — observing the whole `Effect`
+surface, *foreigns included*, as nullary thunks (`Effect a ≃ Unit -> a`) so the ordinary
+pipeline can crush them — and a third keeps that sound.
 
-But once `Effect` is just functions, the simplifier would happily drop, reorder, or
-duplicate a *genuinely effectful* run (a host `console.log`) — the type that said "this
-is an effect" is gone. `Optimize/Purity.purs` restores it: a whole-program least-fixpoint
-marks which top-level bindings are **effectful to run** (they perform a known effectful
-foreign — `record`, `log` — directly, transitively, or via an opaque/local producer,
-which is treated conservatively). The simplifier then gates its rewrites: a `Perform` of a
-*pure* run collapses; a `Perform` of an effectful one stays a barrier the drop/reorder/
-duplicate rules respect. The effectful-foreign seed is derived from externs (a foreign
-whose result type is `Effect _`). A self-recursive `Effect` loop that only performs itself
-stays pure (so it still collapses), while a do-block of `log`s keeps every run, in order.
+**Impurification** (`Optimize/Impurify.purs`, ADR 0015) reifies the monad primitives
+`pureE` / `bindE` / `unsafePerformEffect` into thunk lambdas (`\$ev -> …`) and a distinct
+`Perform` node (`perform e ≃ e(unit)`).
+
+**Generalized effect reflection** (GER, ADR 0019) extends that to the rest of the `Effect`
+surface, so that *every* `Effect` value is uniformly a nullary thunk rather than an eager
+call. The `Functor`/`Apply` methods `functorEffect.map` / `applyEffect.apply` (which are
+`liftA1` / `ap`) are rewritten to the same `perform`-thunk form (`map f m → \$ev -> let a =
+perform m in f a`), and a fully-applied effectful **foreign** is *reflected* to a thunk that
+performs it: `log "a" → \$ev -> perform(log "a")` (`reflect (\_ -> Π(log "a"))`, keyed by the
+foreign's arity). It is idempotent — a foreign already under a `perform` stays performed, and
+a thunk performed directly β-reduces straight back (`perform(\$ev -> perform e) → perform e`).
+Without it, an effectful foreign sitting in *value* position (a `void`/`map` argument, a
+`when`/`case` branch, a discarded statement) would lower to an eager call that runs out of
+order — or, when discarded, looks pure and is dropped.
+
+Now that `Effect` — foreigns and all — is just nullary thunks, the **ordinary** pipeline
+(beta, inlining, lambda merging, [commuting conversion](#commuting-conversion), TCE)
+**crushes the thunks** with no Effect-specific machinery: a pure `Effect` do-block collapses
+exactly like `State`, to the same allocation-free **constant-stack tail loop** — so the
+`Effect` monad's stack safety is *preserved* through optimization, not lost. Two simplifier
+rules earn their keep: **floating a single-parameter lambda out of a `case`'s branches**, so
+the vestigial `\$ev` thunk merges into a recursive worker and its self-call TCEs; and
+**floating a `let` out of an application head**, so `map`/`apply` saturate.
+
+**Purity** (`Optimize/Purity.purs`) is the safety belt. Once `Effect` is just functions, the
+pure-code rules would happily drop, reorder, or duplicate a *genuinely effectful* run (a host
+`console.log`) — the type that said "this is an effect" is gone. So a whole-program
+least-fixpoint tags which bindings are **effectful to run** (they perform a known effectful
+foreign — `log`, `record` — directly, transitively, or via an opaque/local producer, treated
+conservatively; the seed is the foreigns whose result type is `Effect _`), and the simplifier
+gates on the tag: a `Perform` of a *pure* run collapses, while a `Perform` of an effectful one
+is a **barrier** the drop/reorder/duplicate rules must respect. Together with GER making every
+effect a visible `Perform`, this is what keeps an accidentally-discarded effect — `void (log
+"a")`, a `when` branch — running, in order, instead of being DCE'd; while a self-recursive
+`Effect` loop that only performs itself stays pure and still collapses.
 
 ## Structural transformations
 
@@ -348,7 +366,10 @@ once each — and prints a real `console.log "Hello, World!"` through the whole 
 - **Higher-order effects.** An effect hidden behind an opaque function or data parameter
   is treated conservatively as a barrier (never dropped, but not optimized). Effects
   reached directly or through known bindings are handled precisely.
-- **`Effect`-typed entry points.** A `main :: Effect Unit` is not yet auto-run by the
-  loader (the export wrapper does not perform the thunk yet); host effects are reached
-  today by calling an ordinary exported function that performs them. `ST`, `forE`/`whileE`
-  and `EffectFnN` are also future work (ADR 0015).
+- **`Effect`-typed entry points.** An `Effect`-typed export is exposed by the loader as a
+  callable thunk `() => a` (run when called, ADR 0015) — *auto*-running `main` on import is
+  still a possible loader flag. One edge remains: a top-level `Effect a` bound to a bare
+  *expression* is a thunk CAF the export wrapper does not perform (ADR 0018); writing it as a
+  do-block works. (`Effect.Ref`, `forE`/`whileE`/`untilE`/`foreachE`, `EffectFnN` and
+  `unsafePerformEffect` are now provided wasm-natively — ADR 0017 / 0018 — not gaps; `ST`
+  shares `Effect.Ref`'s representation and is the remaining follow-up.)
