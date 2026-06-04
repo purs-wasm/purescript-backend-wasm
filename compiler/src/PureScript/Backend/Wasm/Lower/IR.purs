@@ -274,6 +274,8 @@ data MarshalKind
   | MArray MarshalKind -- Array a (elements marshalled by the inner kind)
   | MRecord (Array (Tuple String MarshalKind)) -- a record { l :: T … } (fields by name)
   | MFunc MarshalKind MarshalKind -- a function a -> b (a `$Clo` ⇄ a JS function)
+  | MEffect MarshalKind -- `Effect a`: the JS glue *runs* the foreign's thunk (`()`) and
+  -- marshals the result by the inner kind, so wasm never holds a JS thunk (ADR 0015)
   | MOpaque -- any other boxed value
 
 derive instance eqMarshalKind :: Eq MarshalKind
@@ -294,6 +296,7 @@ marshalRep = case _ of
   MArray _ -> Boxed
   MRecord _ -> Boxed
   MFunc _ _ -> Boxed -- a closure is the `$Clo` eqref
+  MEffect k -> marshalRep k -- the performed result's rep (the boundary value is the result)
   MOpaque -> Boxed
 
 -- | A JSON encoding of a `MarshalKind` for the JS marshalling glue (ADR 0014): the
@@ -309,6 +312,7 @@ encodeMarshalKind = case _ of
   MArray k -> "{\"a\":" <> encodeMarshalKind k <> "}"
   MRecord fields -> "{\"r\":{" <> joinWith "," (map field fields) <> "}}"
   MFunc p r -> "{\"fn\":[" <> encodeMarshalKind p <> "," <> encodeMarshalKind r <> "]}"
+  MEffect k -> "{\"eff\":" <> encodeMarshalKind k <> "}"
   MOpaque -> "\"o\""
   where
   field (Tuple name k) = "\"" <> name <> "\":" <> encodeMarshalKind k

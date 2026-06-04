@@ -1,0 +1,40 @@
+module HostEff where
+
+import Prelude
+
+import Effect (Effect)
+import Effect.Unsafe (unsafePerformEffect)
+
+-- A real HOST effectful foreign (ADR 0015): `record` is a `String`-free `Int -> Effect
+-- Unit` whose JS impl is `n => () => spy.push(n)`. The wasm calls the host import and the
+-- marshalling glue runs the returned thunk (`()`) — wasm never holds the JS thunk. The
+-- `.js` stub is only so `purs` accepts the foreign when regenerating the fixture; the e2e
+-- supplies a spy implementation at instantiation.
+foreign import record :: Int -> Effect Unit
+
+-- A `String`-taking host effect — the real `console.log` shape (`s => () => …`).
+foreign import log :: String -> Effect Unit
+
+-- A NULLARY host effect — the `Effect.Random.random` shape (`() => value`): the foreign
+-- IS the thunk, no value args. The glue must not pre-call it (else `r is not a function`).
+foreign import tick :: Effect Int
+
+-- Two host effects in order; the result-unused runs must NOT be dropped/reordered (the
+-- purity analysis keeps them, `record` being effectful by its `Effect` result type).
+-- Returns 0 so it is an i32 export callable as an ordinary function.
+runRec :: Int -> Int
+runRec _ = unsafePerformEffect do
+  record 1
+  record 2
+  pure 0
+
+-- The actual Hello World: a host `log` (console.log) called through the full pipeline.
+greet :: Int -> Int
+greet _ = unsafePerformEffect do
+  log "Hello, World!"
+  pure 0
+
+-- Performs the nullary host effect `tick` and returns its value (regression guard for
+-- the nullary-Effect-foreign marshalling).
+getTick :: Int -> Int
+getTick _ = unsafePerformEffect tick

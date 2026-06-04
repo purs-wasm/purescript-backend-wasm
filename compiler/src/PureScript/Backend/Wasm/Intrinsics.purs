@@ -99,6 +99,11 @@ data Intrinsic
   -- | ignore) the `perform` unit argument, so their arity is 1.
   | IncrCtr -- Effect Unit: `$ctr := $ctr + 1`
   | ReadCtr -- Effect Int: read `$ctr`
+  -- | `Data.Int.fromNumberImpl just nothing n`: `Number -> Maybe Int`, the private
+  -- | foreign behind `fromNumber`/`floor`/`ceil`/`round`/`trunc`. Returns `just n` when
+  -- | `n` is an integer in the `Int32` range (matching JS `(n | 0) === n`), else
+  -- | `nothing`; `just` is applied via the closure trampoline.
+  | FromNumberImpl
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -189,6 +194,8 @@ foreignIntrinsic = case _ of
   "eqI" -> Just (Tuple IntEq 2)
   "intToNum" -> Just (Tuple IntToNum 1)
   "numToInt" -> Just (Tuple NumToInt 1)
+  -- `Data.Int` Number→Int (the private foreign behind `fromNumber`/`floor`/…)
+  "fromNumberImpl" -> Just (Tuple FromNumberImpl 3)
   -- test-only effectful primitives (arity 1: they consume the `perform` unit)
   "incrCtr" -> Just (Tuple IncrCtr 1)
   "readCtr" -> Just (Tuple ReadCtr 1)

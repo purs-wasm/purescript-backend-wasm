@@ -66,6 +66,7 @@ each kind has a conversion:
 | `Array a` | `MArray` | `$Vals` ⇄ JS `Array` | `arrayLen`/`arrayGet` / `arrayNew`/`arraySet`, recursing on each element's kind |
 | `Record { … }` | `MRecord` | `$Rec` ⇄ JS `{}` | field-by-field: read via `proj`, build from `recEmpty` via `recSet`, keyed by `internStr` of the type's field names; recurses on each field's kind |
 | `a -> b` | `MFunc` | `$Clo` → JS `function` | the closure is wrapped in a JS function that, when called, marshals its argument in, applies the closure via the runtime trampoline `applyClo`, and marshals the result out |
+| `Effect a` | `MEffect` | the foreign's thunk is **run on the JS side** | the JS impl (`s => () => …`) is applied to its value args, then the returned thunk is performed (`()`) by the glue, and only the inner result `a` is marshalled back (ADR 0015) — wasm never holds the JS thunk, sidestepping closure direction 2 |
 | anything else | `MOpaque` | passed through as an opaque `eqref` reference | — |
 
 The runtime (`runtime/runtime.wat`) exposes the read/build primitives above as exports
@@ -125,6 +126,44 @@ instantiates the module. The foreign sees a plain JS `string` and returns one; t
 does the rest. A program with **no** JS foreigns emits no loader — it stays a single
 self-contained `index.wasm`.
 
+### An effectful foreign
+
+A `foreign import` whose result is `Effect a` is a side-effecting host call (the
+`console.log` shape). Write it as the usual curried PureScript FFI:
+
+```purescript
+module Example.Hello where
+
+import Effect (Effect)
+
+foreign import log :: String -> Effect Unit
+```
+
+```javascript
+// foreign.js — the standard `s => () => …` shape: take the value arg, return a thunk
+export const log = (s) => () => console.log(s);
+```
+
+When wasm performs `log "hi"`, the loader applies the value argument *and runs the
+returned thunk on the JS side* (`log("hi")()`), marshalling only the inner result. So the
+side effect happens at the boundary and wasm never has to hold or re-enter a JS function.
+The optimizer recognises `log` as effectful (its result type is `Effect _`) and so will
+not drop, reorder, or duplicate the call (see
+[Effect impurification and purity](./optimizations.md#effect-impurification-and-purity)).
+
+An `Effect a` **export** (e.g. `main :: Effect Unit`) is exposed to JS as a **thunk**
+`() => a` — matching `Effect a ≃ () => a` — so importing the module does **not** run it; it
+runs when you call it:
+
+```javascript
+import { exports } from "./output-wasm/Examples.Effect.Main/index.mjs";
+exports.main();   // runs the effect now (prints), returns its result
+```
+
+(A pure value export like `answer :: Int` is still exposed as the value `42`, evaluated
+once at load.) Auto-running a `main` on load — without an explicit call — is a possible
+future loader flag.
+
 ### A wasm/wat foreign
 
 A `foreign.wat` / `foreign.wasm` is **merged** into the program (`wasm-merge`), so it
@@ -178,7 +217,9 @@ function and can be called on the raw instance with no loader.
   is not this case: it is the same type as the uncurried `a -> b -> c`.)
 - **`Object a`** (dynamic string keys) — its representation differs from the
   static-label `$Rec` and needs a separate decision.
-- **`Effect` / `EffectFnN` over the boundary** — foreign effects tie into the `Effect`
-  representation work (effect reflection / impurification, ADR 0015).
+- **`main :: Effect Unit` auto-run on load** — an `Effect`-typed export is exposed as a
+  callable thunk (`exports.main()` runs it); auto-running it on import, without an explicit
+  call, is a possible loader flag. `EffectFnN`, `ST`, and `forE`/`whileE` are future work
+  (ADR 0015).
 - **bin build-integration test** — the production loader is smoke-verified, not yet
   covered by an automated end-to-end build test.

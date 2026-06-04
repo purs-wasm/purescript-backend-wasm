@@ -1,0 +1,6 @@
+package:
+  name: examples-helloworld
+  dependencies:
+    - console
+    - effect
+    - prelude

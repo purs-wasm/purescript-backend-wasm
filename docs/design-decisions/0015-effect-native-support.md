@@ -1,7 +1,12 @@
 # 0015. Effect reflection: collapsing function-represented monads to straight-line code
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-04
+- Implemented: impurification (`Optimize/Impurify.purs`, the `Perform` node), whole-program
+  purity analysis (`Optimize/Purity.purs`), and host effectful FFI (`MEffect` marshalling,
+  the JS glue performs the thunk). Pure `Effect` collapses to constant-stack code and a
+  host `console.log "Hello, World!"` runs through the full pipeline. Still pending:
+  auto-running a `main :: Effect Unit` entry point, `EffectFnN`, `ST`, `forE`/`whileE`.
 
 ## Context
 

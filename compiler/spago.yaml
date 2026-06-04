@@ -19,7 +19,9 @@ package:
     - foreign-object
     - functions
     - identity
+    - integers
     - js-promise-aff
+    - language-cst-parser
     - maybe
     - newtype
     - node-buffer

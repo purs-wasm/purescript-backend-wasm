@@ -17,7 +17,7 @@ import Effect (Effect)
 import Effect.Exception (error, throwException)
 import PureScript.Backend.Wasm.Codegen.Imports (arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, counterGlobalName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
-import PureScript.Backend.Wasm.Codegen.Value (genAtomAs, strBytes, unboxBoolExpr)
+import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtomAs, strBytes, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom, Rep(..))
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 
@@ -187,12 +187,37 @@ genPrim ctx intr args = case intr, args of
     rid <- internId key
     er <- genAtomAs ctx Boxed rec
     B.call ctx.mod recDeleteHelperName [ er, rid ] B.eqref
+  -- `Data.Int.fromNumberImpl just nothing n`: `just (trunc n)` when `n` is an integer in
+  -- the Int32 range (JS `(n | 0) === n`), else `nothing`. The outer guard keeps `n` away
+  -- from `i32.trunc_f64_s`'s trap (NaN / out of range — those yield `nothing`).
+  FromNumberImpl, [ just, nothing, n ] -> do
+    -- guard = not NaN  &&  n >= -2^31  &&  n <= 2^31-1
+    notNaN <- join (B.f64Eq ctx.mod <$> numArg n <*> numArg n)
+    geMin <- numArg n >>= \a -> B.f64Const ctx.mod (-2147483648.0) >>= B.f64Lt ctx.mod a >>= B.i32Eqz ctx.mod
+    leMax <- numArg n >>= \a -> B.f64Const ctx.mod 2147483647.0 >>= \m -> B.f64Lt ctx.mod m a >>= B.i32Eqz ctx.mod
+    guardE <- join (B.i32And ctx.mod <$> B.i32And ctx.mod notNaN geMin <*> pure leMax)
+    -- integral? (f64)(trunc n) == n
+    isInt <- join (B.f64Eq ctx.mod <$> (numArg n >>= B.i32TruncF64S ctx.mod >>= B.f64ConvertI32S ctx.mod) <*> numArg n)
+    -- just (box (trunc n))
+    justApplied <- (numArg n >>= B.i32TruncF64S ctx.mod >>= boxInt ctx) >>= applyClo just
+    nothingThen <- genAtomAs ctx Boxed nothing
+    nothingElse <- genAtomAs ctx Boxed nothing
+    inner <- B.if_ ctx.mod isInt justApplied nothingThen
+    B.if_ ctx.mod guardE inner nothingElse
   _, _ -> throwException (error "Codegen: intrinsic given an operand list of the wrong arity")
   where
   -- operand at the representation the op needs (no-op if already that rep)
   intArg = genAtomAs ctx I32
   numArg = genAtomAs ctx F64
   boolArg a = genAtomAs ctx Boxed a >>= unboxBoolExpr ctx
+  -- apply a closure atom to one (already-built) argument via the runtime trampoline
+  -- (`ref.cast $Clo`, read the `funcref`, `ref.cast $Code`, `call_ref`)
+  applyClo cloAtom argE = do
+    cloForCode <- genAtomAs ctx Boxed cloAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
+    fref <- B.structGet ctx.mod 0 cloForCode B.funcref false
+    codeF <- B.refCast ctx.mod fref ctx.rt.refCode
+    cloOperand <- genAtomAs ctx Boxed cloAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
+    B.callRef ctx.mod codeF [ cloOperand, argE ] ctx.rt.codeHt
   -- resolve a record-label `String` atom to its interned `i32` id via `internStr`
   internId key = do
     ek <- genAtomAs ctx Boxed key

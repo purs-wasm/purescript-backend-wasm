@@ -43,6 +43,8 @@ import Test.E2E.TailCall as TailCall
 import Test.E2E.StackSafe as StackSafe
 import Test.E2E.Eff as Eff
 import Test.E2E.Counter as Counter
+import Test.E2E.HostEff as HostEff
+import Test.E2E.IntConv as IntConv
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -85,3 +87,5 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   StackSafe.spec
   Eff.spec
   Counter.spec
+  HostEff.spec
+  IntConv.spec

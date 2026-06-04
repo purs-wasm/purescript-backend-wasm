@@ -81,7 +81,9 @@
             "foreign-object",
             "functions",
             "identity",
+            "integers",
             "js-promise-aff",
+            "language-cst-parser",
             "maybe",
             "newtype",
             "node-buffer",
@@ -111,6 +113,33 @@
             "strings",
             "tuples"
           ]
+        }
+      },
+      "examples-effect-random": {
+        "path": "examples/effect-random",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "prelude",
+            "random"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
+      "examples-helloworld": {
+        "path": "examples/helloworld",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
         }
       }
     },
@@ -1298,6 +1327,39 @@
         "transformers"
       ]
     },
+    "language-cst-parser": {
+      "type": "registry",
+      "version": "0.14.1",
+      "integrity": "sha256-tnue0oM2/EmyNJmLoJDnmUDfinKLJHi2fcSGt7d6ewU=",
+      "dependencies": [
+        "arrays",
+        "const",
+        "control",
+        "either",
+        "enums",
+        "foldable-traversable",
+        "free",
+        "functions",
+        "functors",
+        "identity",
+        "integers",
+        "lazy",
+        "lists",
+        "maybe",
+        "newtype",
+        "numbers",
+        "ordered-collections",
+        "partial",
+        "prelude",
+        "st",
+        "strings",
+        "transformers",
+        "tuples",
+        "typelevel-prelude",
+        "unfoldable",
+        "unsafe-coerce"
+      ]
+    },
     "lazy": {
       "type": "registry",
       "version": "6.0.0",
@@ -1663,6 +1725,16 @@
         "newtype",
         "prelude",
         "tuples"
+      ]
+    },
+    "random": {
+      "type": "registry",
+      "version": "6.0.0",
+      "integrity": "sha256-7sZRo6P9UIiXDZ9s2QL9T8h3wlIwLdQrR4+oZKOijQw=",
+      "dependencies": [
+        "effect",
+        "integers",
+        "prelude"
       ]
     },
     "record": {

@@ -15,9 +15,10 @@ import Data.Argonaut.Decode (printJsonDecodeError)
 import Data.Argonaut.Parser (jsonParser)
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
+import Data.Set as Set
 import Effect (Effect)
 import PureScript.Backend.Wasm.Codegen (buildModule)
-import PureScript.Backend.Wasm.Externs (ctorFieldReps, foreignSigs)
+import PureScript.Backend.Wasm.Externs (ctorFieldReps, effectfulForeignNamesFromExterns, foreignSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram)
@@ -54,7 +55,7 @@ withCompiledModule
   -> Array Module
   -> Array ExternsFile
   -> Effect (Either String a)
-withCompiledModule opts emit roots modules externs = case lowerModules opts.optimizeMir (ctorFieldReps externs) (foreignSigs externs) roots (optimizeProgram opts.optimizeMir effectfulForeignNames modules) of
+withCompiledModule opts emit roots modules externs = case lowerModules opts.optimizeMir (ctorFieldReps externs) (foreignSigs externs) roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromExterns externs)) modules) of
   Left err -> pure (Left ("linking failed: " <> show err))
   Right program -> do
     mod <- buildModule program

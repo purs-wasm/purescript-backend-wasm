@@ -1,0 +1,7 @@
+package:
+  name: examples-effect-random
+  dependencies:
+    - console
+    - effect
+    - prelude
+    - random

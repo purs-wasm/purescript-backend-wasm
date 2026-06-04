@@ -56,6 +56,8 @@ export const eqrefToJs = (E, k, ref) => {
     const [pk, rk] = k.fn;
     return (a) => eqrefToJs(E, rk, E.applyClo(ref, eqrefFromJs(E, pk, a)));
   }
+  // Effect a (export side): wasm already performed it, so the value IS the inner result
+  if (k.eff !== undefined) return eqrefToJs(E, k.eff, ref);
   // record: read each known field by its interned label id
   const out = {};
   for (const name of Object.keys(k.r)) {
@@ -94,6 +96,17 @@ export const eqrefFromJs = (E, k, val) => {
 const isRaw = (k) => k === "i" || k === "f";
 const marshalWrap = (E, fn, sig) => (...args) => {
   const xs = args.map((a, i) => (isRaw(sig.params[i]) ? a : eqrefToJs(E, sig.params[i], a)));
+  // an effectful foreign (`{eff:k}` result): applying the value args yields the Effect
+  // thunk, RUN here (the perform happens on the JS side), then marshal the inner result by
+  // `k` (ADR 0015). A *nullary* Effect foreign (`Effect a`, no value args) IS the thunk, so
+  // do not pre-call it. A Unit (undefined) result is boxed as 0 for a valid eqref.
+  if (sig.result && sig.result.eff !== undefined) {
+    const thunk = xs.length === 0 ? fn : fn(...xs);
+    const ran = thunk();
+    const k = sig.result.eff;
+    if (ran === undefined || ran === null) return E.boxInt(0);
+    return isRaw(k) ? ran : eqrefFromJs(E, k, ran);
+  }
   const r = fn(...xs);
   return isRaw(sig.result) ? r : eqrefFromJs(E, sig.result, r);
 };

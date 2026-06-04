@@ -25,8 +25,9 @@ Key architectural decisions are recorded as ADRs under
 - [x] [strings](./docs/supported-features.md#strings), [arrays](./docs/supported-features.md#arrays) and [records](./docs/supported-features.md#records)
 - [x] [ADT and pattern matching](./docs/supported-features.md#algebraic-data-types-and-pattern-matching)
 - [x] [Recursive let-bindings](./docs/supported-features.md#recursive-let-bindings)
-- [x] [Basic typeclass resolution](./docs/supported-features.md#typeclass-dictionaries) (no cyclic dependencies like `Effect`'s Functor/Applicative/Monad instances')
-- [x] [User-defined FFI](./docs/supported-features.md#foreign-function-interface)
+- [x] [Typeclass resolution](./docs/supported-features.md#typeclass-dictionaries), including cyclic instance groups (`Effect`'s Functor/Applicative/Monad)
+- [x] [The `Effect` monad](./docs/supported-features.md#the-effect-monad) — collapses like a transparent monad (constant-stack loops), with effect order/count preserved
+- [x] [User-defined FFI](./docs/supported-features.md#foreign-function-interface), including [effectful foreigns](./docs/interop.md#an-effectful-foreign) (`a -> Effect b`, the `console.log` shape)
 
 ### Optimizations
 
@@ -39,7 +40,7 @@ Key architectural decisions are recorded as ADRs under
 - [x] Higher-order specialization (static-argument transformation)
 - [x] Tail-call elimination
 - [x] Dead-code elimination
-- [ ] Effect reflection and impurification
+- [x] Effect reflection (impurification) + whole-program purity analysis
 - [ ] Monomorphization
 
 Please refer to the [docs/optimizations.md](./docs/optimizations.md) for detailed explanation.

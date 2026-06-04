@@ -33,7 +33,8 @@ import Foreign (Foreign)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import Data.Traversable (traverse)
-import PureScript.Backend.Wasm.Externs (foreignSigs)
+import Data.Set as Set
+import PureScript.Backend.Wasm.Externs (effectfulForeignNamesFromExterns, foreignSigs)
 import PureScript.Backend.Wasm.Lower.IR (Program, foreignManifestJson, exportManifestJson)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModule, lowerModules)
@@ -89,7 +90,7 @@ instantiateLinked roots paths = do
 instantiateForeign :: Array ExternsFile -> Foreign -> Array (Array String) -> Array String -> Effect Instance
 instantiateForeign externs imports roots paths = do
   modules <- traverse decodeFixture paths
-  case lowerModules true Object.empty (foreignSigs externs) roots (optimizeProgram true effectfulForeignNames modules) of
+  case lowerModules true Object.empty (foreignSigs externs) roots (optimizeProgram true (Set.union effectfulForeignNames (effectfulForeignNamesFromExterns externs)) modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> do
       mod <- buildModule program
@@ -109,7 +110,7 @@ instantiateForeignStr :: Array ExternsFile -> Foreign -> Array (Array String) ->
 instantiateForeignStr externs userForeigns roots paths = do
   modules <- traverse decodeFixture paths
   let sigs = foreignSigs externs
-  case lowerModules true Object.empty sigs roots (optimizeProgram true effectfulForeignNames modules) of
+  case lowerModules true Object.empty sigs roots (optimizeProgram true (Set.union effectfulForeignNames (effectfulForeignNamesFromExterns externs)) modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> do
       mod <- buildModule program

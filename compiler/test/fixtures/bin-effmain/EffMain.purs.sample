@@ -1,0 +1,13 @@
+module EffMain where
+
+import Prelude
+
+import Effect (Effect)
+
+foreign import emit :: Int -> Effect Unit
+
+-- An `Effect Unit` export. The loader must expose it as a thunk `() => …` (run on call),
+-- NOT evaluate it at load — so importing the module fires no effect. The integration
+-- test `compiler/test/effectMain.mjs` builds this via the bin and checks import-vs-call.
+main :: Effect Unit
+main = emit 1

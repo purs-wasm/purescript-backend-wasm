@@ -24,12 +24,14 @@ rationale lives in the [ADRs](./design-decisions); the mechanism lives in
   - [General known-function inlining](#general-known-function-inlining)
   - [Newtype transparency](#newtype-transparency)
   - [Higher-order specialization](#higher-order-specialization)
+  - [Effect impurification and purity](#effect-impurification-and-purity)
 - [Structural transformations](#structural-transformations)
   - [Lambda lifting](#lambda-lifting)
   - [Representation analysis and unboxing](#representation-analysis-and-unboxing)
   - [Tail-call elimination](#tail-call-elimination)
   - [Dead-code elimination](#dead-code-elimination)
 - [Worked example: collapsing the State monad](#worked-example-collapsing-the-state-monad)
+- [Worked example: the Effect monad](#worked-example-the-effect-monad)
 - [Known gaps](#known-gaps)
 
 ## Where optimization happens
@@ -210,6 +212,32 @@ arguments vanish, leaving a direct inlined operation. Specializations are de-dup
 by callee and lambda *shape*, so `filterBy(\x -> x <= p)` and `filterBy(\x -> x > p)`
 produce two specializations each taking `p`.
 
+### Effect impurification and purity
+
+`Effect` is opaque, so it cannot collapse the way a transparent `newtype` monad does
+(see the State example). `Optimize/Impurify.purs` makes it transparent by **reifying**
+it into the function encoding `Effect a ≃ Unit -> a` (ADR 0015): the three primitives
+`pureE` / `bindE` / `unsafePerformEffect` are rewritten to thunk lambdas and a distinct
+`Perform` node (`perform e ≃ e(unit)`). After that, the *general* simplifier collapses a
+pure `Effect` do-block exactly like State — no Effect-specific machinery downstream. Two
+small simplifier rules earn their keep here: **floating a common single-parameter lambda
+out of a `case`'s branches** (`case s of … -> \p -> b` → `\p -> case s of … -> b`), which
+lets the vestigial `\$ev` thunk merge into a recursive worker so its self-call TCEs; and
+**floating a `let` out of an application head**, so `map`/`apply` (defined via `liftA1`/
+`ap`) saturate. A pure `Effect` loop then becomes the same constant-stack tail loop a
+`State` loop does.
+
+But once `Effect` is just functions, the simplifier would happily drop, reorder, or
+duplicate a *genuinely effectful* run (a host `console.log`) — the type that said "this
+is an effect" is gone. `Optimize/Purity.purs` restores it: a whole-program least-fixpoint
+marks which top-level bindings are **effectful to run** (they perform a known effectful
+foreign — `record`, `log` — directly, transitively, or via an opaque/local producer,
+which is treated conservatively). The simplifier then gates its rewrites: a `Perform` of a
+*pure* run collapses; a `Perform` of an effectful one stays a barrier the drop/reorder/
+duplicate rules respect. The effectful-foreign seed is derived from externs (a foreign
+whose result type is `Effect _`). A self-recursive `Effect` loop that only performs itself
+stays pure (so it still collapses), while a do-block of `log`s keeps every run, in order.
+
 ## Structural transformations
 
 These are not local reductions but whole-function rewrites (or backend choices).
@@ -289,12 +317,38 @@ collapsed wasm runs in constant stack and is faster than `purs-backend-es`; the 
 `Test.E2E.StackSafe` runs it for a million iterations as a regression guard (a missing
 optimization would overflow, which a value-only test could not detect).
 
+## Worked example: the Effect monad
+
+`Effect` is the opaque counterpart to `State`. Its instances are *mutually recursive*
+(`functorEffect` = `liftA1` → apply/pure; `applyEffect` = `ap` → bind), exactly the
+"cyclic dictionaries" a dictionary-passing backend pays for per step. Impurification +
+the simplifier collapse them all. For a pure counting loop in `Effect`:
+
+```
+countTo n = unsafePerformEffect (go 0)
+  where go acc = if acc >= n then pure acc else pure (acc + 1) >>= go
+```
+
+`pureE`/`bindE`/`unsafePerformEffect` reify to thunks; the `do` collapses; the `\$ev`
+thunk floats out of the loop's `case` and merges into the worker; and TCE closes it —
+giving the same allocation-free, constant-stack loop as `State`. The cyclic-dict overhead
+vanishes: `mapEff`/`applyEff` reduce to plain `intAdd`. Measured by `bench/count-effect.mjs`
+(the `CountState` loop in the *real* `Effect` monad): the wasm runs in constant stack and
+is ~25× faster than `purs-backend-es`, which overflows on deep loops (the `Effect` bind
+chain is not TCO'd in JS). A *genuinely* effectful do-block instead keeps its runs: the
+e2e `Test.E2E.HostEff` performs two host effects and checks they ran in order, exactly
+once each — and prints a real `console.log "Hello, World!"` through the whole pipeline.
+
 ## Known gaps
 
 - **Polymorphic-container boxing.** A polymorphic container (`List a`) stores its
   elements boxed, because field unboxing applies only to *concrete* scalar fields.
   Removing this needs monomorphization, deliberately out of scope (ADR 0013) — and it
   is the fair case anyway (a JavaScript backend stores the number in the cell too).
-- **`Effect` / `ST`.** An opaque effect monad does not yet collapse the way a
-  transparent `newtype` monad does; it needs *impurification* into a function
-  representation first (effect reflection — ADR 0015).
+- **Higher-order effects.** An effect hidden behind an opaque function or data parameter
+  is treated conservatively as a barrier (never dropped, but not optimized). Effects
+  reached directly or through known bindings are handled precisely.
+- **`Effect`-typed entry points.** A `main :: Effect Unit` is not yet auto-run by the
+  loader (the export wrapper does not perform the thunk yet); host effects are reached
+  today by calling an ordinary exported function that performs them. `ST`, `forE`/`whileE`
+  and `EffectFnN` are also future work (ADR 0015).

@@ -51,7 +51,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic)
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
-import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
 import PureScript.Backend.Wasm.Lower.Monad (Lower, LowerError(..), fresh, throw)
 import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
@@ -93,6 +93,21 @@ etaExpand callable arity = M.Abs params (M.App callable (map localVar params))
 
 -- | Reduce an expression to a trivial `Atom`, threading any computation into
 -- | `Let`s that wrap the continuation `k`.
+-- | Whether `e` is (an application of) a host foreign whose result is `Effect _` — so a
+-- | `Perform e` is run by the host call itself (the JS glue performs the thunk), and the
+-- | operand lowers directly to `RCallForeign` without an extra unit application (ADR 0015).
+isEffectForeignApp :: Env -> M.Expr -> Boolean
+isEffectForeignApp env = case _ of
+  M.App (M.Var q) _ -> isEff q
+  M.Var q -> isEff q
+  _ -> false
+  where
+  isEff q = case Object.lookup (qualifiedKeyOf q) env.foreignSigs of
+    Just sig -> case sig.result of
+      MEffect _ -> true
+      _ -> false
+    Nothing -> false
+
 lowerArg :: Env -> M.Expr -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerArg env expr k = case expr of
   M.Lit (LitInt n) -> k (ALitInt n)
@@ -147,9 +162,14 @@ lowerArg env expr k = case expr of
   -- update): bind the groups, then reduce the body to an atom for `k`.
   M.Let binds body -> lowerCoreLetK env binds body \env' body' -> lowerArg env' body' k
   M.App head args -> lowerApp env { head, args } k
-  -- run an `Effect`: apply the thunk to a unit (ADR 0015). Survives lowering only for
-  -- genuinely effectful runs — the pure-`Effect` collapse removes it in the simplifier.
-  M.Perform e -> lowerApp env { head: e, args: [ M.Lit (LitInt 0) ] } k
+  -- run an `Effect` (ADR 0015). When the operand is a host effectful foreign (`log
+  -- "x"`), the host call IS the perform — the JS glue runs the returned thunk (`()`),
+  -- so lower the operand directly (→ `RCallForeign`) WITHOUT applying a unit. Any other
+  -- surviving `Perform` is a thunk, run by applying it to a unit. (The pure-`Effect`
+  -- collapse removes most `Perform`s in the simplifier.)
+  M.Perform e
+    | isEffectForeignApp env e -> lowerArg env e k
+    | otherwise -> lowerApp env { head: e, args: [ M.Lit (LitInt 0) ] } k
   -- An (uncurried) lambda lowers to a closure; closures are arity-1, so a
   -- multi-parameter lambda peels one parameter and the rest stay an inner lambda.
   M.Abs params body -> case Array.uncons params of

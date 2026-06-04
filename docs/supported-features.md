@@ -19,6 +19,7 @@ JavaScript [JS↔WASM interop](./interop.md), and for the build
 - [Tail-call elimination](#tail-call-elimination)
 - [Typeclass dictionaries](#typeclass-dictionaries)
 - [Records](#records)
+- [The Effect monad](#the-effect-monad)
 - [Foreign function interface](#foreign-function-interface)
 
 ## Top-level functions
@@ -97,8 +98,8 @@ implementation (see [Optimizations](./optimizations.md)). A genuinely **polymorp
 dictionary-passing call instead carries a runtime dictionary — a label-map record (→
 [runtime-representation § Record](./runtime-representation.md#record)) searched per
 method, including superclass access (arbitrarily deep hierarchies work). Deriving
-(`Eq` / `Ord` / `Generic`) works. **Not yet**: cyclic instance groups such as `Effect`'s
-`Functor`/`Applicative`/`Monad` (→ [ADR 0015](./design-decisions)).
+(`Eq` / `Ord` / `Generic`) works. **Cyclic instance groups** such as `Effect`'s
+`Functor`/`Applicative`/`Monad` are supported too (→ [The Effect monad](#the-effect-monad)).
 
 ## Records
 
@@ -110,10 +111,28 @@ id). Records share the label-map representation with dictionaries (→
 [runtime-representation § Record](./runtime-representation.md#record)). **Deferred**:
 polymorphic update of an open row (the unknown extra fields need a runtime copy).
 
+## The Effect monad
+
+`Effect` is supported, including its mutually-recursive `Functor`/`Apply`/`Applicative`/
+`Bind`/`Monad` instances and `do`-notation. `Effect` is opaque, so it is made transparent
+by **impurification** into the function encoding `Effect a ≃ Unit -> a` (ADR 0015), after
+which the general optimizer collapses a pure `Effect` computation to the same allocation-
+free, constant-stack code a transparent `newtype` monad gets — a deep `Effect` loop runs
+in constant stack where a JavaScript backend overflows (→
+[Optimizations § Effect](./optimizations.md#worked-example-the-effect-monad)). A
+**purity analysis** keeps *genuinely effectful* runs from being dropped, reordered, or
+duplicated, so a `foreign import log :: String -> Effect Unit` runs exactly when and as
+often as written (→ [JS↔WASM interop](./interop.md#an-effectful-foreign)). `unsafePerformEffect`
+is supported, and an `Effect`-typed export (`main :: Effect Unit`) is exposed to JS as a
+callable thunk `() => a` — `exports.main()` runs it (it does not run merely on import).
+**Not yet**: auto-running `main` on load without an explicit call, `EffectFnN`, `ST`, and
+`forE`/`whileE`.
+
 ## Foreign function interface
 
 A `foreign import` beyond the built-in intrinsics is supported via a provider ladder:
 a hand-written `foreign.wat` / `foreign.wasm` (merged, self-contained, no marshalling)
-or a `foreign.js` (a host import marshalled by a generated loader). How to write each,
-which to choose, and how values cross the boundary are documented in
-[JS↔WASM interop](./interop.md).
+or a `foreign.js` (a host import marshalled by a generated loader). This includes
+**effectful foreigns** (`a -> Effect b`, the `console.log` shape): the loader runs the
+foreign's thunk on the JS side. How to write each, which to choose, and how values cross
+the boundary are documented in [JS↔WASM interop](./interop.md).

@@ -325,6 +325,8 @@ const eqrefToJs = (k, ref) => {
     const [pk, rk] = k.fn;
     return (a) => eqrefToJs(rk, inst.exports.applyClo(ref, eqrefFromJs(pk, a)));
   }
+  // Effect a (export side): wasm already performed it, so the value IS the inner result
+  if (k.eff !== undefined) return eqrefToJs(k.eff, ref);
   // record: read each known field by its interned label id
   const out = {};
   for (const name of Object.keys(k.r)) {
@@ -360,6 +362,17 @@ const isRaw = (k) => k === "i" || k === "f";
 // import direction: wasm calls the JS foreign — args wasm→JS, result JS→wasm
 const wrap = (fn, sig) => (...args) => {
   const xs = args.map((a, i) => (isRaw(sig.params[i]) ? a : eqrefToJs(sig.params[i], a)));
+  // an effectful foreign (`{eff:k}` result): applying the value args yields the Effect
+  // thunk, which we RUN here (the perform is on the JS side), then marshal the inner
+  // result by `k` (ADR 0015). A *nullary* Effect foreign (`Effect a`, no value args, e.g.
+  // `random`) IS the thunk, so we must not pre-call it. Unit (undefined) → boxed 0.
+  if (sig.result && sig.result.eff !== undefined) {
+    const thunk = xs.length === 0 ? fn : fn(...xs);
+    const ran = thunk();
+    const k = sig.result.eff;
+    if (ran === undefined || ran === null) return inst.exports.boxInt(0);
+    return isRaw(k) ? ran : eqrefFromJs(k, ran);
+  }
   const r = fn(...xs);
   return isRaw(sig.result) ? r : eqrefFromJs(sig.result, r);
 };
@@ -392,6 +405,15 @@ for (const name of Object.keys(inst.exports)) {
   const sig = EXPORTS_MANIFEST[name];
   if (!sig || typeof e !== "function") {
     marshalledExports[name] = e;
+  } else if (sig.params.length === 0 && sig.result && sig.result.eff !== undefined) {
+    // an `Effect a` value binding (e.g. `main`) is a *deferred computation*, not a CAF:
+    // expose it as a JS thunk `() => a` so the effect runs when CALLED, not at load
+    // (matching `Effect a ≃ () => a`). The wasm export performs it on each call.
+    const k = sig.result.eff;
+    marshalledExports[name] = () => {
+      const r = e();
+      return isRaw(k) ? r : eqrefToJs(k, r);
+    };
   } else if (sig.params.length === 0) {
     const r = e();
     marshalledExports[name] = isRaw(sig.result) ? r : eqrefToJs(sig.result, r);

@@ -1,0 +1,6 @@
+// FFI stub for HostEff.purs.sample — only so `purs` accepts the foreign import when
+// regenerating the fixture. The e2e supplies the real (spy) implementation at
+// instantiation; this stub is never used by the wasm path.
+export const record = (n) => () => {};
+export const log = (s) => () => {};
+export const tick = () => 0;

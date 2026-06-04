@@ -9,12 +9,15 @@ module PureScript.Backend.Wasm.Externs
   ( ctorFieldReps
   , ForeignSig
   , foreignSigs
+  , effectfulForeignNamesFromExterns
   ) where
 
 import Prelude
 
 import Data.Array as Array
 import Data.Maybe (Maybe(..))
+import Data.Set (Set)
+import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
@@ -65,6 +68,23 @@ foreignSigs externs = Object.fromFoldable (externs >>= declsOf)
       Just (Tuple (mn <> "." <> ident) { moduleName: mn, base: ident, params: foreignParams ty, result: foreignResult ty })
     _ -> Nothing
 
+-- | The qualified names (`Module.ident`) of `foreign import`s whose *running* performs a
+-- | side effect — i.e. whose result type is `Effect _` (detected as an `MEffect` result).
+-- | The seed the middle-end purity analysis (ADR 0015) needs so a host effect like `log`
+-- | is preserved rather than dropped/reordered. (Ordinary `Effect`-valued top-level
+-- | functions are a harmless over-approximation: they are not foreign-resolved.)
+effectfulForeignNamesFromExterns :: Array ExternsFile -> Set String
+effectfulForeignNamesFromExterns externs = Set.fromFoldable (externs >>= declsOf)
+  where
+  declsOf (ExternsFile _ (ModuleName mn) _ _ _ _ decls _) = Array.mapMaybe (valueOf mn) decls
+  valueOf mn = case _ of
+    EDValue (Ident ident) ty
+      | isEffectResult (foreignResult ty) -> Just (mn <> "." <> ident)
+    _ -> Nothing
+  isEffectResult = case _ of
+    MEffect _ -> true
+    _ -> false
+
 -- | The marshal kind of each parameter of a foreign's type, in order. `forall`
 -- | quantifiers are transparent (a foreign may be polymorphic, e.g. `forall a. a ->
 -- | a`); each function arrow contributes its argument's kind. (Constraints need no
@@ -98,6 +118,9 @@ marshalKind = case _ of
   T.TypeApp _ (T.TypeConstructor _ ctor) arg
     | named "Array" ctor -> MArray (marshalKind arg)
     | named "Record" ctor -> MRecord (rowFields arg)
+    -- `Effect a`: an effectful foreign — the JS glue runs its thunk and marshals the
+    -- inner result `a` (ADR 0015). (`EffectFnN` is future work.)
+    | named "Effect" ctor -> MEffect (marshalKind arg)
   T.TypeConstructor _ (Qualified _ (ProperName n))
     | n == "Int" || n == "Char" -> MI32
     | n == "Number" -> MF64
