@@ -22,6 +22,7 @@ import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.Backend.Wasm.MiddleEnd.IR.Eq (eqProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify (impurifyProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline as Inline
@@ -109,7 +110,7 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
             <> snap ("round " <> show r <> " · after simplify") simplified
             <> snap ("round " <> show r <> " · after impurify") prog'
         in
-          if prog' == prog then { modules: prog, trace: trace' } else fixpoint (n - 1) (r + 1) prog' trace'
+          if eqProgram prog' prog then { modules: prog, trace: trace' } else fixpoint (n - 1) (r + 1) prog' trace'
 
 -- | A generous ceiling on whole-program simplification rounds; dictionary
 -- | elimination converges in a few, this only bounds pathological cases.

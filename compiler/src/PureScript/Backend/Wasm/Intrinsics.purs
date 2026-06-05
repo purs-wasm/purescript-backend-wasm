@@ -9,12 +9,14 @@
 module PureScript.Backend.Wasm.Intrinsics
   ( Intrinsic(..)
   , foreignIntrinsic
-  , effectIntrinsic
+  , qualifiedIntrinsic
   , effectfulForeignNames
   ) where
 
 import Prelude
 
+import Control.Alt ((<|>))
+import Data.Functor (($>))
 import Data.Generic.Rep (class Generic)
 import Data.Int as Int
 import Data.Maybe (Maybe(..))
@@ -130,6 +132,10 @@ data Intrinsic
   -- | yielding the `Effect` thunk (the caller performs it).
   | MkEffectFn
   | RunEffectFn
+  -- | `Partial.Unsafe._unsafePartial :: (Unit -> a) -> a` — runs the partial thunk by
+  -- | applying it to the unit (the erased `Partial` dictionary). Native so the wasm
+  -- | closure never crosses to the JS foreign (which would call it as `f()`).
+  | UnsafePartial
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -248,8 +254,15 @@ foreignIntrinsic = case _ of
 -- |
 -- | (`Control.Monad.ST` shares the `$Ref` representation and is a natural follow-up once
 -- | its foreign names/shapes are confirmed; not wired here yet.)
-effectIntrinsic :: String -> Maybe (Tuple Intrinsic Int)
-effectIntrinsic = case _ of
+-- | Intrinsics resolved by *qualified* name (rather than base identifier): the
+-- | effect-package primitives (`Effect.Ref`, `forE`, …) and the uncurried-function
+-- | families. The latter are pure but share the closure machinery: `mkEffectFnN` /
+-- | `Data.Function.Uncurried.mkFnN` are the identity (the uncurried value *is* the
+-- | curried `$Clo`), and `runEffectFnN` / `runFnN` apply the function to its N arguments
+-- | via the `applyClo` chain — identical codegen; the only difference (an `Effect`
+-- | result performed by the caller vs. a plain result) is invisible here.
+qualifiedIntrinsic :: String -> Maybe (Tuple Intrinsic Int)
+qualifiedIntrinsic = case _ of
   "Effect.Ref._new" -> Just (Tuple RefNew 2)
   "Effect.Ref.read" -> Just (Tuple RefRead 2)
   "Effect.Ref.write" -> Just (Tuple RefWrite 3)
@@ -259,13 +272,19 @@ effectIntrinsic = case _ of
   "Effect.foreachE" -> Just (Tuple ForeachE 3) -- arr, f, perform-unit
   "Effect.whileE" -> Just (Tuple WhileE 3) -- cond, body, perform-unit
   "Effect.untilE" -> Just (Tuple UntilE 2) -- action, perform-unit
-  name -> case stripPrefix (Str.Pattern "Effect.Uncurried.mkEffectFn") name of
-    Just _ -> Just (Tuple MkEffectFn 1)
-    Nothing -> case stripPrefix (Str.Pattern "Effect.Uncurried.runEffectFn") name of
-      -- runEffectFnN: the function + its N arguments (N parsed from the suffix); no unit —
-      -- the result is the `Effect`, performed by the caller
-      Just suffix | Just n <- Int.fromString suffix -> Just (Tuple RunEffectFn (n + 1))
-      _ -> Nothing
+  "Partial.Unsafe._unsafePartial" -> Just (Tuple UnsafePartial 1)
+  "Data.Array.unsafeIndexImpl" -> Just (Tuple ArrayIndex 2)
+  name -> uncurriedMk name <|> uncurriedRun name
+  where
+  -- `mkEffectFnN` / `mkFnN`: identity (arity 1)
+  uncurriedMk name =
+    (stripPrefix (Str.Pattern "Effect.Uncurried.mkEffectFn") name <|> stripPrefix (Str.Pattern "Data.Function.Uncurried.mkFn") name)
+      $> Tuple MkEffectFn 1
+  -- `runEffectFnN` / `runFnN`: the function + its N arguments (N parsed from the suffix)
+  uncurriedRun name = do
+    suffix <- stripPrefix (Str.Pattern "Effect.Uncurried.runEffectFn") name <|> stripPrefix (Str.Pattern "Data.Function.Uncurried.runFn") name
+    n <- Int.fromString suffix
+    pure (Tuple RunEffectFn (n + 1))
 
 -- | The qualified names of `foreign import`s whose *running* performs a side effect —
 -- | the seed set for the middle-end's purity analysis (ADR 0015): the test-only counter

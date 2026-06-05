@@ -29,6 +29,7 @@ import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (exprSize, key, qkey, references)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Semantics (normalize)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx, simplifyExpr)
 import PureScript.CoreFn (Binder(..), Literal(LitObject), Meta(..), ModuleName, Qualified)
 
@@ -95,12 +96,21 @@ buildCtx modules =
 
   acceptHelper i = if intersects i.refs candidateKeys then Nothing else Just (Tuple i.key i.rhs)
 
+-- | Reduce an expression. Toggle between the legacy rule-based `Simplify` engine and
+-- | the NbE reducer (`Semantics`, ADR 0020) while the latter is being brought up to
+-- | behaviour-parity. Flip to `true` to A/B the NbE path against the suite.
+useNbE :: Boolean
+useNbE = true
+
+reduce :: Ctx -> M.Expr -> M.Expr
+reduce ctx = if useNbE then normalize ctx else simplifyExpr ctx
+
 simplifyModule :: Ctx -> M.Module -> M.Module
 simplifyModule ctx m = m { decls = map go m.decls }
   where
   go = case _ of
-    M.NonRec meta i e -> M.NonRec meta i (simplifyExpr ctx e)
-    M.Rec rs -> M.Rec (map (\r -> r { expr = simplifyExpr ctx r.expr }) rs)
+    M.NonRec meta i e -> M.NonRec meta i (reduce ctx e)
+    M.Rec rs -> M.Rec (map (\r -> r { expr = reduce ctx r.expr }) rs)
 
 -- classification --------------------------------------------------------------
 

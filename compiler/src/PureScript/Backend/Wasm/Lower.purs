@@ -52,7 +52,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), fst)
 import Foreign.Object (Object)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Intrinsics (effectIntrinsic, foreignIntrinsic)
+import PureScript.Backend.Wasm.Intrinsics (qualifiedIntrinsic, foreignIntrinsic)
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
@@ -124,7 +124,7 @@ isEffectForeignApp env = case _ of
   -- perform-unit), even though source reconstruction (ADR 0016) also lists it in
   -- `foreignSigs` with an `MEffect` result. Exclude it here so that path is taken.
   isEff q@(Qualified _ ident)
-    | isJust (effectIntrinsic (qualifiedKeyOf q)) = false
+    | isJust (qualifiedIntrinsic (qualifiedKeyOf q)) = false
     | isJust (foreignIntrinsic ident) = false
     | otherwise = case Object.lookup (qualifiedKeyOf q) env.foreignSigs of
         Just sig -> case sig.result of
@@ -170,7 +170,7 @@ lowerArg env expr k = case expr of
     -- A nullary foreign (e.g. `Data.Bounded.topInt`) is a constant value, not a
     -- callable, so it materializes directly rather than eta-expanding. The qualified
     -- `Effect.Ref` ops (ADR 0017) take precedence over the bare-ident `Prelude` table.
-    | Just (Tuple intr arity) <- effectIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident ->
+    | Just (Tuple intr arity) <- qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident ->
         if arity == 0 then bindRhs (RPrim intr []) k
         else lowerArg env (etaExpand expr arity) k
     -- a `foreign import` with no intrinsic: a wasm host import (ADR 0014). A nullary
@@ -294,7 +294,7 @@ lowerApp env { head, args } k = case head of
         [] -> lowerArg env arg k
         _ -> lowerApp env { head: arg, args: tail } k
     -- the qualified `Effect.Ref` ops (ADR 0017) take precedence over the bare-ident table
-    | Just (Tuple intr arity) <- effectIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident -> applyArity arity (RPrim intr)
+    | Just (Tuple intr arity) <- qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident -> applyArity arity (RPrim intr)
     -- an applied `foreign import` (no intrinsic): a wasm host import (ADR 0014)
     | Just sig <- Object.lookup (qualifiedKeyOf q) env.foreignSigs ->
         applyArity (Array.length sig.params) (RCallForeign sig)

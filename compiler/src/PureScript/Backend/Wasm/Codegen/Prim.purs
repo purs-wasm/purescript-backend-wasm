@@ -220,6 +220,11 @@ genPrim ctx intr args = case intr, args of
       g0 <- genAtomAs ctx Boxed g
       applyEffectFnArgs g0 xs
     Nothing -> throwException (error "Codegen: runEffectFn with no operands")
+  -- `_unsafePartial f` = `f unit`: apply the thunk to the (erased `Partial` dict) unit
+  UnsafePartial, [ f ] -> do
+    f0 <- genAtomAs ctx Boxed f
+    unitE <- B.i32Const ctx.mod 0 >>= B.i31New ctx.mod
+    B.call ctx.mod applyCloHelperName [ f0, unitE ] B.eqref
   -- `Record.Unsafe`: resolve the `String` key to its label id, then read / rebuild
   -- the record through the id-keyed runtime helpers.
   UnsafeGet, [ key, rec ] -> do

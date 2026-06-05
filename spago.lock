@@ -168,6 +168,41 @@
         "test": {
           "dependencies": []
         }
+      },
+      "examples-metatheory": {
+        "path": "examples/metatheory",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "fmt",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
+      "examples-snapshots": {
+        "path": "examples/snapshots",
+        "core": {
+          "dependencies": [
+            "arrays",
+            "console",
+            "effect",
+            "exists",
+            "functions",
+            "lists",
+            "maybe",
+            "partial",
+            "prelude",
+            "strings",
+            "tuples"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
       }
     },
     "package_set": {

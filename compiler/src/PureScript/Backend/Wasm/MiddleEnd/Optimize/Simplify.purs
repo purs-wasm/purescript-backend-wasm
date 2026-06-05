@@ -16,6 +16,23 @@
 module PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify
   ( Ctx
   , simplifyExpr
+  -- exposed for the NbE reducer (ADR 0020), which reuses these tuned helpers
+  , MatchResult(..)
+  , matchBinder
+  , matchAll
+  , asCtorApp
+  , substMany
+  , occurrences
+  , trivialRecord
+  , trivialExpr
+  , smallLambda
+  , lookupField
+  , boolDisjKey
+  , boolConjKey
+  , boolCase
+  , floatAbsOutOfCase
+  , canCommute
+  , pushArgs
   ) where
 
 import Prelude
@@ -33,6 +50,7 @@ import Data.String (joinWith)
 import Data.Tuple (Tuple(..), snd)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (binderVars, freeVars)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.Backend.Wasm.MiddleEnd.IR.Eq (eqExpr)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity (PCtx, exprPure, runPure)
 import PureScript.CoreFn (Ann, Binder(..), Literal(..), Qualified(..))
 
@@ -76,7 +94,7 @@ simplifyExpr ctx = fixpoint maxPasses
         let
           e' = pass e
         in
-          if e' == e then e else fixpoint (n - 1) e'
+          if eqExpr e' e then e else fixpoint (n - 1) e'
 
   pass e = let r = descend e in fromMaybe r (step r)
 

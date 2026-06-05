@@ -47,6 +47,7 @@ history.
 | 0017 | [Native `Effect.Ref` mutable references](0017-native-mutable-references.md) | Accepted |
 | 0018 | [Native `effect`-package control-flow and `EffectFn` primitives](0018-native-effect-primitives.md) | Accepted |
 | 0019 | [A faithful, uniform `Effect` lowering (correctness before collapse)](0019-faithful-effect-lowering.md) | Proposed |
+| 0020 | [A reduction-aware inliner (inline when it reduces, share when it doesn't)](0020-reduction-aware-inliner.md) | Proposed |
 
 ## Scope
 
