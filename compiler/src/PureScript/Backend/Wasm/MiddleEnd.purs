@@ -21,13 +21,15 @@ import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
+import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
-import PureScript.Backend.Wasm.MiddleEnd.IR.Eq (eqProgram)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (key, references)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify (impurifyProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline as Inline
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift (lambdaLiftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
@@ -60,62 +62,105 @@ optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff 
 -- | trace; when `Nothing` the trace stays empty and costs nothing.
 runOpt :: Boolean -> Set String -> Map String Int -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String }
 runOpt dictElim effectfulForeigns effArities traceTarget modules =
-  if dictElim then fixpoint maxRounds 1 lifted (snap "initial (translated + lifted)" lifted)
+  if dictElim then { modules: result.done, trace: result.trace }
   else { modules: lifted, trace: snap "initial (translated + lifted)" lifted }
   where
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
   lifted = map lambdaLiftModule mir
+  -- Higher-order specialization runs once, whole-program, before the per-module pass:
+  -- specializations come from call sites' lambda arguments, which exist pre-simplification.
+  specialized = specializeProgram lifted
+  ordered = topoOrder specialized
 
-  -- a labelled snapshot of the traced module's MIR (empty when not tracing)
   snap :: String -> Array M.Module -> Array String
   snap label prog = case traceTarget of
     Nothing -> []
     Just t ->
-      let
-        body = maybe ("(module " <> t <> " not found)") printModule
-          (Array.find (\m -> joinWith "." m.name == t) prog)
-      in
-        [ "=== " <> label <> " ===\n" <> body ]
+      [ "=== " <> label <> " ===\n"
+          <> maybe ("(module " <> t <> " not found)") printModule (Array.find (\m -> joinWith "." m.name == t) prog)
+      ]
 
-  -- each round: specialize higher-order calls (idempotent once rewritten), then run
-  -- the simplifier (dictionary elimination + beta etc.), which inlines the
-  -- specialization's lambda body and saturates its operations
-  fixpoint :: Int -> Int -> Array M.Module -> Array String -> { modules :: Array M.Module, trace :: Array String }
-  fixpoint n r prog trace
-    | n <= 0 = { modules: prog, trace }
+  -- Dependency-ordered optimization (ADR 0021): optimize each module once to a local
+  -- fixed point against the already-finalized modules (`done`), never re-optimizing them.
+  -- For an acyclic module graph this equals the old whole-program fixed point, yet it
+  -- cannot compound — a finalized module is never re-inlined — which is what made the old
+  -- N-round whole-program loop blow up on transformer-heavy code.
+  result = Array.foldl step { done: [], trace: snap "initial (specialized)" specialized } ordered
+
+  step acc m =
+    let
+      m' = localOpt acc.done m
+    in
+      { done: Array.snoc acc.done m'
+      , trace: case traceTarget of
+          Just t | joinWith "." m.name == t -> acc.trace <> [ "=== " <> t <> " (optimized) ===\n" <> printModule m' ]
+          _ -> acc.trace
+      }
+
+  -- One module, optimized once against the finalized dependencies plus itself:
+  --   simplify (inline + reduce) → impurify (Effect glue → thunks) → simplify again.
+  -- NbE normalizes fully in a single pass, so there is no outer round loop — re-running the
+  -- *inlining* pass does not converge, it inline-expands the module further each time (the
+  -- non-idempotence that, looped, blew up the old whole-program optimizer). The second
+  -- simplify is needed only to collapse the thunks impurify introduces (the pure-`Effect`
+  -- / State constant-stack TCE collapse, ADR 0015), which is a set of *local* reductions
+  -- (β, perform, Abs-merge, float-lambda-out-of-case); it runs with an **empty inline set**
+  -- so it performs that collapse without re-inlining (which would re-expand the module).
+  localOpt :: Array M.Module -> M.Module -> M.Module
+  localOpt done m =
+    let
+      ctx = buildContext effectfulForeigns (Array.snoc done m)
+      simplified = DictElim.simplifyModule ctx m
+      impured = fromMaybe simplified (Array.head (impurifyProgram effArities [ simplified ]))
+    in
+      DictElim.simplifyModule (ctx { inline = Map.empty }) impured
+
+-- | Build the simplifier context (dictionary elimination + general inlining + purity)
+-- | from a set of modules — the finalized dependencies plus the module being optimized.
+buildContext :: Set String -> Array M.Module -> Ctx
+buildContext eff prog =
+  let
+    base = DictElim.buildCtx prog
+  in
+    base
+      { inline = Map.union base.inline (Inline.inlineCandidates prog)
+      , newtypeCtors = Set.union base.newtypeCtors (Inline.newtypeCtorNames prog)
+      , effectfulForeigns = eff
+      , impureBindings = Purity.impureKeys eff prog
+      }
+
+-- | Order modules so every module comes after the modules it references (a dependency is
+-- | finalized before its dependents). Dependencies are taken from actual cross-module
+-- | references (CoreFn `Var`s name the *defining* module), not the coarser import list, so
+-- | re-export indirection is resolved precisely (ADR 0021). Module imports are acyclic.
+topoOrder :: Array M.Module -> Array M.Module
+topoOrder prog = Array.mapMaybe (\n -> Map.lookup n byName) (Array.foldl visit { seen: Set.empty, out: [] } (map modName prog)).out
+  where
+  byName = Map.fromFoldable (map (\m -> Tuple (modName m) m) prog)
+  keyMod = Map.fromFoldable (prog >>= \m -> map (\k -> Tuple k (modName m)) (declKeys m))
+  depsOf name = case Map.lookup name byName of
+    Nothing -> []
+    Just m -> Array.filter (_ /= name) (Array.nub (Array.mapMaybe (\k -> Map.lookup k keyMod) (declRefs m)))
+  visit acc name
+    | Set.member name acc.seen = acc
     | otherwise =
         let
-          specialized = specializeProgram prog
-          -- the dictionary-elimination context, augmented with general known-function
-          -- inlining (ordinary small / single-use, acyclic top-level bindings) and
-          -- user newtype transparency, all driving the same simplifier (ADR 0005)
-          base = DictElim.buildCtx specialized
-          -- whole-program purity (ADR 0015): which top-level bindings are effectful to
-          -- run, so the simplifier preserves effectful `Perform`s while still collapsing
-          -- pure `Effect` (a binding absent from the set is pure-running)
-          impure = Purity.impureKeys effectfulForeigns specialized
-          ctx = base
-            { inline = Map.union base.inline (Inline.inlineCandidates specialized)
-            , newtypeCtors = Set.union base.newtypeCtors (Inline.newtypeCtorNames specialized)
-            , effectfulForeigns = effectfulForeigns
-            , impureBindings = impure
-            }
-          -- after dict-elim resolves `bind`/`pure` over `Effect` to the `bindE`/`pureE`
-          -- foreigns, impurify rewrites them to the thunk encoding; the next round's
-          -- simplifier collapses the resulting lambdas/applications (ADR 0015)
-          simplified = map (DictElim.simplifyModule ctx) specialized
-          prog' = impurifyProgram effArities simplified
-          trace' = trace
-            <> snap ("round " <> show r <> " · after specialize") specialized
-            <> snap ("round " <> show r <> " · after simplify") simplified
-            <> snap ("round " <> show r <> " · after impurify") prog'
+          after = Array.foldl visit (acc { seen = Set.insert name acc.seen }) (depsOf name)
         in
-          if eqProgram prog' prog then { modules: prog, trace: trace' } else fixpoint (n - 1) (r + 1) prog' trace'
+          after { out = Array.snoc after.out name }
 
--- | A generous ceiling on whole-program simplification rounds; dictionary
--- | elimination converges in a few, this only bounds pathological cases.
-maxRounds :: Int
-maxRounds = 8
+modName :: M.Module -> String
+modName m = joinWith "." m.name
+
+declKeys :: M.Module -> Array String
+declKeys m = m.decls >>= case _ of
+  M.NonRec _ i _ -> [ key m.name i ]
+  M.Rec rs -> map (\r -> key m.name r.ident) rs
+
+declRefs :: M.Module -> Array String
+declRefs m = m.decls >>= case _ of
+  M.NonRec _ _ e -> references e
+  M.Rec rs -> rs >>= (references <<< _.expr)
 
 -- | Optimize a single self-contained module (its own bindings only). A convenience
 -- | for callers with one module; cross-module dictionary elimination needs

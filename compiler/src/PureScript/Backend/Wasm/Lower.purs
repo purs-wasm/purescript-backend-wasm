@@ -473,6 +473,7 @@ matchOps env finish =
   , bindLocal: \name atom e -> e { locals = Object.insert name atom e.locals }
   , lookupCtor: \q -> requireCtor env (qualifiedKeyOf q)
   , isEnumCtor: \q -> Object.member (qualifiedKeyOf q) env.enumCtors
+  , internLabel: internLabel env
   }
 
 -- | Recognise a single record-pattern alternative `{ l: b, … } -> body` (a
@@ -568,7 +569,7 @@ lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
     reachable = reachableFunctions functions rootKeys
     toLower = Array.filter (\e -> Object.member e.key reachable) entries
   Tuple funcs st <- runStateT
-    (traverse (\e -> lowerTopFunc info e.moduleName e.isRoot (Tuple e.ident e.expr)) toLower)
+    (traverse (\e -> case DBGUnsafe.unsafePerformEffect (DBGConsole.error ("[lower] " <> e.key)) of _ -> lowerTopFunc info e.moduleName e.isRoot (Tuple e.ident e.expr)) toLower)
     { slot: 0, lifted: [], nextCode: 0 }
   let allFuncs = funcs <> st.lifted
   -- the marshal signature of each exported function (looked up by its qualified name
