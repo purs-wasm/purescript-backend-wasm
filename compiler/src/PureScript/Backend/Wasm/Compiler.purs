@@ -14,8 +14,10 @@ import Prelude
 import Binaryen as B
 import Data.Argonaut.Decode (printJsonDecodeError)
 import Data.Argonaut.Parser (jsonParser)
+import Data.Array as Array
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
+import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Effect (Effect)
@@ -62,7 +64,7 @@ withCompiledModule
   -> Array ExternsFile
   -> Object ForeignSig
   -> Effect (Either String a)
-withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')) (effectfulForeignAritiesFromSigs foreignSigs') modules) of
+withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')) (effectfulForeignAritiesFromSigs foreignSigs') reachable) of
   Left err -> pure (Left ("linking failed: " <> show err))
   Right program -> do
     mod <- buildModule program
@@ -77,9 +79,33 @@ withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModu
       B.dispose mod
       pure (Right result)
   where
+  -- Prune to the modules transitively imported by the entry roots BEFORE optimizing — the
+  -- input dir holds the whole dependency build (often hundreds of modules), but optimizing
+  -- them all is wasted work and overflows the optimizer's stack on a real closure (ADR 0009;
+  -- the function-level reachability DCE in `lowerModules` runs afterwards over this set).
+  reachable = reachableModules roots modules
   -- every CoreFn-declared foreign name (qualified); lets lowering fall back to an
   -- all-opaque host import when a foreign has no reconstructed signature (ADR 0016)
-  foreignNames = Set.fromFoldable (modules >>= \m -> map (\base -> joinWith "." m.name <> "." <> base) m.foreignNames)
+  foreignNames = Set.fromFoldable (reachable >>= \m -> map (\base -> joinWith "." m.name <> "." <> base) m.foreignNames)
+
+-- | The modules transitively reachable from `roots` through CoreFn imports (a fixpoint over
+-- | each kept module's import list). Used to drop unreached dependency modules before the
+-- | middle-end runs.
+reachableModules :: Array ModuleName -> Array Module -> Array Module
+reachableModules roots modules = Array.filter (\m -> Set.member (joinWith "." m.name) keep) modules
+  where
+  keep = fixpoint (Set.fromFoldable (map (joinWith ".") roots))
+
+  fixpoint :: Set String -> Set String
+  fixpoint seen =
+    let
+      next = Array.foldl addImports seen modules
+    in
+      if Set.size next == Set.size seen then seen else fixpoint next
+  addImports seen m
+    | Set.member (joinWith "." m.name) seen =
+        Set.union seen (Set.fromFoldable (map (\i -> joinWith "." i.moduleName) m.imports))
+    | otherwise = seen
 
 -- | Link the given modules into one wasm and return its binary bytes. `externs`
 -- | supplies type information for type-directed lowering (front B); pass `[]` to
