@@ -16,7 +16,7 @@ import PureScript.Backend.Wasm.Lower.IR (Atom(..), FuncName(..), LitPat(..), Mar
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
-import Test.Unit.PureScript.Backend.Wasm.Lower.Common (allRhs, ann, appE, blockAtoms, boolAlt, caseOf, closureCaptures, ctor, ctorAlt, def, dictCtorDecl, exportOf, exported, intAlt, isApply, isCallForeign, isPrim, lam, letRec2, liftedFuncs, litInt, litObj, litStr, litSwitchOf, lower, lowerForeign, lowerMany, lv, mkDataTags, newtypeCase, objUpdate, projLabelIds, qv, qvIn, recAlt, recordLabelIds, strAlt, switchOf, switchScrutinees, hasSwitch, accessor, varBinder, arrayLengths, callKnownArities, callKnownNames, countLitSwitches, letRecOf, case2, ctorBinder, alt2, nullBinder, wildAlt, moduleNamed)
+import Test.Unit.PureScript.Backend.Wasm.Lower.Common (allRhs, ann, appE, blockAtoms, boolAlt, caseOf, closureCaptures, ctor, ctorAlt, def, dictCtorDecl, exportOf, exported, intAlt, isApply, isCallForeign, isPrim, lam, letRec2, liftedFuncs, litInt, litObj, litStr, litSwitchOf, lower, lowerForeign, lowerMany, lv, mkDataTags, newtypeCase, objUpdate, objUpdatePoly, projLabelIds, recSetLabelIds, qv, qvIn, recAlt, recordLabelIds, strAlt, switchOf, switchScrutinees, hasSwitch, accessor, varBinder, arrayLengths, callKnownArities, callKnownNames, countLitSwitches, letRecOf, case2, ctorBinder, alt2, nullBinder, wildAlt, moduleNamed)
 
 -- A function with a capturing lambda applied immediately:
 -- `f a b = (\y -> intAdd a y) b`. The lambda captures `a`.
@@ -222,6 +222,20 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
           (recordLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ [ 0, 1 ] ]
           -- the untouched field b is projected out of the original record
           (projLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ 1 ]
+
+    it "lowers a polymorphic record update to a recSet chain (ADR 0023)" do
+      -- f r = r { a = 1, b = 2 }  over an *open row* — the untouched fields are unknown,
+      -- so it copies the record and sets each named field (ids a=0, b=1); no projection
+      -- of untouched fields and no fresh RMkRecord.
+      let f = def "f" (lam "r" (objUpdatePoly (lv "r") [ Tuple "a" (litInt 1), Tuple "b" (litInt 2) ]))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog -> do
+          -- one copy-and-set per updated field, in order
+          (recSetLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ 0, 1 ]
+          -- the open row is not rebuilt field-by-field: no RMkRecord, no untouched projection
+          (recordLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just []
+          (projLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just []
 
     it "lowers a record pattern to label projections without a Switch" do
       -- f r = case r of { a: x } -> x

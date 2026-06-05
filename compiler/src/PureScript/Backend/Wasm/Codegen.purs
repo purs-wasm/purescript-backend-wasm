@@ -39,7 +39,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (counterGlobalName, importRuntime, internStrName, projHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (counterGlobalName, importRuntime, internStrName, projHelperName, recSetHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
@@ -513,6 +513,13 @@ genRhs ctx = case _ of
     recE <- genAtomAs ctx Boxed recAtom
     idE <- B.i32Const ctx.mod labelId
     B.call ctx.mod projHelperName [ recE, idE ] B.eqref
+  -- Copy-and-set one field by interned label id, reusing the `unsafeSet` helper; all
+  -- other fields (including an open row's unknown tail) are carried over (ADR 0023).
+  RRecSet recAtom labelId valAtom -> do
+    recE <- genAtomAs ctx Boxed recAtom
+    idE <- B.i32Const ctx.mod labelId
+    valE <- genAtomAs ctx Boxed valAtom
+    B.call ctx.mod recSetHelperName [ recE, idE, valE ] B.eqref
   -- An array is the bare `$Vals` array (it is already an `eqref`).
   RMkArray elements -> do
     elemEs <- traverse (genAtomAs ctx Boxed) elements

@@ -131,6 +131,11 @@ data Rhs
   -- | by runtime search of the label-id array (no static layout / type info
   -- | needed — handles methods and superclass fields uniformly, ADR 0007).
   | RProjLabel Atom Int
+  -- | Functional copy-and-set of one record field by interned `i32` label id (ADR
+  -- | 0023): `$rt.recSet rec labelId value`, copying the record and replacing the
+  -- | named field while preserving every other field — including an open row's
+  -- | unknown tail. Chained to lower a polymorphic (open-row) record update.
+  | RRecSet Atom Int Atom
   -- | Allocate an `Array` from its (already-`eqref`) elements. An array is the
   -- | bare `$Vals = (array (mut eqref))` (no wrapping struct), so this lowers to a
   -- | single `array.new_fixed $Vals [elements]`.

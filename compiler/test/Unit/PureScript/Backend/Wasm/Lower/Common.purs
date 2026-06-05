@@ -142,6 +142,11 @@ accessor label record = CF.Accessor ann label record
 objUpdate :: CF.Expr -> Array String -> Array (Tuple String CF.Expr) -> CF.Expr
 objUpdate record copyFields updates = CF.ObjectUpdate ann record (Just copyFields) updates
 
+-- | A *polymorphic* record update over an open row: the untouched fields are unknown
+-- | (`copyFields = Nothing`), so it lowers to a runtime copy-and-set chain (ADR 0023).
+objUpdatePoly :: CF.Expr -> Array (Tuple String CF.Expr) -> CF.Expr
+objUpdatePoly record updates = CF.ObjectUpdate ann record Nothing updates
+
 -- | A record-pattern alternative `{ l: subBinder, … } -> body`.
 recAlt :: Array (Tuple String CF.Binder) -> CF.Expr -> CF.CaseAlternative
 recAlt fields body = { binders: [ CF.LiteralBinder ann (CF.LitObject fields) ], result: Right body }
@@ -221,6 +226,7 @@ rhsAtoms = case _ of
   RApply f a -> [ f, a ]
   RMkRecord pairs -> map (\(Tuple _ a) -> a) pairs
   RProjLabel a _ -> [ a ]
+  RRecSet rec _ val -> [ rec, val ]
   RMkArray as -> as
 
 -- | Every `Atom` appearing in a block.
@@ -265,6 +271,14 @@ projLabelIds b = Array.mapMaybe idOf (allRhs b)
   where
   idOf = case _ of
     RProjLabel _ labelId -> Just labelId
+    _ -> Nothing
+
+-- | The label ids of every `RRecSet` (copy-and-set) in a block, in order (ADR 0023).
+recSetLabelIds :: AnfExpr -> Array Int
+recSetLabelIds b = Array.mapMaybe idOf (allRhs b)
+  where
+  idOf = case _ of
+    RRecSet _ labelId _ -> Just labelId
     _ -> Nothing
 
 -- | The field indices of every `RProjField` in a block.

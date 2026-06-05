@@ -249,18 +249,30 @@ lowerRecord env fields k =
 -- | updated fields take their new values, and the untouched fields (`copyFields`,
 -- | which lists exactly the other labels for a monomorphic record) are projected
 -- | out of the original. A polymorphic update (`copyFields = Nothing`, an open
--- | row whose extra fields are unknown) needs a runtime copy and is not yet
--- | supported.
+-- | row whose extra fields are unknown) is a chain of runtime copy-and-set over the
+-- | original record — one `RRecSet` per updated field, which preserves the unknown
+-- | tail fields (ADR 0023).
 lowerObjectUpdate
   :: Env -> M.Expr -> Maybe (Array String) -> Array (Tuple String M.Expr) -> (Atom -> Lower AnfExpr) -> Lower AnfExpr
 lowerObjectUpdate env record copyFields updates k = case copyFields of
-  Nothing -> throw (UnsupportedExpr "polymorphic record update (open row) is not yet supported")
+  -- open row: the untouched fields are not known, so rebuild by copying the whole
+  -- record and overwriting each named field in turn (ADR 0023)
+  Nothing ->
+    lowerArg env record \recAtom -> chainSet recAtom updates
   Just untouched ->
     lowerArg env record \recAtom ->
       lowerCopied recAtom untouched \copied ->
         lowerUpdated updates \updated ->
           bindRhs (RMkRecord (Array.sortWith fst (copied <> updated))) k
   where
+  -- the open-row path: fold the updates left-to-right, each `recSet` copying the
+  -- running record and replacing one field by its compile-time-interned label id
+  chainSet recAtom ups = case Array.uncons ups of
+    Nothing -> k recAtom
+    Just { head: Tuple label expr, tail } -> do
+      labelId <- internLabel env label
+      lowerArg env expr \valAtom ->
+        bindRhs (RRecSet recAtom labelId valAtom) \recAtom' -> chainSet recAtom' tail
   lowerCopied recAtom labels kk = case Array.uncons labels of
     Nothing -> kk []
     Just { head: label, tail } -> do

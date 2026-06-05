@@ -301,6 +301,7 @@ rhsDemands sigs acc = case _ of
   RProjField at _ _ -> demand Boxed at acc
   RMkRecord pairs -> foldl (\a (Tuple _ at) -> demand Boxed at a) acc pairs
   RProjLabel at _ -> demand Boxed at acc
+  RRecSet rec _ val -> demand Boxed val (demand Boxed rec acc)
   RMkArray els -> boxedAll acc els
   RMkClosure _ caps -> boxedAll acc caps
   RApply h ar -> demand Boxed ar (demand Boxed h acc)
