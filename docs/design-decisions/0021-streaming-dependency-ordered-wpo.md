@@ -161,6 +161,25 @@ because cross-module inlining makes a dependent's output depend on its dependenc
    construction. Module source hashes come from spago's `cache-db.json` (already read, ADR
    0016).
 
+## Future: level-parallel optimization
+
+The topological order partitions into **levels** (antichains) of mutually-independent
+modules; a module depends only on lower levels. Because per-module optimization is a **pure
+function** of `(module MIR, dependency summaries)` with no shared mutable state (summaries
+are read-only; the fresh-name counters are call-local), modules within a level — or, more
+generally, any module whose dependencies are all finalized (a work-stealing schedule) — can
+be **optimized concurrently**, cutting compile time on wide module graphs (the common case
+for PureScript). Only the **optimization** phase parallelizes; **codegen stays sequential**
+(the single Binaryen module and its global label/string tables are shared mutable state), so
+the shape is *parallel-optimize a level → collect → sequential b1 codegen*.
+
+Cost: Node `worker_threads`/`child_process` plus **serialization of MIR + summaries** across
+workers — which is the *same* serializer the incremental cache needs (worker transfer ≡
+on-disk cache entry), so the two share machinery. Specialization (currently whole-program,
+once) is run sequentially before the parallel phase, or made per-module (caller-homed). This
+is enabled by the design but **deferred** — it is a compile-time optimization, below
+correctness and the b1 memory work in priority.
+
 ## Alternatives considered
 
 - **Keep whole-program + a cost-model inliner** ("inline only if it shrinks", with
