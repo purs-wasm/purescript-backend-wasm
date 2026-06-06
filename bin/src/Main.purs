@@ -489,9 +489,17 @@ for (const name of Object.keys(inst.exports)) {
       const r = e();
       return isRaw(k) ? r : eqrefToJs(k, r);
     };
-  } else if (sig.params.length === 0) {
+  } else if (sig.params.length === 0 && e.length === 0) {
+    // a genuine CAF (source value, compiled to a nullary function): call it once at load
+    // and expose the resulting value, so it reads as a value on the JS side, not a thunk.
     const r = e();
     marshalledExports[name] = isRaw(sig.result) ? r : eqrefToJs(sig.result, r);
+  } else if (sig.params.length === 0) {
+    // the source type is a value but the backend compiled it to a *function* — a monadic
+    // value (e.g. `TypingM a`) collapsed to take its reader/state arguments (ADR 0015). It
+    // is not a JS-usable CAF, and calling it with no args would trap (`illegal cast` on the
+    // missing argument), so expose the raw wasm export rather than evaluating it at load.
+    marshalledExports[name] = e;
   } else {
     marshalledExports[name] = wrapExport(e, sig);
   }

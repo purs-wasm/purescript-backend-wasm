@@ -207,6 +207,38 @@ Under the hood the export wrapper exposes each parameter/result at its represent
 (arguments JS→wasm, result wasm→JS). A plain `Int -> Int` export is just an `i32`
 function and can be called on the raw instance with no loader.
 
+### TIP: export only *transparent*, JS-safe types
+
+The export glue is driven by each parameter/result's **type leaf** (`Int`/`Number`/
+`Boolean`/`String`/`Array`/`Record`/function). An **opaque** type constructor — a
+`newtype`/`data` the marshaller does not unfold, *including a function newtype* — carries
+**no information about what it wraps**, so it cannot be marshalled. Exporting such a value
+directly is **fail-safe but not supported**: it never silently corrupts (it either
+coincidentally matches the `i32` fallback or cleanly traps `illegal cast`), but it is not a
+reliable JS surface.
+
+```purescript
+newtype SafeAPI = SafeAPI (Int -> Int)
+runSafe :: SafeAPI -> Int -> Int
+runSafe (SafeAPI f) = f
+
+foo   :: SafeAPI       -- ✗ don't export directly: `SafeAPI` is opaque, so the glue is blind
+                       --   (works by luck for Int->Int; traps for e.g. String->Int)
+fooJS :: Int -> Int    -- ✓ export this: a transparent, JS-safe bridge
+fooJS = runSafe foo
+```
+
+This is the same discipline the PureScript **JS backend** encourages: across the boundary
+expose only JS-safe values — `Int`/`Number`/`Boolean`/`String`, functions over them, and (for
+`Aff`) a `Promise` — bridging opaque/abstract types through a runner. The wasm backend rewards
+it identically.
+
+**Point-free is fine.** A point-free top-level (`inc = add 1`, type `Int -> Int`) compiles to
+a nullary function returning a closure, but the export wrapper recovers its full type arity
+(it calls the function and applies the remaining arguments to the returned closure), so
+`exports.inc(5) === 6` on both the loader and standalone paths. The arity reconciliation rule
+and the transparent-types-only principle are [ADR 0024](./design-decisions).
+
 ## What is not supported yet
 
 - **JS function → wasm (closure direction 2).** A foreign that hands a JS *function*

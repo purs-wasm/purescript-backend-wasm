@@ -39,7 +39,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (counterGlobalName, importRuntime, internStrName, projHelperName, recSetHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGlobalName, importRuntime, internStrName, projHelperName, recSetHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
@@ -291,24 +291,49 @@ collectSlotReps = case _ of
 -- | runtime helpers). The wrapper coerces between that external rep and the internal
 -- | function's rep. When the export's FFI kind is unknown (no externs entry), it
 -- | falls back to the internal reps — so a plain `Int` export is unchanged.
+-- |
+-- | A **point-free** top-level (`inc = add 1`, type `Int -> Int`) compiles to a
+-- | *nullary* function returning a closure: its compiled arity (`fn.params`) is less
+-- | than its type arity (`sig.params`). The wrapper exposes the full type arity by
+-- | calling the compiled function with the leading args and then applying the
+-- | remaining args to the returned closure one at a time (the same over-application
+-- | the internal call path performs) — so the export reads as a normal n-ary function.
 addExportWrapper :: Ctx -> Object ForeignImport -> IRFunc -> Effect Unit
 addExportWrapper ctx exportSigs fn = case fn.export of
   Nothing -> pure unit
   Just external -> do
     let
+      compiledArity = Array.length fn.params
+      -- accept the FFI sig when it has at least the compiled arity; a *greater* type
+      -- arity is a point-free binding, eta-expanded at the boundary below
       mSig = case Object.lookup external exportSigs of
-        Just s | Array.length s.params == Array.length fn.params -> Just s
+        Just s | Array.length s.params >= compiledArity -> Just s
         _ -> Nothing
       -- with a known FFI kind, expose its `marshalRep`; without one (no externs), fall
       -- back to the historical `i32` ABI (the internal rep is often `Boxed`, so the
       -- wrapper boxes/unboxes a plain `Int` at the boundary — ADR 0014)
       extParams = maybe (I32 <$ fn.params) (\s -> marshalRep <$> s.params) mSig
       extResult = maybe I32 (\s -> marshalRep s.result) mSig
+      extArity = Array.length extParams
+    -- the leading `compiledArity` external params drive the direct call
     args <- traverse
       (\(Tuple i (Tuple extRep intRep)) -> B.localGet ctx.mod i (repType ctx extRep) >>= coerce ctx extRep intRep)
-      (Array.mapWithIndex Tuple (Array.zip extParams fn.params))
+      (Array.mapWithIndex Tuple (Array.zip (Array.take compiledArity extParams) fn.params))
     result <- B.call ctx.mod (funcNameStr fn.name) args (repType ctx fn.result)
-    ret <- coerce ctx fn.result extResult result
+    -- any remaining external params (point-free: extArity > compiledArity) are applied
+    -- to the returned closure via the runtime trampoline; the value stays boxed `eqref`
+    let
+      applyExtra acc idxs = case Array.uncons idxs of
+        Nothing -> pure acc
+        Just { head: i, tail } -> do
+          let extRep = fromMaybe Boxed (Array.index extParams i)
+          a <- B.localGet ctx.mod i (repType ctx extRep) >>= coerce ctx extRep Boxed
+          acc' <- B.call ctx.mod applyCloHelperName [ acc, a ] B.eqref
+          applyExtra acc' tail
+      extraIdxs = if extArity > compiledArity then Array.range compiledArity (extArity - 1) else []
+    applied <- applyExtra result extraIdxs
+    let appliedRep = if extArity > compiledArity then Boxed else fn.result
+    ret <- coerce ctx appliedRep extResult applied
     let params = B.createType (repType ctx <$> extParams)
     let wrapperName = funcNameStr fn.name <> "$export"
     _ <- B.addFunction ctx.mod wrapperName params (repType ctx extResult) [] ret

@@ -51,6 +51,7 @@ history.
 | 0021 | [Streaming, dependency-ordered whole-program optimization](0021-streaming-dependency-ordered-wpo.md) | Proposed |
 | 0022 | [Join points for `case` in argument position](0022-join-points-for-case-in-argument-position.md) | Proposed |
 | 0023 | [Polymorphic record update via runtime copy-and-set](0023-polymorphic-record-update.md) | Proposed |
+| 0024 | [Export-boundary arity reconciliation, and the transparent-types-only rule](0024-export-boundary-arity-and-transparent-types.md) | Proposed |
 
 ## Scope
 
