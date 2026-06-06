@@ -7,11 +7,18 @@
 // edge cases plus a large sweep of random bit patterns. Exits non-zero on mismatch.
 import { readFileSync } from "node:fs";
 
-// resolve relative to this file so it works whatever the cwd is
+// resolve relative to this file so it works whatever the cwd is. `showNumberImpl` now
+// lives in the curated `ulib/Data.Show` module (ADR 0012); instantiate it against the
+// runtime (which still provides the `$Str` read primitives) and call its export.
 const runtimePath = new URL("../../runtime/runtime.wasm", import.meta.url);
+const showPath = new URL("../../ulib/Data.Show/foreign.wasm", import.meta.url);
 const rt = new WebAssembly.Instance(
   new WebAssembly.Module(readFileSync(runtimePath)),
   {},
+).exports;
+const show = new WebAssembly.Instance(
+  new WebAssembly.Module(readFileSync(showPath)),
+  { rt },
 ).exports;
 
 // The reference: exactly what Prelude's `showNumberImpl` computes.
@@ -23,7 +30,7 @@ function oracle(n) {
 
 const dec = new TextDecoder();
 function wasmShow(n) {
-  const s = rt.showNumber(n);
+  const s = show.showNumberImpl(n);
   const len = rt.strLen(s);
   const bytes = new Uint8Array(len);
   for (let i = 0; i < len; i++) bytes[i] = rt.strByteAt(s, i);

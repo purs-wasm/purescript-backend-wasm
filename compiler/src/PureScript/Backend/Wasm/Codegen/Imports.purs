@@ -21,12 +21,6 @@ module PureScript.Backend.Wasm.Codegen.Imports
   , arrayMapHelperName
   , arrayApplyHelperName
   , arrayBindHelperName
-  , showIntHelperName
-  , showCharHelperName
-  , showStringHelperName
-  , showArrayHelperName
-  , showNumberHelperName
-  , intercalateHelperName
   , intModHelperName
   , intDivHelperName
   , intDegreeHelperName
@@ -74,12 +68,6 @@ importRuntime ctx = do
   imp arrayMapHelperName "arrayMap" [ B.eqref, B.eqref ] B.eqref
   imp arrayApplyHelperName "arrayApply" [ B.eqref, B.eqref ] B.eqref
   imp arrayBindHelperName "arrayBind" [ B.eqref, B.eqref ] B.eqref
-  imp showIntHelperName "showInt" [ B.i32 ] B.eqref
-  imp showCharHelperName "showChar" [ B.i32 ] B.eqref
-  imp showStringHelperName "showString" [ B.eqref ] B.eqref
-  imp showArrayHelperName "showArray" [ B.eqref, B.eqref ] B.eqref
-  imp showNumberHelperName "showNumber" [ B.f64 ] B.eqref
-  imp intercalateHelperName "intercalate" [ B.eqref, B.eqref ] B.eqref
   imp intModHelperName "intMod" [ B.i32, B.i32 ] B.i32
   imp intDivHelperName "intDiv" [ B.i32, B.i32 ] B.i32
   imp intDegreeHelperName "intDegree" [ B.i32 ] B.i32
@@ -156,27 +144,6 @@ arrayApplyHelperName = "$rt.arrayApply"
 
 arrayBindHelperName :: String
 arrayBindHelperName = "$rt.arrayBind"
-
--- | The shared `Show` rendering helpers (defined in `runtime.wat`).
-showIntHelperName :: String
-showIntHelperName = "$rt.showInt"
-
-showCharHelperName :: String
-showCharHelperName = "$rt.showChar"
-
-showStringHelperName :: String
-showStringHelperName = "$rt.showString"
-
-showArrayHelperName :: String
-showArrayHelperName = "$rt.showArray"
-
-showNumberHelperName :: String
-showNumberHelperName = "$rt.showNumber"
-
--- | `Data.Show.Generic`'s `intercalate` foreign: join an `Array String` with a
--- | `String` separator (defined in `runtime.wat`).
-intercalateHelperName :: String
-intercalateHelperName = "$rt.intercalate"
 
 -- | The shared Euclidean `Int` division/remainder/degree helpers.
 intModHelperName :: String

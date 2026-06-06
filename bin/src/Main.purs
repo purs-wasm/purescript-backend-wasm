@@ -36,6 +36,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Compiler (compileModules, mirTrace, parseModule)
 import PureScript.Backend.Wasm.Externs (foreignSigs)
 import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
+import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson, exportManifestJson)
 import PureScript.CoreFn (ModuleName, toModuleName)
 import PureScript.ExternsFile.Decoder.Class (decoder)
@@ -133,46 +134,6 @@ parseArgs = do
 -- | A module name as its on-disk directory / dotted form (`Data.Maybe`).
 printModname :: ModuleName -> String
 printModname = Str.joinWith "."
-
--- | Parse a `ulib/<Module>/foreign.wat`'s exported foreign signatures into `ForeignSig`s
--- | keyed `Module.base` (ADR 0012). The wasm export is the source of truth: each
--- | `(func (export "base") (param … T)… (result T))` signature line gives the param/result
--- | wasm types, mapped `i32 → MI32 / f64 → MF64 / everything-else (eqref) → MOpaque` — whose
--- | `marshalRep` reproduces the exact wasm types, so the compiler emits a host import the
--- | `wasm-merge` resolves. A merged ulib foreign speaks the internal ABI, so the kinds only
--- | fix the import type — no JS marshalling runs. (Requires each func's signature on one line.)
-parseUlibSigs :: String -> String -> Object ForeignImport
-parseUlibSigs mn watText =
-  Object.fromFoldable (Array.mapMaybe sigOfLine (Str.split (Pattern "\n") watText))
-  where
-  sigOfLine line
-    | Str.contains (Pattern "(func") line && Str.contains (Pattern "(export \"") line =
-        case between "(export \"" "\"" line of
-          Just base -> Just (Tuple (mn <> "." <> base) { moduleName: mn, base, params: paramsOf line, result: resultOf line })
-          Nothing -> Nothing
-    | otherwise = Nothing
-
-  between open close s = do
-    i <- Str.indexOf (Pattern open) s
-    let rest = Str.drop (i + Str.length open) s
-    j <- Str.indexOf (Pattern close) rest
-    pure (Str.take j rest)
-
-  paramsOf line = Array.mapMaybe paramKind (Array.drop 1 (Str.split (Pattern "(param") line))
-  paramKind seg = do
-    j <- Str.indexOf (Pattern ")") seg
-    kindOf <$> lastWord (Str.take j seg)
-
-  resultOf line = case between "(result " ")" line of
-    Just inside -> maybe MOpaque kindOf (lastWord inside)
-    Nothing -> MOpaque
-
-  lastWord s = Array.last (Array.filter (_ /= "") (Str.split (Pattern " ") (Str.trim s)))
-
-  kindOf t = case t of
-    "i32" -> MI32
-    "f64" -> MF64
-    _ -> MOpaque
 
 -- | `-e Data.Maybe` names the module `["Data", "Maybe"]` — the root form
 -- | `lowerModules` expects.

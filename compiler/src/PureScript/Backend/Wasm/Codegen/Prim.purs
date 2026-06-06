@@ -17,7 +17,7 @@ import Data.Array as Array
 import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
 import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtom, genAtomAs, strBytes, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), Rep(..))
@@ -112,32 +112,6 @@ genPrim ctx intr args = case intr, args of
     ea <- genAtomAs ctx Boxed a
     eb <- genAtomAs ctx Boxed b
     B.call ctx.mod arrayConcatHelperName [ ea, eb ] B.eqref
-  -- Int -> String: unbox the operand, delegate to the decimal-rendering helper
-  ShowInt, [ a ] -> do
-    ea <- intArg a
-    B.call ctx.mod showIntHelperName [ ea ] B.eqref
-  -- Char -> String: the code point goes to the char-rendering helper
-  ShowChar, [ a ] -> do
-    ea <- intArg a
-    B.call ctx.mod showCharHelperName [ ea ] B.eqref
-  -- String -> String: pass the `$Str` (eqref) to the string-rendering helper
-  ShowString, [ a ] -> do
-    ea <- genAtomAs ctx Boxed a
-    B.call ctx.mod showStringHelperName [ ea ] B.eqref
-  -- (a -> String) -> Array a -> String: the element-show closure and the array
-  ShowArray, [ f, xs ] -> do
-    ef <- genAtomAs ctx Boxed f
-    exs <- genAtomAs ctx Boxed xs
-    B.call ctx.mod showArrayHelperName [ ef, exs ] B.eqref
-  -- Number -> String: unbox the `$Num` to f64, delegate to the Dragon4 helper
-  ShowNumber, [ a ] -> do
-    ea <- numArg a
-    B.call ctx.mod showNumberHelperName [ ea ] B.eqref
-  -- String -> Array String -> String: join the rendered strings with the separator
-  Intercalate, [ sep, xs ] -> do
-    esep <- genAtomAs ctx Boxed sep
-    exs <- genAtomAs ctx Boxed xs
-    B.call ctx.mod intercalateHelperName [ esep, exs ] B.eqref
   StrEq, [ a, b ] -> do
     ea <- genAtomAs ctx Boxed a
     eb <- genAtomAs ctx Boxed b

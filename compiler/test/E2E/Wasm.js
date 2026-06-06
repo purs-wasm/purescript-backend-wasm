@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 
 export const readFixture = (path) => () => readFileSync(path, "utf8");
 
@@ -14,8 +14,37 @@ const runtime = () => {
   return rtExports;
 };
 
+// The curated library modules (ADR 0012, slice 3): each `ulib/<M>/foreign.wasm`
+// (pre-built by `build-ulib.mjs`) is instantiated once against `rt` and supplied as
+// the generated module's `<M>` import. `bin`/production merges them with wasm-merge;
+// here we wire them at instantiation, mirroring the runtime. The importObject keys an
+// app doesn't import are ignored, so this is inert for apps that use no ulib foreign.
+let ulibCache = null;
+const ulibImports = () => {
+  if (ulibCache === null) {
+    const rt = runtime();
+    ulibCache = { rt };
+    for (const m of readdirSync("ulib")) {
+      const wasmPath = `ulib/${m}/foreign.wasm`;
+      if (existsSync(wasmPath)) {
+        const inst = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(wasmPath)), { rt });
+        ulibCache[m] = inst.exports;
+      }
+    }
+  }
+  return ulibCache;
+};
+
+// Source text of every `ulib/<M>/foreign.wat`, for the harness to derive ulib foreign
+// signatures (`parseUlibSigs`) — the wasm export is the calling-convention source of
+// truth, so a migrated foreign lowers to the right host import even with empty externs.
+export const ulibWatSources = () =>
+  readdirSync("ulib")
+    .filter((m) => existsSync(`ulib/${m}/foreign.wat`))
+    .map((m) => ({ mod: m, text: readFileSync(`ulib/${m}/foreign.wat`, "utf8") }));
+
 export const instantiate = (bytes) => () =>
-  new WebAssembly.Instance(new WebAssembly.Module(bytes), { rt: runtime() });
+  new WebAssembly.Instance(new WebAssembly.Module(bytes), ulibImports());
 
 // The recursive FFI marshalling glue (ADR 0014), driven by an `encodeMarshalKind`
 // string (`i`/`f`/`b`/`s`/`o` leaves). `E` is the wasm
@@ -118,7 +147,7 @@ const marshalWrap = (E, fn, sig) => (...args) => {
 // generated module's `foreign import`s are satisfied from `userImports`, keyed by
 // the foreign's source module (e.g. { "Example.FFI": { addOne } }).
 export const instantiateWith = (bytes) => (userImports) => () =>
-  new WebAssembly.Instance(new WebAssembly.Module(bytes), { rt: runtime(), ...userImports });
+  new WebAssembly.Instance(new WebAssembly.Module(bytes), { ...ulibImports(), ...userImports });
 
 // Instantiate with String-marshalling host imports (ADR 0014, L2). `userForeigns`
 // is `{ Module: { fn: jsImpl } }` (raw JS taking/returning JS strings); `manifest`
@@ -135,7 +164,7 @@ export const instantiateMarshalled = (bytes) => (userForeigns) => (manifestJson)
   // after `inst` exists).
   let inst;
   const E = new Proxy(rt, { get: (t, p) => (p in t ? t[p] : inst.exports[p]) });
-  const imports = { rt };
+  const imports = { ...ulibImports() };
   for (const mod of Object.keys(userForeigns)) {
     imports[mod] = {};
     for (const name of Object.keys(userForeigns[mod])) {

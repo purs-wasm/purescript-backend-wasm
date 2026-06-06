@@ -62,10 +62,7 @@ primOperandReps = case _ of
   IntDegree -> [ I32 ]
   IntToNum -> [ I32 ]
   FromNumberImpl -> [ Boxed, Boxed, F64 ] -- just, nothing, n (the Number is unboxed)
-  ShowInt -> [ I32 ]
-  ShowChar -> [ I32 ]
   NumToInt -> [ F64 ]
-  ShowNumber -> [ F64 ]
   NumAdd -> [ F64, F64 ]
   NumSub -> [ F64, F64 ]
   NumMul -> [ F64, F64 ]

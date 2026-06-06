@@ -6,10 +6,11 @@
   "scripts": {
     "compile": "spago build",
     "build:runtime": "../binaryen/node_modules/binaryen/bin/wasm-as --all-features ../runtime/runtime.wat -o ../runtime/runtime.wasm",
+    "build:ulib": "cd .. && node build-ulib.mjs",
     "test:unit": "spago test --monochrome",
-    "test:e2e": "npm run build:runtime && spago test -m Test.E2E.Compiler --monochrome",
-    "test:shownumber": "npm run build:runtime && node test/showNumber.mjs",
-    "test:bin": "npm run build:runtime && node test/effectMain.mjs && node test/sourceForeign.mjs && node test/refNative.mjs && node test/effectPrim.mjs && node test/effectRefMain.mjs",
+    "test:e2e": "npm run build:runtime && npm run build:ulib && spago test -m Test.E2E.Compiler --monochrome",
+    "test:shownumber": "npm run build:runtime && npm run build:ulib && node test/showNumber.mjs",
+    "test:bin": "npm run build:runtime && npm run build:ulib && node test/effectMain.mjs && node test/sourceForeign.mjs && node test/refNative.mjs && node test/effectPrim.mjs && node test/effectRefMain.mjs",
     "test": "npm run test:unit && npm run test:e2e && npm run test:shownumber && npm run test:bin",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test"

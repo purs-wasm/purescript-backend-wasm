@@ -16,7 +16,6 @@ module PureScript.Backend.Wasm.Intrinsics
 import Prelude
 
 import Control.Alt ((<|>))
-import Data.Functor (($>))
 import Data.Generic.Rep (class Generic)
 import Data.Int as Int
 import Data.Maybe (Maybe(..))
@@ -74,12 +73,6 @@ data Intrinsic
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
   | ArrayConcat -- Array a -> Array a -> Array a (`Data.Semigroup` `<>`: allocate + copy both)
-  | ShowInt -- Int -> String (`Data.Show`'s `showIntImpl`: decimal digits, runtime helper)
-  | ShowChar -- Char -> String (`Data.Show`'s `showCharImpl`: quote + escape, runtime helper)
-  | ShowString -- String -> String (`Data.Show`'s `showStringImpl`: quote + escape, runtime helper)
-  | ShowArray -- (a -> String) -> Array a -> String (`showArrayImpl`: join element shows, runtime helper)
-  | ShowNumber -- Number -> String (`showNumberImpl`: shortest round-trip via Dragon4, runtime helper)
-  | Intercalate -- String -> Array String -> String (`Data.Show.Generic`'s `intercalate`: join with separator, runtime helper)
   -- | `Data.Bounded`'s `top` / `bottom` for `Int` / `Char` / `Number`: nullary
   -- | constant values (the foreign is a bare value, not a function — arity 0).
   | TopInt -- maxBound Int (`i32.const 2147483647`)
@@ -194,14 +187,8 @@ foreignIntrinsic = case _ of
   -- `Data.Semigroup` `<>`: string concat reuses the string runtime helper
   "concatString" -> Just (Tuple StrConcat 2)
   "concatArray" -> Just (Tuple ArrayConcat 2)
-  -- `Data.Show` for `Int` / `Char` / `String` (`showNumberImpl`/`showArrayImpl` not wired yet)
-  "showIntImpl" -> Just (Tuple ShowInt 1)
-  "showCharImpl" -> Just (Tuple ShowChar 1)
-  "showStringImpl" -> Just (Tuple ShowString 1)
-  "showArrayImpl" -> Just (Tuple ShowArray 2)
-  "showNumberImpl" -> Just (Tuple ShowNumber 1)
-  -- `Data.Show.Generic`'s `intercalate` foreign (joins shown constructor args)
-  "intercalate" -> Just (Tuple Intercalate 2)
+  -- `Data.Show` (`show*Impl`) and `Data.Show.Generic`'s `intercalate` are curated ulib
+  -- foreigns (ADR 0012), resolved via `foreignSigs` to host imports — not intrinsics.
   -- `Data.Unit.unit` — a nullary constant foreign. (`unsafeCoerce` is not here: it
   -- is erased during lowering rather than emitted as an op.)
   "unit" -> Just (Tuple UnitValue 0)

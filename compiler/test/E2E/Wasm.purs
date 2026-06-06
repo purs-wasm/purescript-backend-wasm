@@ -36,8 +36,9 @@ import Data.Traversable (traverse)
 import Data.Map as Map
 import Data.Set as Set
 import PureScript.Backend.Wasm.Externs (effectfulForeignAritiesFromExterns, effectfulForeignNamesFromExterns, foreignSigs)
-import PureScript.Backend.Wasm.Lower.IR (Program, foreignManifestJson, exportManifestJson)
+import PureScript.Backend.Wasm.Lower.IR (ForeignImport, Program, foreignManifestJson, exportManifestJson)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
+import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
 import PureScript.Backend.Wasm.Lower (lowerModule, lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd (optimizeModule, optimizeProgram)
 import PureScript.CoreFn (Module)
@@ -75,13 +76,23 @@ instantiateFixture path = do
     Left err -> throwException (error ("lowering failed: " <> show err))
     Right program -> instantiateProgram program
 
+-- | ulib foreign signatures, parsed from every `ulib/<M>/foreign.wat` (ADR 0012). The
+-- | wasm export is the calling-convention source of truth, so even the corefn-only
+-- | (empty-externs) link path lowers a migrated foreign to the correct host import,
+-- | which `instantiate*` then satisfies from the linked ulib module.
+ulibSigs :: Effect (Object.Object ForeignImport)
+ulibSigs = do
+  srcs <- ulibWatSources
+  pure (Array.foldl (\acc s -> Object.union acc (parseUlibSigs s.mod s.text)) Object.empty srcs)
+
 -- | Decode several fixtures, **link** them into one wasm (`roots` are the modules
 -- | whose functions are exported), and instantiate it (ADR 0009).
 instantiateLinked :: Array (Array String) -> Array String -> Effect Instance
 instantiateLinked roots paths = do
   modules <- traverse decodeFixture paths
+  usigs <- ulibSigs
   -- mirror the production pipeline: run the whole-program middle-end before lowering
-  case lowerModules true Object.empty Object.empty Set.empty roots (optimizeProgram true effectfulForeignNames Map.empty modules) of
+  case lowerModules true Object.empty usigs Set.empty roots (optimizeProgram true effectfulForeignNames Map.empty modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> instantiateProgram program
 
@@ -91,7 +102,8 @@ instantiateLinked roots paths = do
 instantiateForeign :: Array ExternsFile -> Foreign -> Array (Array String) -> Array String -> Effect Instance
 instantiateForeign externs imports roots paths = do
   modules <- traverse decodeFixture paths
-  case lowerModules true Object.empty (foreignSigs externs) Set.empty roots (optimizeProgram true (Set.union effectfulForeignNames (effectfulForeignNamesFromExterns externs)) (effectfulForeignAritiesFromExterns externs) modules) of
+  usigs <- ulibSigs
+  case lowerModules true Object.empty (Object.union (foreignSigs externs) usigs) Set.empty roots (optimizeProgram true (Set.union effectfulForeignNames (effectfulForeignNamesFromExterns externs)) (effectfulForeignAritiesFromExterns externs) modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> do
       mod <- buildModule program
@@ -110,7 +122,8 @@ instantiateForeign externs imports roots paths = do
 instantiateForeignStr :: Array ExternsFile -> Foreign -> Array (Array String) -> Array String -> Effect Instance
 instantiateForeignStr externs userForeigns roots paths = do
   modules <- traverse decodeFixture paths
-  let sigs = foreignSigs externs
+  usigs <- ulibSigs
+  let sigs = Object.union (foreignSigs externs) usigs
   case lowerModules true Object.empty sigs Set.empty roots (optimizeProgram true (Set.union effectfulForeignNames (effectfulForeignNamesFromExterns externs)) (effectfulForeignAritiesFromExterns externs) modules) of
     Left err -> throwException (error ("linking failed: " <> show err))
     Right program -> do
@@ -138,6 +151,10 @@ exportManifestOf externs roots =
 foreign import data Instance :: Type
 
 foreign import readFixture :: String -> Effect String
+
+-- | `{ mod, text }` for every `ulib/<M>/foreign.wat` — the harness parses these into
+-- | ulib foreign signatures (see `ulibSigs`).
+foreign import ulibWatSources :: Effect (Array { mod :: String, text :: String })
 
 -- | Synchronously compile and instantiate a wasm binary (no imports).
 foreign import instantiate :: Uint8Array -> Effect Instance
