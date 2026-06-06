@@ -20,7 +20,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
-import Data.String (joinWith)
+import Data.String (joinWith, contains, Pattern(..))
 import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (key, references)
@@ -157,10 +157,21 @@ declKeys m = m.decls >>= case _ of
   M.NonRec _ i _ -> [ key m.name i ]
   M.Rec rs -> map (\r -> key m.name r.ident) rs
 
+-- | The cross-module references that order a module after its dependencies. A
+-- | specialization (`f$specN`) is excluded: `Specialize` places it in the *defining*
+-- | module, but its body embeds the *consuming* call site's lambda, so it references the
+-- | consuming module. Counting that as the defining module's dependency creates a spurious
+-- | defining↔consuming cycle that breaks the acyclic `topoOrder` — leaving the defining
+-- | module un-finalized when its consumer is optimized, so the consumer cannot inline it
+-- | (the ADR-0018/0019 effect primitives regressed exactly this way: `Effect.Ref.modify$spec0`
+-- | references `Examples.EffPrim.Main.add`). A spec imposes no ordering on its defining
+-- | module; its consuming-module references are resolved when the consumer inlines it.
 declRefs :: M.Module -> Array String
 declRefs m = m.decls >>= case _ of
-  M.NonRec _ _ e -> references e
-  M.Rec rs -> rs >>= (references <<< _.expr)
+  M.NonRec _ i e -> if isSpec i then [] else references e
+  M.Rec rs -> rs >>= \r -> if isSpec r.ident then [] else references r.expr
+  where
+  isSpec i = contains (Pattern "$spec") i
 
 -- | Optimize a single self-contained module (its own bindings only). A convenience
 -- | for callers with one module; cross-module dictionary elimination needs
