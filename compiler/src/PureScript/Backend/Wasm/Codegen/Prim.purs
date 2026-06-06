@@ -17,7 +17,7 @@ import Data.Array as Array
 import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayIndexSafeHelperName, arrayMapHelperName, arrayOrdHelperName, arrayReverseHelperName, arraySliceHelperName, arrayUnconsHelperName, foldlArrayHelperName, foldrArrayHelperName, charSingletonHelperName, toCharArrayHelperName, fromCharArrayHelperName, intFromStringHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayApplyHelperName, arrayBindHelperName, arrayConcatHelperName, arrayEqHelperName, arrayMapHelperName, arrayOrdHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, intercalateHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, showArrayHelperName, showCharHelperName, showIntHelperName, showNumberHelperName, showStringHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
 import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtom, genAtomAs, strBytes, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), Rep(..))
@@ -112,52 +112,6 @@ genPrim ctx intr args = case intr, args of
     ea <- genAtomAs ctx Boxed a
     eb <- genAtomAs ctx Boxed b
     B.call ctx.mod arrayConcatHelperName [ ea, eb ] B.eqref
-  -- library array / foldable FFIs (ulib batch 0): delegate to the runtime helpers
-  ArrayReverse, [ a ] -> do
-    ea <- genAtomAs ctx Boxed a
-    B.call ctx.mod arrayReverseHelperName [ ea ] B.eqref
-  ArraySlice, [ s, e, xs ] -> do
-    es <- intArg s
-    ee <- intArg e
-    exs <- genAtomAs ctx Boxed xs
-    B.call ctx.mod arraySliceHelperName [ es, ee, exs ] B.eqref
-  ArrayIndexSafe, [ just, nothing, xs, i ] -> do
-    ej <- genAtomAs ctx Boxed just
-    en <- genAtomAs ctx Boxed nothing
-    exs <- genAtomAs ctx Boxed xs
-    ei <- intArg i
-    B.call ctx.mod arrayIndexSafeHelperName [ ej, en, exs, ei ] B.eqref
-  ArrayUncons, [ empty, next, xs ] -> do
-    ee <- genAtomAs ctx Boxed empty
-    en <- genAtomAs ctx Boxed next
-    exs <- genAtomAs ctx Boxed xs
-    B.call ctx.mod arrayUnconsHelperName [ ee, en, exs ] B.eqref
-  FoldlArray, [ f, z, xs ] -> do
-    ef <- genAtomAs ctx Boxed f
-    ez <- genAtomAs ctx Boxed z
-    exs <- genAtomAs ctx Boxed xs
-    B.call ctx.mod foldlArrayHelperName [ ef, ez, exs ] B.eqref
-  FoldrArray, [ f, z, xs ] -> do
-    ef <- genAtomAs ctx Boxed f
-    ez <- genAtomAs ctx Boxed z
-    exs <- genAtomAs ctx Boxed xs
-    B.call ctx.mod foldrArrayHelperName [ ef, ez, exs ] B.eqref
-  -- library string / int FFIs (ulib batch 0): UTF-8 codec + radix int parse
-  CharSingleton, [ c ] -> do
-    ec <- intArg c
-    B.call ctx.mod charSingletonHelperName [ ec ] B.eqref
-  ToCharArray, [ s ] -> do
-    es <- genAtomAs ctx Boxed s
-    B.call ctx.mod toCharArrayHelperName [ es ] B.eqref
-  FromCharArray, [ a ] -> do
-    ea <- genAtomAs ctx Boxed a
-    B.call ctx.mod fromCharArrayHelperName [ ea ] B.eqref
-  FromStringAs, [ just, nothing, radix, str ] -> do
-    ej <- genAtomAs ctx Boxed just
-    en <- genAtomAs ctx Boxed nothing
-    er <- genAtomAs ctx Boxed radix
-    estr <- genAtomAs ctx Boxed str
-    B.call ctx.mod intFromStringHelperName [ ej, en, er, estr ] B.eqref
   -- Int -> String: unbox the operand, delegate to the decimal-rendering helper
   ShowInt, [ a ] -> do
     ea <- intArg a

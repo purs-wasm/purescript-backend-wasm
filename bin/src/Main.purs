@@ -134,6 +134,46 @@ parseArgs = do
 printModname :: ModuleName -> String
 printModname = Str.joinWith "."
 
+-- | Parse a `ulib/<Module>/foreign.wat`'s exported foreign signatures into `ForeignSig`s
+-- | keyed `Module.base` (ADR 0012). The wasm export is the source of truth: each
+-- | `(func (export "base") (param … T)… (result T))` signature line gives the param/result
+-- | wasm types, mapped `i32 → MI32 / f64 → MF64 / everything-else (eqref) → MOpaque` — whose
+-- | `marshalRep` reproduces the exact wasm types, so the compiler emits a host import the
+-- | `wasm-merge` resolves. A merged ulib foreign speaks the internal ABI, so the kinds only
+-- | fix the import type — no JS marshalling runs. (Requires each func's signature on one line.)
+parseUlibSigs :: String -> String -> Object ForeignImport
+parseUlibSigs mn watText =
+  Object.fromFoldable (Array.mapMaybe sigOfLine (Str.split (Pattern "\n") watText))
+  where
+  sigOfLine line
+    | Str.contains (Pattern "(func") line && Str.contains (Pattern "(export \"") line =
+        case between "(export \"" "\"" line of
+          Just base -> Just (Tuple (mn <> "." <> base) { moduleName: mn, base, params: paramsOf line, result: resultOf line })
+          Nothing -> Nothing
+    | otherwise = Nothing
+
+  between open close s = do
+    i <- Str.indexOf (Pattern open) s
+    let rest = Str.drop (i + Str.length open) s
+    j <- Str.indexOf (Pattern close) rest
+    pure (Str.take j rest)
+
+  paramsOf line = Array.mapMaybe paramKind (Array.drop 1 (Str.split (Pattern "(param") line))
+  paramKind seg = do
+    j <- Str.indexOf (Pattern ")") seg
+    kindOf <$> lastWord (Str.take j seg)
+
+  resultOf line = case between "(result " ")" line of
+    Just inside -> maybe MOpaque kindOf (lastWord inside)
+    Nothing -> MOpaque
+
+  lastWord s = Array.last (Array.filter (_ /= "") (Str.split (Pattern " ") (Str.trim s)))
+
+  kindOf t = case t of
+    "i32" -> MI32
+    "f64" -> MF64
+    _ -> MOpaque
+
 -- | `-e Data.Maybe` names the module `["Data", "Maybe"]` — the root form
 -- | `lowerModules` expects.
 entryRoot :: String -> ModuleName
@@ -219,7 +259,23 @@ buildCmd args = do
   -- desugared by `purs`, so they are authoritative for *exported* foreigns; source only
   -- fills the private foreigns externs omit (ADR 0016). Both keyed by `Module.ident`.
   let srcSigs = Array.foldl Object.union Object.empty srcSigsByMod
-  let allSigs = Object.union externsSigs srcSigs
+  -- ulib (ADR 0012): for a module with no project-local provider, read the curated
+  -- `ulib/<M>/foreign.wat` export signatures (the wasm export is the source of truth) so the
+  -- compiler emits correctly-typed host imports the merge resolves — this covers the polymorphic
+  -- `*Impl` foreigns whose arity externs cannot reconstruct. The ulib sig overrides
+  -- externs/source (the merged ulib provider is authoritative for those foreigns).
+  ulibSigsByMod <- for modules \m -> do
+    let mn = printModname m.name
+    projWasm <- isNothing <$> FS.access (Path.concat [ args.input, mn, "foreign.wasm" ])
+    projWat <- isNothing <$> FS.access (Path.concat [ args.input, mn, "foreign.wat" ])
+    if projWasm || projWat then pure Object.empty
+    else do
+      let ulibWat = Path.concat [ ulibDir, mn, "foreign.wat" ]
+      has <- isNothing <$> FS.access ulibWat
+      if has then either (const Object.empty) (parseUlibSigs mn) <$> try (FS.readTextFile UTF8 ulibWat)
+      else pure Object.empty
+  let ulibSigs = Array.foldl Object.union Object.empty ulibSigsByMod
+  let allSigs = Object.union ulibSigs (Object.union externsSigs srcSigs)
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
   -- `--trace-mir <Module>`: dump that module's MIR after every optimizer sub-stage to
   -- ./mir-trace.txt (debugging the optimizer; cf. purs-backend-es --trace-rewrites).
@@ -302,10 +358,24 @@ buildCmd args = do
           else pure { name: m, wasm: Nothing, assembled: false }
     where
     exists p = isNothing <$> FS.access p
+    -- Assemble a foreign `.wat`. A full `(module …)` is assembled as-is; a *fragment*
+    -- (no `(module …)`) is wrapped as `(module <ulib/_header.wat> <fragment>)` first, so it
+    -- shares the runtime value types via the one authoritative header (ADR 0010 / 0012).
     assemble watSrc = do
+      content <- FS.readTextFile UTF8 watSrc
       let out = Path.concat [ bundleDir, m <> ".foreign.wasm" ]
-      execFile wasmAsBin [ watSrc, "-o", out, "--all-features" ]
-      pure { name: m, wasm: Just out, assembled: true }
+      -- a full module has `(module` at the start of some line (not merely in a comment)
+      let isFullModule = Array.any (\l -> Str.take 7 (Str.trim l) == "(module") (Str.split (Pattern "\n") content)
+      if isFullModule then do
+        execFile wasmAsBin [ watSrc, "-o", out, "--all-features" ]
+        pure { name: m, wasm: Just out, assembled: true }
+      else do
+        header <- FS.readTextFile UTF8 (Path.concat [ ulibDir, "_header.wat" ])
+        let combined = Path.concat [ bundleDir, m <> ".combined.wat" ]
+        FS.writeTextFile UTF8 combined ("(module\n" <> header <> "\n" <> content <> "\n)\n")
+        execFile wasmAsBin [ combined, "-o", out, "--all-features" ]
+        FS.unlink combined
+        pure { name: m, wasm: Just out, assembled: true }
 
 -- | Emit the JS loader for a program that has host imports (ADR 0014): copy each
 -- | used module's `foreign.js` into `<bundle>/foreign/<Module>.js`, then write a

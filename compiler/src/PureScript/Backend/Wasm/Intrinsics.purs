@@ -74,16 +74,6 @@ data Intrinsic
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
   | ArrayConcat -- Array a -> Array a -> Array a (`Data.Semigroup` `<>`: allocate + copy both)
-  | ArrayReverse -- Array a -> Array a (`Data.Array.reverse`, runtime helper)
-  | ArraySlice -- Int -> Int -> Array a -> Array a (`Data.Array.sliceImpl`, runtime helper)
-  | ArrayIndexSafe -- (a -> Maybe a) -> Maybe a -> Array a -> Int -> Maybe a (`Data.Array.indexImpl`)
-  | ArrayUncons -- (Unit -> b) -> (a -> Array a -> b) -> Array a -> b (`Data.Array.unconsImpl`)
-  | FoldlArray -- (b -> a -> b) -> b -> Array a -> b (`Data.Foldable.foldlArray`)
-  | FoldrArray -- (a -> b -> b) -> b -> Array a -> b (`Data.Foldable.foldrArray`)
-  | CharSingleton -- Char -> String (`Data.String.CodeUnits.singleton`, UTF-8 encode)
-  | ToCharArray -- String -> Array Char (`Data.String.CodeUnits.toCharArray`, UTF-8 decode)
-  | FromCharArray -- Array Char -> String (`Data.String.CodeUnits.fromCharArray`, UTF-8 encode)
-  | FromStringAs -- (a -> Maybe a) -> Maybe a -> Int -> String -> Maybe Int (`Data.Int.fromStringAsImpl`)
   | ShowInt -- Int -> String (`Data.Show`'s `showIntImpl`: decimal digits, runtime helper)
   | ShowChar -- Char -> String (`Data.Show`'s `showCharImpl`: quote + escape, runtime helper)
   | ShowString -- String -> String (`Data.Show`'s `showStringImpl`: quote + escape, runtime helper)
@@ -286,16 +276,9 @@ qualifiedIntrinsic = case _ of
   "Data.Array.unsafeIndexImpl" -> Just (Tuple ArrayIndex 2)
   -- library array/foldable FFIs implemented natively in the runtime (ulib batch 0)
   "Data.Array.length" -> Just (Tuple ArrayLength 1)
-  -- Data.Array.reverse now lives in `ulib/Data.Array/foreign.wat` (ADR 0012 slice 1)
-  "Data.Array.sliceImpl" -> Just (Tuple ArraySlice 3)
-  "Data.Array.indexImpl" -> Just (Tuple ArrayIndexSafe 4)
-  "Data.Array.unconsImpl" -> Just (Tuple ArrayUncons 3)
-  "Data.Foldable.foldlArray" -> Just (Tuple FoldlArray 3)
-  "Data.Foldable.foldrArray" -> Just (Tuple FoldrArray 3)
-  "Data.String.CodeUnits.singleton" -> Just (Tuple CharSingleton 1)
-  "Data.String.CodeUnits.toCharArray" -> Just (Tuple ToCharArray 1)
-  "Data.String.CodeUnits.fromCharArray" -> Just (Tuple FromCharArray 1)
-  "Data.Int.fromStringAsImpl" -> Just (Tuple FromStringAs 4)
+  -- `reverse`/`sliceImpl`/`indexImpl`/`unconsImpl`, `Data.Foldable.fold{l,r}Array`,
+  -- `Data.String.CodeUnits.{singleton,toCharArray,fromCharArray}`, `Data.Int.fromStringAsImpl`
+  -- now live in `ulib/<Module>/foreign.wat` (ADR 0012), resolved as merged foreigns.
   name -> uncurriedMk name <|> uncurriedRun name
   where
   -- `mkEffectFnN` / `mkFnN`: identity (arity 1)
