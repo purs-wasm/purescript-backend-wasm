@@ -1,9 +1,14 @@
 package:
   name: examples-metatheory
   dependencies:
+    - arrays
     - console
     - effect
     - fmt
+    - functions
+    - integers
+    - maybe
     - ordered-collections
     - prelude
+    - strings
     - transformers

@@ -21,6 +21,16 @@ module PureScript.Backend.Wasm.Codegen.Imports
   , arrayMapHelperName
   , arrayApplyHelperName
   , arrayBindHelperName
+  , arrayReverseHelperName
+  , arraySliceHelperName
+  , arrayIndexSafeHelperName
+  , arrayUnconsHelperName
+  , foldlArrayHelperName
+  , foldrArrayHelperName
+  , charSingletonHelperName
+  , toCharArrayHelperName
+  , fromCharArrayHelperName
+  , intFromStringHelperName
   , showIntHelperName
   , showCharHelperName
   , showStringHelperName
@@ -69,6 +79,16 @@ importRuntime ctx = do
   imp strCmpHelperName "strCmp" [ B.eqref, B.eqref ] B.i32
   imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
   imp arrayConcatHelperName "arrayConcat" [ B.eqref, B.eqref ] B.eqref
+  imp arrayReverseHelperName "arrayReverse" [ B.eqref ] B.eqref
+  imp arraySliceHelperName "arraySlice" [ B.i32, B.i32, B.eqref ] B.eqref
+  imp arrayIndexSafeHelperName "arrayIndexSafe" [ B.eqref, B.eqref, B.eqref, B.i32 ] B.eqref
+  imp arrayUnconsHelperName "arrayUncons" [ B.eqref, B.eqref, B.eqref ] B.eqref
+  imp foldlArrayHelperName "foldlArray" [ B.eqref, B.eqref, B.eqref ] B.eqref
+  imp foldrArrayHelperName "foldrArray" [ B.eqref, B.eqref, B.eqref ] B.eqref
+  imp charSingletonHelperName "charSingleton" [ B.i32 ] B.eqref
+  imp toCharArrayHelperName "toCharArray" [ B.eqref ] B.eqref
+  imp fromCharArrayHelperName "fromCharArray" [ B.eqref ] B.eqref
+  imp intFromStringHelperName "intFromString" [ B.eqref, B.eqref, B.eqref, B.eqref ] B.eqref
   imp arrayEqHelperName "arrayEq" [ B.eqref, B.eqref, B.eqref ] B.i32
   imp arrayOrdHelperName "arrayOrd" [ B.eqref, B.eqref, B.eqref ] B.i32
   imp arrayMapHelperName "arrayMap" [ B.eqref, B.eqref ] B.eqref
@@ -156,6 +176,37 @@ arrayApplyHelperName = "$rt.arrayApply"
 
 arrayBindHelperName :: String
 arrayBindHelperName = "$rt.arrayBind"
+
+-- | Library array / foldable FFIs implemented natively in `runtime.wat` (ulib batch 0).
+arrayReverseHelperName :: String
+arrayReverseHelperName = "$rt.arrayReverse"
+
+arraySliceHelperName :: String
+arraySliceHelperName = "$rt.arraySlice"
+
+arrayIndexSafeHelperName :: String
+arrayIndexSafeHelperName = "$rt.arrayIndexSafe"
+
+arrayUnconsHelperName :: String
+arrayUnconsHelperName = "$rt.arrayUncons"
+
+foldlArrayHelperName :: String
+foldlArrayHelperName = "$rt.foldlArray"
+
+foldrArrayHelperName :: String
+foldrArrayHelperName = "$rt.foldrArray"
+
+charSingletonHelperName :: String
+charSingletonHelperName = "$rt.charSingleton"
+
+toCharArrayHelperName :: String
+toCharArrayHelperName = "$rt.toCharArray"
+
+fromCharArrayHelperName :: String
+fromCharArrayHelperName = "$rt.fromCharArray"
+
+intFromStringHelperName :: String
+intFromStringHelperName = "$rt.intFromString"
 
 -- | The shared `Show` rendering helpers (defined in `runtime.wat`).
 showIntHelperName :: String

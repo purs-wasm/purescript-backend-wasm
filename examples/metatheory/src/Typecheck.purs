@@ -5,32 +5,31 @@ import Prelude
 import Control.Monad.Error.Class (class MonadThrow, throwError)
 import Control.Monad.Except (Except, runExcept)
 import Control.Monad.Reader (class MonadAsk, class MonadReader, ReaderT, ask, local, runReaderT)
-import Control.Monad.State (class MonadState, State, StateT, evalStateT, get, modify_, put)
+import Control.Monad.State (StateT, evalStateT, get, modify_)
 import Control.Monad.State.Class (class MonadState)
 import Data.Array (foldl, uncons)
 import Data.Array as Array
 import Data.Either (Either(..))
-import Data.Function (on)
 import Data.Generic.Rep (class Generic)
-import Data.Map as M
 import Data.Maybe (Maybe(..), isJust)
 import Data.Show.Generic (genericShow)
-import Data.Traversable (for)
 import Data.Tuple (uncurry)
 import Data.Tuple.Nested (type (/\), (/\))
 import Examples.Metatheory.Primitive (Primitive(..))
 import Examples.Metatheory.Syntax (Constant(..), Expr(..), Type_(..), Var(..))
 import Fmt as Fmt
 
+-- AST whose every node is annotated with its type
 data TypedExpr
   = TxprLit Type_ Constant
   | TxprVar Type_ Var
   | TxprPrim Type_ Primitive (Array TypedExpr)
   | TxprAbs Type_ Var Type_ TypedExpr
   | TxprApp Type_ TypedExpr TypedExpr
-  | TxprTyApp Type_ TypedExpr Type_
   | TxprIf Type_ TypedExpr TypedExpr TypedExpr
   | TxprLet Type_ Var Type_ TypedExpr TypedExpr
+  | TxprTyAbs Type_ Var TypedExpr
+  | TxprTyApp Type_ TypedExpr Type_
 
 -- | TxprLetrec Type_ Var Type_ TypedExpr TypedExpr
 
@@ -48,22 +47,33 @@ data TypeError
   | EUnboundTypeVariable Var
   | EUnexpectedForall
   | EPrimArityMismatch
+  | EInvalidTypeApp Type_
   | EOtherError String
 
 derive instance Generic TypeError _
 instance Show TypeError where
   show te = genericShow te
 
-newtype TypeEnv = TypeEnv (M.Map Var Type_)
-
-emptyEnv :: TypeEnv
-emptyEnv = TypeEnv M.empty
+data TypeEnv
+  = TENil
+  | TEVar Var Type_ TypeEnv
+  | TETyVar Var TypeEnv
 
 lookupEnv :: Var -> TypeEnv -> Maybe Type_
-lookupEnv v (TypeEnv env) = M.lookup v env
+lookupEnv v = go
+  where
+  go = case _ of
+    TENil -> Nothing
+    TETyVar _ rest -> go rest
+    TEVar x t rest
+      | x == v -> Just t
+      | otherwise -> go rest
+
+emptyEnv :: TypeEnv
+emptyEnv = TENil
 
 extend :: Var -> Type_ -> TypeEnv -> TypeEnv
-extend v t (TypeEnv env) = TypeEnv (M.insert v t env)
+extend = TEVar
 
 type TypingState =
   { nextMeta :: Int
@@ -107,14 +117,24 @@ typeOf = case _ of
   TxprPrim t _ _ -> t
   TxprAbs t _ _ _ -> t
   TxprApp t _ _ -> t
-  TxprTyApp t _ _ -> t
   TxprIf t _ _ _ -> t
   TxprLet t _ _ _ _ -> t
+  TxprTyAbs t _ _ -> t
+  TxprTyApp t _ _ -> t
 
 -- TxprLetrec t _ _ _ _ -> t
 
-typEq :: TypedExpr -> TypedExpr -> Boolean
-typEq = (==) `on` typeOf
+typeSubst :: Var -> Type_ -> Type_ -> Either TypeError Type_
+typeSubst tv typ = case _ of
+  TyInt -> pure TyInt
+  TyBool -> pure TyBool
+  TyVar tv'
+    | tv' == tv -> pure typ
+    | otherwise -> pure $ TyVar tv'
+  TyArr t1 t2 -> TyArr <$> typeSubst tv typ t1 <*> typeSubst tv typ t2
+  TyPi tv' t1
+    | tv' /= tv -> TyPi tv' <$> typeSubst tv typ t1
+    | otherwise -> pure $ TyPi tv' t1
 
 typing :: Expr -> TypingM TypedExpr
 typing = case _ of
@@ -169,11 +189,33 @@ typing = case _ of
       case zipMaybe tArgs args of
         Nothing -> failwith EPrimArityMismatch
         Just ts -> do
-          typedArgs <- for ts (uncurry match)
+          typedArgs <- traverseArr (uncurry match) ts
           pure (TxprPrim tPrim prim typedArgs)
         _ -> failwith (EOtherError "Not implemented")
 
-  _ -> failwith (EOtherError "Not implemented")
+  -- Type abstraction Λα. e  (System F's `λα:*. e`): bind the type variable α (kind *)
+  -- in the context, type the body, and quantify the result type over α.
+  --
+  --   Γ, α ⊢ e : T
+  --   ----------------------
+  --   Γ ⊢ Λα. e : Πα. T
+  ExprTyAbs v e -> do
+    te <- withExtendTy v (typing e)
+    pure (TxprTyAbs (TyPi v (typeOf te)) v te)
+
+  -- Type application e [A]: e must be polymorphic (a Πα. B); the result is B with α
+  -- substituted by A.
+  --
+  --   Γ ⊢ e : Πα. B
+  --   ----------------------
+  --   Γ ⊢ e [A] : B[A/α]
+  ExprTyApp e tArg -> do
+    te <- typing e
+    case typeOf te of
+      TyPi v tBody -> do
+        tRes <- liftEither (typeSubst v tArg tBody)
+        pure (TxprTyApp tRes te tArg)
+      _ -> failwith (EInvalidTypeApp (typeOf te))
 
   where
   withExtends :: Array (Var /\ Type_) -> TypingM ~> TypingM
@@ -181,6 +223,25 @@ typing = case _ of
 
   extendAll :: Array (Var /\ Type_) -> TypeEnv -> TypeEnv
   extendAll bindings env = foldl (\e (v /\ t) -> extend v t e) env bindings
+
+  -- bind a *type* variable (kind *) for the scope of a type abstraction's body
+  withExtendTy :: Var -> TypingM ~> TypingM
+  withExtendTy v = local (TETyVar v)
+
+  liftEither :: forall a. Either TypeError a -> TypingM a
+  liftEither = case _ of
+    Left err -> failwith err
+    Right a -> pure a
+
+  -- a manual monadic traverse over an array (avoids the `Data.Traversable.traverseArrayImpl`
+  -- foreign, whose native runtime support is deferred)
+  traverseArr :: forall a b. (a -> TypingM b) -> Array a -> TypingM (Array b)
+  traverseArr f xs = case uncons xs of
+    Nothing -> pure []
+    Just { head, tail } -> do
+      b <- f head
+      bs <- traverseArr f tail
+      pure (Array.cons b bs)
 
   match :: Type_ -> Expr -> _ TypedExpr
   match tExpect exp = do
@@ -193,6 +254,9 @@ typing = case _ of
     where
     go acc xs ys = case uncons xs, uncons ys of
       Just { head: x, tail: xs' }, Just { head: y, tail: ys' } -> go (Array.cons (x /\ y) acc) xs' ys'
+      -- both exhausted together ⇒ equal length ⇒ success (restore original order)
+      Nothing, Nothing -> Just (Array.reverse acc)
+      -- one ran out before the other ⇒ length mismatch
       _, _ -> Nothing
 
 typeofPrim :: Primitive -> { typ :: Type_, args :: Array Type_ }

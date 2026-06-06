@@ -4,9 +4,8 @@ import Prelude
 
 import Data.Generic.Rep (class Generic)
 import Data.Show.Generic (genericShow)
-import Fmt as Fmt
-
 import Examples.Metatheory.Primitive (Primitive)
+import Fmt as Fmt
 
 newtype Var = Var String
 
@@ -20,7 +19,8 @@ data Type_
   | TyBool
   | TyVar Var
   | TyArr Type_ Type_ -- Function type
-  | TyAbs Var Type_ -- Forall-quantified type is a type abstraction
+  -- second orderd machinery
+  | TyPi Var Type_ -- Π-type is a type abstraction, which in tunrns 
 
 derive instance Generic Type_ _
 derive instance Eq Type_
@@ -42,9 +42,10 @@ data Expr
   | ExprPrim Primitive (Array Expr)
   | ExprAbs Var Type_ Expr
   | ExprApp Expr Expr
-  | ExprTyApp Expr Type_
   | ExprIf Expr Expr Expr
   | ExprLet Var Expr Expr
+  | ExprTyAbs Var Expr -- 2nd-order abstraction (a.k.a. polymorphinc function)
+  | ExprTyApp Expr Type_
 
 -- | ExprLetrec Var Expr Expr
 
