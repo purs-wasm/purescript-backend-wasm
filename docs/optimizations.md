@@ -9,7 +9,7 @@ rationale lives in the [ADRs](./design-decisions); the mechanism lives in
 `compiler/src/PureScript/Backend/Wasm/MiddleEnd/`.
 
 - [Where optimization happens](#where-optimization-happens)
-- [The simplifier: a fixpoint of local reductions](#the-simplifier-a-fixpoint-of-local-reductions)
+- [The reduction kernel: local reductions](#the-reduction-kernel-local-reductions)
   - [Capture-avoiding substitution](#capture-avoiding-substitution)
   - [Inlining](#inlining)
   - [Beta reduction and currying normalization](#beta-reduction-and-currying-normalization)
@@ -47,36 +47,46 @@ CoreFn ── Transl ──▶ MIR ── optimizeProgram ──▶ MIR ── l
   **uncurrying** (an `Abs`/`App` carries a parameter/argument *list*, so arity is
   explicit). Dictionaries and records stay ordinary values; the `Meta` a later pass
   needs (`IsTypeClassConstructor`, `IsNewtype`) is kept on the binding.
-- `MiddleEnd.optimizeProgram` is **whole-program** (a dictionary or a function used in
-  one module is defined in another, so the passes run over all linked modules at once)
-  and runs to a **fixed point**:
+- `MiddleEnd.optimizeProgram` builds its optimization **context** (the inline set,
+  transparent constructors, purity) **whole-program** — a dictionary or function used in
+  one module is defined in another — but then optimizes modules **one at a time, in
+  dependency order**, each against the already-finalized form of its dependencies, rather
+  than re-running the whole program to a fixed point (ADR 0021):
 
   ```
-  repeat (up to a few rounds, until the program stops changing):
-    specialize higher-order calls
-    rebuild the inline context from the *current* program
-    simplify every binding to a fixed point
+  lambda-lift each module                          (per module)
+  specialize higher-order calls                    (whole-program, once)
+  for each module, in dependency order:
+    build the inline context from the finalized dependencies + this module
+    simplify → impurify → simplify                 (this module, once)
   ```
 
-  Rebuilding the context each round matters: eliminating a dictionary turns a method
-  binding into a fresh inlinable alias (`add = Data.Semiring.add(semiringInt)` becomes
-  `add = intAdd`), which the next round inlines.
+  Dependency order is what removes the need for repeated rounds: eliminating a dictionary
+  turns a method binding into a fresh inlinable alias (`add = Data.Semiring.add(semiringInt)`
+  becomes `add = intAdd`), and because a dependency is finalized before its dependents, a
+  dependent inlines the already-reduced alias directly. (This replaced an older
+  whole-program fixed-point loop that re-ran inlining to convergence and blew up on
+  transformer-heavy code.)
 
-Two nested loops are worth distinguishing. The **outer** loop (whole-program, a
-handful of rounds) recomputes *what* is inlinable. The **inner** loop (per
-expression, `Simplify.simplifyExpr`) drives one expression to a normal form under the
-local reductions below. Inlining lives in the inner loop, which is why the inline set
-must be acyclic (see [inlining](#inlining)).
+Per-module optimization drives each binding to a normal form under the local reductions
+below; inlining happens there, which is why the inline set must be acyclic (see
+[inlining](#inlining)). The reducer has two implementations behind a toggle
+(`DictElim.useNbE`, default the first): a normalisation-by-evaluation pass
+(`Optimize/Semantics.purs`, ADR 0020) and the original rule-based fixpoint
+(`Optimize/Simplify.purs`). They perform the **same** reductions — described next.
 
 `node dump-mir.mjs <Fixture>` (after `spago build -p compiler`) prints a fixture's MIR
 through the pretty-printer — the way to watch a pass rewrite the tree.
 
-## The simplifier: a fixpoint of local reductions
+## The reduction kernel: local reductions
 
-`Optimize/Simplify.purs` is the reduction kernel. It rebuilds an expression
-bottom-up and applies one reduction per node, repeating until nothing changes. Every
-rule is local and semantics-preserving; the *policies* in the next section decide
-which bindings and constructors the rules may fire on.
+The reduction kernel performs the local, semantics-preserving rewrites below; the
+*policies* in the next section decide which bindings and constructors they may fire on.
+As noted above it has two implementations: the default NbE normaliser
+(`Optimize/Semantics.purs`) evaluates an expression into a semantic domain and quotes it
+back, reducing where operands are known; `Optimize/Simplify.purs` rebuilds the expression
+bottom-up and applies one reduction per node until nothing changes. Both reach the same
+normal form, so the rules below describe either.
 
 ### Capture-avoiding substitution
 
@@ -93,9 +103,9 @@ below would be unsound.
 ### Inlining
 
 A name in the *inline set* is replaced by its body (the policies below populate the
-set). The inline set is kept **acyclic**: because inlining repeats inside the inner
-fixpoint, a cycle (`f` inlines `g` inlines `f`) would expand without converging, so
-candidates that lie on a call cycle are excluded — a one-way chain `f → g → h` is fine.
+set). The inline set is kept **acyclic**: because the reducer unfolds inline bindings
+transitively, a cycle (`f` inlines `g` inlines `f`) would not converge, so candidates
+that lie on a call cycle are excluded — a one-way chain `f → g → h` is fine.
 
 ### Beta reduction and currying normalization
 
@@ -330,8 +340,7 @@ countTo n s = case s == n of
   _    -> countTo n (s + 1)
 ```
 
-This is measured by the `CountState` benchmark (`bench/count-state.mjs`), where the
-collapsed wasm runs in constant stack and is faster than `purs-backend-es`; the e2e
+The collapsed wasm runs in constant stack with no allocation; the e2e
 `Test.E2E.StackSafe` runs it for a million iterations as a regression guard (a missing
 optimization would overflow, which a value-only test could not detect).
 
@@ -350,11 +359,9 @@ countTo n = unsafePerformEffect (go 0)
 `pureE`/`bindE`/`unsafePerformEffect` reify to thunks; the `do` collapses; the `\$ev`
 thunk floats out of the loop's `case` and merges into the worker; and TCE closes it —
 giving the same allocation-free, constant-stack loop as `State`. The cyclic-dict overhead
-vanishes: `mapEff`/`applyEff` reduce to plain `intAdd`. Measured by `bench/count-effect.mjs`
-(the `CountState` loop in the *real* `Effect` monad): the wasm runs in constant stack and
-is ~25× faster than `purs-backend-es`, which overflows on deep loops (the `Effect` bind
-chain is not TCO'd in JS). A *genuinely* effectful do-block instead keeps its runs: the
-e2e `Test.E2E.HostEff` performs two host effects and checks they ran in order, exactly
+vanishes: `mapEff`/`applyEff` reduce to plain `intAdd`. A *genuinely* effectful do-block
+instead keeps its runs: the e2e `Test.E2E.HostEff` performs two host effects and checks
+they ran in order, exactly
 once each — and prints a real `console.log "Hello, World!"` through the whole pipeline.
 
 ## Known gaps
