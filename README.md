@@ -17,6 +17,34 @@ Currenlty supported features are listed in
 Key architectural decisions are recorded as ADRs under
 [`docs/design-decisions/`](docs/design-decisions/).
 
+## WASM vs JS
+
+How this backend differs from a JavaScript backend (`purs` / `purs-backend-es`). Most of
+PureScript behaves identically; the wasm-specific points worth knowing:
+
+- **Strings are UTF-8 byte arrays.** A `String` is its UTF-8 bytes, so `length` counts
+  *bytes* (not UTF-16 code units) and ordering is by code point — a deliberate divergence
+  from `Data.String.CodeUnits`. See [Runtime representation](./docs/runtime-representation.md#string).
+- **`Effect` (and monadic loops) run in constant stack.** `Effect` / `State` do-blocks
+  collapse to flat loops, so deep effectful recursion that overflows a JS backend (whose
+  bind chain is not tail-call-optimized) runs flat here. See
+  [Optimizations](./docs/optimizations.md#worked-example-the-effect-monad).
+- **Manual uncurrying rarely pays.** `Fn` / `EffectFn` lower to the *same* arity-1 closures
+  as curried code, and the optimizer (higher-order specialization, inlining, tail calls)
+  makes idiomatic curried code fast — so the JS habit of hand-uncurrying hot paths (e.g.
+  Halogen VDom) is usually unnecessary. See [Optimizations](./docs/optimizations.md).
+- **Values are wasm-GC heap objects**, managed by the host garbage collector — no linear
+  memory, no manual allocation. `Boolean` is an unboxed `i31`; `Int` / `Number` unbox to
+  `i32` / `f64` where boxing is unnecessary. See [Runtime representation](./docs/runtime-representation.md).
+- **Records and type-class dictionaries share one representation** (a label-map), and most
+  dictionaries are eliminated outright by the optimizer. See
+  [Optimizations](./docs/optimizations.md#dictionary-elimination).
+- **Polymorphic containers still box their elements** (as JS does) — unboxing applies to
+  concrete scalar fields; removing it would need monomorphization (out of scope). See
+  [Optimizations § Known gaps](./docs/optimizations.md#known-gaps).
+- **Crossing to JS is an explicit marshalling boundary** (scalars cross raw; strings,
+  arrays, records, closures are marshalled). See [JS↔WASM interop](./docs/interop.md).
+
 ## WIP
 
 ### PureScript language features
@@ -52,7 +80,11 @@ Please refer to the [docs/optimizations.md](./docs/optimizations.md) for detaile
 
 ## TODO
 
-- [ ] Provide one-stop CLI for tryout (via Nix)
+Toward a **v0.1** release:
+
+- [ ] Real `bin` implementation — production linker (streaming, dependency-ordered codegen; ADR 0009 / 0021)
+- [ ] Publish to npm
+- [ ] One-stop CLI for tryout (via Nix)
 
 ## Benchmarks
 
@@ -77,15 +109,18 @@ monomorphization advantage over JS's native numbers).
 
 These benchmarks measure **steady-state throughput after warmup**: both the JS and
 the Wasm code are run long enough for V8 to tier up hot code before timing, so the
-results reflect optimized runtime performance rather than startup latency. Reproduce
-with `cd bench && npm run graph`.
+results reflect optimized runtime performance rather than startup latency. The graphs
+below are rendered and published to [GitHub Pages](https://katsujukou.github.io/purescript-backend-wasm/)
+by CI on each push to `main` (CI-runner timing is indicative — the curves, ratios, and
+stack-overflow behaviour are the signal). Reproduce locally with `cd bench && npm run graph`.
 
 | | |
 |:---:|:---:|
-| ![fib](bench/results/fib.png) | ![sumLoop](bench/results/sumLoop.png) |
-| ![qsort](bench/results/qsort.png) | ![nqueens](bench/results/nqueens.png) |
-| ![bintreeDfs](bench/results/bintreeDfs.png) | ![bintreeBfs](bench/results/bintreeBfs.png) |
-| ![mapFold](bench/results/mapFold.png) | ![countState](bench/results/count-state.png)|
+| ![fib](https://katsujukou.github.io/purescript-backend-wasm/fib.png) | ![sumLoop](https://katsujukou.github.io/purescript-backend-wasm/sumLoop.png) |
+| ![qsort](https://katsujukou.github.io/purescript-backend-wasm/qsort.png) | ![nqueens](https://katsujukou.github.io/purescript-backend-wasm/nqueens.png) |
+| ![bintreeDfs](https://katsujukou.github.io/purescript-backend-wasm/bintreeDfs.png) | ![bintreeBfs](https://katsujukou.github.io/purescript-backend-wasm/bintreeBfs.png) |
+| ![mapFold](https://katsujukou.github.io/purescript-backend-wasm/mapFold.png) | ![countState](https://katsujukou.github.io/purescript-backend-wasm/count-state.png) |
+| ![countEffect](https://katsujukou.github.io/purescript-backend-wasm/count-effect.png) | |
 
 ## Example
 
