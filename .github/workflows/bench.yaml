@@ -70,12 +70,13 @@ jobs:
           pnpm -F ./compiler run build:ulib
 
       # graph.sh builds all three backends + renders the 7 algorithm graphs;
-      # count-state-graph.sh adds the State-monad graph.
+      # count-state-graph.sh / count-effect-graph.sh add the State- and Effect-monad graphs.
       - name: Render benchmark graphs
         working-directory: bench
         run: |
           bash ./graph.sh
           bash ./count-state-graph.sh
+          bash ./count-effect-graph.sh
 
       - name: Comparison tables → run summary
         working-directory: bench
@@ -91,6 +92,10 @@ jobs:
             echo "### CountState — State-monad sweep"
             echo '```'
             node count-state.mjs
+            echo '```'
+            echo "### CountEffect — Effect-monad sweep"
+            echo '```'
+            node count-effect.mjs
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
