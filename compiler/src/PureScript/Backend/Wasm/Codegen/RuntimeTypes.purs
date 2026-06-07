@@ -73,6 +73,11 @@ type Ctx =
   -- | Every function's signature, keyed by name, so a call coerces its arguments to
   -- | the callee's parameter reps and reads the result at the callee's result rep.
   , sigs :: Map FuncName Sig
+  -- | The top-level value bindings (CAFs) compiled to globals (ADR 0006), each with
+  -- | the representation its global holds. A reference reads the global (`global.get`)
+  -- | instead of calling the binding; the value is computed once by the synthesized
+  -- | init (`start`) function. Empty when globalization finds no eligible CAF.
+  , cafGlobals :: Map FuncName Rep
   -- | The tag-only base `$Data = (struct i32)`, cast to for reading any ADT value's
   -- | constructor tag (every constructor struct is a subtype).
   , dataBase :: DataStruct

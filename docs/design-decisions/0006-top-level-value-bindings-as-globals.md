@@ -1,6 +1,6 @@
 # 0006. Top-level value bindings (CAFs) as exported globals
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-07: implemented. Phase A — non-Effect, pure, acyclic CAFs become init-set globals that references read; computed once at instantiation. See the addenda below for the export treatment and the `Effect` gating.)_
 - Date: 2026-05-31
 
 ## Context
@@ -41,6 +41,14 @@ unboxed `i32` in an exported `i32` global (export binds a global directly, so th
 unboxed value must live in its own global; the init function boxes/unboxes as
 needed and writes it).
 
+> **Addendum (2026-06-07):** The first implementation (Phase A) globalises CAFs
+> **internally** — every reference reads the global and the value is computed once at
+> instantiation — but keeps each *export* as its existing function wrapper (now reading
+> the global rather than recomputing), so the host ABI is unchanged: `x()` still works on
+> both the loader and standalone paths, without recomputation. Exposing the export as a
+> host-readable `global` (`x.value`) is a deliberate follow-up — it changes the host
+> surface and the loader — and is deferred.
+
 Cyclic value-binding groups are **out of scope** for this decision: a genuine
 value-level cycle requires laziness (PureScript-JS inserts `$runtime_lazy` for
 exactly these, typically recursive instance dictionaries) and is deferred to the
@@ -65,6 +73,13 @@ globalized; recursive non-function values remain unsupported.
   pure (`Effect` is deferred, ADR scope), eager initialization is observationally
   safe. When `Effect` lands, effectful module-level initialization will need
   revisiting.
+  > **Addendum (2026-06-07):** `Effect` has since landed. Globalisation is gated to
+  > **arity-0 CAFs** (plus acyclic + reachable): after ADR-0015 impurification an
+  > `Effect a` value is an arity-≥1 thunk (`\$ev -> …`), so an `Effect`-typed top-level
+  > is naturally excluded and stays a deferred thunk (`() => a`) — never run at
+  > instantiation, guarded by `examples/helloworld` in the e2e suite. Eager load-time
+  > evaluation of a pure CAF that traps/diverges is accepted as observationally
+  > equivalent (the JS backend's `foo = unsafeThrow "…"` throws on import too).
 - Composes with ADR 0004: internal globals may hold boxed `eqref`; the
   host-facing export is an unboxed `i32` global set during init.
 - Bounds the cyclic-value problem cleanly: the globalization pass handles only

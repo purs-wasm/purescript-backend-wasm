@@ -18,7 +18,7 @@ import Node.FS.Sync (readFile)
 import PureScript.ExternsFile (ExternsFile)
 import PureScript.ExternsFile.Decoder.Class (decoder)
 import PureScript.ExternsFile.Decoder.Monad (runDecoder)
-import Test.E2E.Wasm (callI32x1, instantiateForeignStr)
+import Test.E2E.Wasm (callI32x0, callI32x1, instantiateForeignStr)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
 
@@ -54,6 +54,10 @@ spec = describe "Test.E2E.HostEff (host effectful FFI, ADR 0015)" do
               , "compiler/test/fixtures/Data.Function.corefn.json"
               ]
           )
+        -- ADR 0006 / 0015: merely loading the module (instantiation runs the CAF-init
+        -- `start`) must NOT perform any top-level `Effect` — `mainEff`/`deadEff` stay
+        -- deferred thunks, never eager-initialised, so the spy is empty at load.
+        liftEffect readSpy >>= (_ `shouldEqual` "")
         liftEffect resetSpy
         r <- liftEffect (callI32x1 inst "runRec" 0)
         r `shouldEqual` 0
@@ -66,3 +70,8 @@ spec = describe "Test.E2E.HostEff (host effectful FFI, ADR 0015)" do
         -- a NULLARY host effect (`tick :: Effect Int`, JS `() => 99`): the foreign is the
         -- thunk itself — the glue must not pre-call it (regression for `r is not a function`)
         liftEffect (callI32x1 inst "getTick" 0) >>= (_ `shouldEqual` 99)
+        -- a top-level `Effect Unit` export performs only when CALLED, exactly once;
+        -- `deadEff` is never called, so its `record 99` never fires (helloworld's `sub`).
+        liftEffect resetSpy
+        liftEffect (callI32x0 inst "mainEff") >>= (_ `shouldEqual` 0)
+        liftEffect readSpy >>= (_ `shouldEqual` "7")

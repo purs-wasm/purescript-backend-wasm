@@ -38,3 +38,19 @@ greet _ = unsafePerformEffect do
 -- the nullary-Effect-foreign marshalling).
 getTick :: Int -> Int
 getTick _ = unsafePerformEffect tick
+
+-- ADR 0006 / 0015 guard (mirrors `examples/helloworld`): a top-level `Effect Unit` — an
+-- exported, arity-0 binding — must NOT be performed merely by loading the module.
+-- Globalization (ADR 0006) must not eager-init an `Effect` value; it stays a deferred
+-- `() => a` thunk and runs only when called. `mainEff` performs `record 7` when invoked;
+-- `deadEff` is exported but never called and must never run (helloworld's `sub`). A
+-- do-block (not a bare expression) so the export wrapper performs it (ADR 0018).
+mainEff :: Effect Unit
+mainEff = do
+  record 7
+  pure unit
+
+deadEff :: Effect Unit
+deadEff = do
+  record 99
+  pure unit

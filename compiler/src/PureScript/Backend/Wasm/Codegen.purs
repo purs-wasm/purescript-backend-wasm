@@ -45,6 +45,7 @@ import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGloba
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
+import PureScript.Backend.Wasm.Codegen.Caf (CafPlan, cafPlan)
 import PureScript.Backend.Wasm.Codegen.Value (atomRep, boxInt, coerce, genAtom, genAtomAs, slotRep, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), Branch(..), ForeignImport, FuncName(..), IRFunc, LitBranch(..), LitPat(..), MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..), marshalRep)
 import PureScript.Backend.Wasm.Lower.Reps (primRep)
@@ -60,13 +61,16 @@ buildModule prog = do
   rt <- buildRuntimeTypes mod
   dataGroup <- buildDataTypes mod (dataSignatures prog)
   let sigs = Map.fromFoldable (map (\fn -> Tuple fn.name { params: fn.params, result: fn.result }) prog.funcs)
-  let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, tailPos: true, sigs, dataBase: dataGroup.base, dataStructs: dataGroup.structs }
+  let cplan = cafPlan prog
+  let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, tailPos: true, sigs, dataBase: dataGroup.base, dataStructs: dataGroup.structs, cafGlobals: cplan.globals }
   importRuntime ctx
   addForeignImports ctx prog
   addInternStr ctx (needsInternStr prog) prog.labels
   addNullaryGlobals ctx (nullaryTags prog)
+  addCafGlobals ctx cplan.globals
   when (needsCounter prog) (addCounterGlobal ctx)
   traverse_ (addFunc ctx) prog.funcs
+  addCafInit ctx cplan
   traverse_ (addExportWrapper ctx prog.exportSigs) prog.funcs
   pure mod
 
@@ -222,6 +226,53 @@ addNullaryGlobals ctx tags = traverse_ addOne (Set.toUnfoldable tags :: Array In
     initE <- B.structNew ctx.mod ctx.dataBase.ht [ tagE ]
     B.addGlobal ctx.mod (nullaryGlobalName tag) B.eqref false initE
 
+-- | The wasm global a globalized CAF (ADR 0006) stores its computed value in.
+cafGlobalName :: FuncName -> String
+cafGlobalName name = "$caf." <> funcNameStr name
+
+-- | The synthesized CAF initializer (the module `start` function).
+cafInitName :: String
+cafInitName = "$caf_init"
+
+-- | Emit a mutable global per globalizable CAF (ADR 0006), holding the value at its
+-- | representation (`i32`/`f64`/`eqref` — a scalar stays unboxed). The initializer is
+-- | a throwaway constant the init function overwrites at instantiation; an `eqref`
+-- | global uses a dummy boxed `0` (a GC const expression, like a nullary constructor).
+addCafGlobals :: Ctx -> Map FuncName Rep -> Effect Unit
+addCafGlobals ctx globals = traverse_ addOne (Map.toUnfoldable globals :: Array (Tuple FuncName Rep))
+  where
+  addOne (Tuple name rep) = do
+    initE <- defaultConst rep
+    B.addGlobal ctx.mod (cafGlobalName name) (repType ctx rep) true initE
+  defaultConst = case _ of
+    I32 -> B.i32Const ctx.mod 0
+    F64 -> B.f64Const ctx.mod 0.0
+    _ -> B.i32Const ctx.mod 0 >>= \z -> B.structNew ctx.mod ctx.rt.intHt [ z ]
+
+-- | Synthesize the init function that computes each CAF once, in dependency order,
+-- | storing it in its global, and register it as the module `start` so it runs at
+-- | instantiation before any export. The CAF still has its own (arity-0) function —
+-- | the init simply calls it once; every other reference reads the global. No-op when
+-- | nothing is globalized.
+addCafInit :: Ctx -> CafPlan -> Effect Unit
+addCafInit ctx cplan
+  | Array.null cplan.initOrder = pure unit
+  | otherwise =
+      do
+        stmts <- traverse setOne cplan.initOrder
+        body <- B.block ctx.mod stmts B.none
+        initFn <- B.addFunction ctx.mod cafInitName (B.createType []) B.none [] body
+        B.setStart ctx.mod initFn
+      where
+      setOne name = do
+        let rep = fromMaybe Boxed (Map.lookup name cplan.globals)
+        v <- B.call ctx.mod (funcNameStr name) [] (repType ctx rep)
+        B.globalSet ctx.mod (cafGlobalName name) v
+
+-- | Read a globalized CAF's value (`global.get`) at its representation.
+readCaf :: Ctx -> FuncName -> Rep -> Effect B.Expression
+readCaf ctx name rep = B.globalGet ctx.mod (cafGlobalName name) (repType ctx rep)
+
 -- | Emit the `internStr` resolver: a `String` key → its interned `i32` label id,
 -- | as an `if (strEq key "label") then <id> else …` chain over the program's
 -- | `labels` (ending in `unreachable` — a queried label is always interned). Used
@@ -321,7 +372,10 @@ addExportWrapper ctx exportSigs fn = case fn.export of
     args <- traverse
       (\(Tuple i (Tuple extRep intRep)) -> B.localGet ctx.mod i (repType ctx extRep) >>= coerce ctx extRep intRep)
       (Array.mapWithIndex Tuple (Array.zip (Array.take compiledArity extParams) fn.params))
-    result <- B.call ctx.mod (funcNameStr fn.name) args (repType ctx fn.result)
+    -- a globalized CAF export reads its precomputed global (ADR 0006); otherwise call
+    result <- case Map.lookup fn.name ctx.cafGlobals of
+      Just rep | compiledArity == 0 -> readCaf ctx fn.name rep
+      _ -> B.call ctx.mod (funcNameStr fn.name) args (repType ctx fn.result)
     -- any remaining external params (point-free: extArity > compiledArity) are applied
     -- to the returned closure via the runtime trampoline; the value stays boxed `eqref`
     let
@@ -360,6 +414,7 @@ genBody ctx = go []
     Let (Slot index) _ (RCallKnown name args) (Return (AVar (Local (Slot retIndex))))
       | ctx.tailPos
       , index == retIndex
+      , not (Map.member name ctx.cafGlobals) -- a globalized CAF reads its global, not a tail call
       , Just sig <- Map.lookup name ctx.sigs
       , sig.result == ctx.funcResult -> do
           operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)
@@ -499,6 +554,11 @@ genRhs :: Ctx -> Rhs -> Effect B.Expression
 genRhs ctx = case _ of
   RAtom atom -> genAtom ctx atom
   RPrim intr args -> genPrim ctx intr args
+  -- a reference to a globalized CAF (ADR 0006) reads its global instead of calling
+  -- the binding; the value was computed once by the init function
+  RCallKnown name args
+    | Array.null args
+    , Just rep <- Map.lookup name ctx.cafGlobals -> readCaf ctx name rep
   RCallKnown name args -> do
     let sig = fromMaybe { params: const Boxed <$> args, result: Boxed } (Map.lookup name ctx.sigs)
     operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)

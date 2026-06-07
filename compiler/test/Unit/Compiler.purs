@@ -7,6 +7,7 @@ import Prelude
 import Effect (Effect)
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
+import Test.Unit.PureScript.Backend.Wasm.Codegen.Caf as Caf
 import Test.Unit.PureScript.Backend.Wasm.Externs as Externs
 import Test.Unit.PureScript.Backend.Wasm.Lower as Lower
 import Test.Unit.PureScript.Backend.Wasm.Lower.Match as Match
@@ -26,6 +27,7 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   CoreFn.spec
   ExternsFile.spec
   Externs.spec
+  Caf.spec
   Lower.spec
   Match.spec
   Transl.spec
