@@ -59,7 +59,7 @@ each kind has a conversion:
 
 | PureScript | kind | top-level (boundary value) | how it converts |
 | - | - | - | - |
-| `Int`, `Char` | `MI32` | raw `i32` (a JS `number`) | nothing — crosses directly |
+| `Int`, `Char` | `MI32` | raw `i32` (a JS `number`) | nothing top-level; **boxed `$Int`** when nested (via `boxInt`/`unboxInt`) |
 | `Number` | `MF64` | raw `f64` (a JS `number`) | nothing top-level; **boxed `$Num`** when nested (via `boxNum`/`unboxNum`) |
 | `Boolean` | `MBool` | `i31ref` ⇄ JS `boolean` | `boxBool`/`unboxBool` (a `Boolean` is always boxed, so it crosses as an `eqref`) |
 | `String` | `MStr` | `$Str` ⇄ JS `string` | read with `strLen`/`strByteAt`, build with `strNew`/`strSetByte` (UTF-8) |
@@ -82,9 +82,10 @@ as an `eqref` and is converted by generated glue.**
 - Everything else (`String`, `Boolean`, `Array`, `Record`, closure, and a *nested*
   `Number`/`Int` inside a container) is an `eqref`. The generated **glue**
   (`eqrefToJs` / `eqrefFromJs`) converts it, recursively, driven by a **manifest**: a
-  JSON description of each foreign's parameter/result kinds (`"i"`/`"f"`/`"b"`/`"s"`
-  leaves, `{"a":…}` array, `{"r":{…}}` record, `{"fn":[…]}` function). The production
-  loader bakes the manifest; the conversion calls the runtime helpers on the instance.
+  JSON description of each foreign's parameter/result kinds (`"i"`/`"f"`/`"b"`/`"s"`/`"o"`
+  leaves, `{"a":…}` array, `{"r":{…}}` record, `{"fn":[…]}` function, `{"eff":…}` effect).
+  The production loader bakes the manifest; the conversion calls the runtime helpers on the
+  instance.
 
 So a foreign `String -> String` has its `$Str` argument turned into a JS string and its
 JS-string result turned back into a `$Str`; a foreign `Array (Record …) -> Int` has its
@@ -149,7 +150,7 @@ returned thunk on the JS side* (`log("hi")()`), marshalling only the inner resul
 side effect happens at the boundary and wasm never has to hold or re-enter a JS function.
 The optimizer recognises `log` as effectful (its result type is `Effect _`) and so will
 not drop, reorder, or duplicate the call (see
-[Effect impurification and purity](./optimizations.md#effect-impurification-and-purity)).
+[Effect: impurification, reflection, and purity](./optimizations.md#effect-impurification-reflection-and-purity)).
 
 An `Effect a` **export** (e.g. `main :: Effect Unit`) is exposed to JS as a **thunk**
 `() => a` — matching `Effect a ≃ () => a` — so importing the module does **not** run it; it
@@ -248,25 +249,25 @@ and the transparent-types-only principle are [ADR 0024](./design-decisions).
   clear error meanwhile. (A foreign that merely *returns a function*, `a -> (b -> c)`,
   is not this case: it is the same type as the uncurried `a -> b -> c`.)
 - **JS-originated opaque values round-tripping through wasm.** A foreign whose result is
-  an opaque value *created on the JS side* — most importantly `foreign import data` whose
-  instances are JS objects, e.g. `Effect.Ref`'s `Ref` (`new` returns `{ value }`) — cannot
-  be held by wasm and passed back to another foreign (`read`/`write`). `MOpaque` is carried
-  as the internal GC `eqref`, but a JS object is an `externref`; returning it to a wasm
-  `(result eqref)` import throws `TypeError: type incompatibility when transforming from/to
-  JS` at run time. It is *not* caught at build time — the wasm builds and only traps when the
-  value crosses. The general fix (carry JS-origin opaques as `externref`, boxed in a wasm
-  struct) is blocked on a representation question: a *polymorphically*-opaque value that is
-  really a wasm-GC value (e.g. the `s` read back out of a `Ref s` that holds an `Int`) must
-  stay an `eqref` so it can still be `ref.cast` to its concrete type, yet a genuinely
-  JS-native opaque must be `externref` — and the marshalling boundary cannot tell them apart.
-  So such libraries are better provided **wasm-natively** (a runtime intrinsic or a ulib
-  `foreign.wat`, ADR 0012) than through the JS ladder; `Effect.Ref` in particular is a pure
-  mutable cell that needs no host at all and is slated for native support.
+  an opaque value *created on the JS side* — a `foreign import data` whose instances are JS
+  objects (a handle returned by one foreign and later passed back to another) — cannot be
+  held by wasm and returned to a later foreign. `MOpaque` is carried as the internal GC
+  `eqref`, but a JS object is an `externref`; returning it to a wasm `(result eqref)` import
+  throws `TypeError: type incompatibility when transforming from/to JS` at run time. It is
+  *not* caught at build time — the wasm builds and only traps when the value crosses. The
+  general fix (carry JS-origin opaques as `externref`, boxed in a wasm struct) is blocked on
+  a representation question: a *polymorphically*-opaque value that is really a wasm-GC value
+  (e.g. an `Int` read back out of a container declared opaque at the boundary) must stay an
+  `eqref` so it can still be `ref.cast` to its concrete type, yet a genuinely JS-native
+  opaque must be `externref` — and the marshalling boundary cannot tell them apart. So such
+  libraries are better provided **wasm-natively** (a runtime intrinsic or a ulib
+  `foreign.wat`, ADR 0012 / 0017) than through the JS ladder. `Effect.Ref` was exactly this
+  case — a pure mutable cell — and is **now provided natively** (a wasm `$Ref` struct,
+  ADR 0017), so it no longer crosses the JS boundary at all.
 - **`Object a`** (dynamic string keys) — its representation differs from the
   static-label `$Rec` and needs a separate decision.
 - **`main :: Effect Unit` auto-run on load** — an `Effect`-typed export is exposed as a
   callable thunk (`exports.main()` runs it); auto-running it on import, without an explicit
-  call, is a possible loader flag. `EffectFnN`, `ST`, and `forE`/`whileE` are future work
-  (ADR 0015).
-- **bin build-integration test** — the production loader is smoke-verified, not yet
-  covered by an automated end-to-end build test.
+  call, is a possible loader flag. (`Effect.Ref`, `forE`/`whileE`/`untilE`/`foreachE`, and
+  `EffectFnN` are now provided wasm-natively — ADR 0017 / 0018 — not gaps; `ST` shares
+  `Effect.Ref`'s representation and is the remaining follow-up.)
