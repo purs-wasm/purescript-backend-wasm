@@ -47,11 +47,14 @@ jobs:
         run: pnpm install
 
       # The bench scripts shell out to `bin/index.dev.js`, which imports the compiled
-      # `output/Main` and merges `runtime/runtime.wasm`, so build both first.
-      - name: Build compiler and runtime
+      # CLI at `output/Main` (the `bin` package — `spago build -p bin` also builds its
+      # `compiler` dependency) and merges `runtime/runtime.wasm` + the `ulib/*.wasm`
+      # foreigns, so build all three first.
+      - name: Build the compiler CLI, runtime, and ulib
         run: |
-          pnpm -F ./compiler run compile
+          spago build -p bin
           pnpm -F ./compiler run build:runtime
+          pnpm -F ./compiler run build:ulib
 
       # graph.sh builds all three backends + renders the 7 algorithm graphs;
       # count-state-graph.sh adds the State-monad graph.
