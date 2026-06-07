@@ -6,9 +6,12 @@ name: Benchmark
 # GitHub Pages so the README can embed the latest images. Snapshots/results are no
 # longer committed (see .gitignore) — this regenerates them on demand.
 #
-# Runs on pushes to main and on manual dispatch (not every branch/PR): CI-runner
-# timing is noisy, so this tracks the curves/ratios and stack-overflow behaviour
-# rather than authoritative absolute numbers.
+# Runs on (a) pushes to main — to refresh the Pages graphs after a merge — and (b) PRs
+# that touch the benchmark pipeline, so a bench/compiler/runtime change can be validated
+# in the PR before merge (PR-based operation; unrelated and docs-only PRs are skipped).
+# Plus manual dispatch. CI-runner timing is noisy, so the absolute numbers are only
+# indicative — the signal is the curves/ratios and the stack-overflow behaviour. The
+# graphs are published to Pages only from main (the deploy job is gated below).
 on:
   push:
     branches:
@@ -16,6 +19,16 @@ on:
     paths-ignore:
       - "README.md"
       - "docs/**/*.md"
+  pull_request:
+    paths:
+      - "bench/**"
+      - "bin/**"
+      - "compiler/**"
+      - "binaryen/**"
+      - "runtime/**"
+      - "ulib/**"
+      - "build-ulib.mjs"
+      - ".github/workflows/bench.yaml"
   workflow_dispatch:
 
 concurrency:
@@ -98,6 +111,10 @@ jobs:
   # is allowed to fail without failing the whole run.
   deploy-pages:
     needs: benchmark
+    # Publish only from main (post-merge). On a PR the benchmark job still renders and
+    # uploads the artifact + run-summary tables for review, but the live Pages site is
+    # left untouched.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     continue-on-error: true
     environment:
