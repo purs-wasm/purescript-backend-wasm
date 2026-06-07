@@ -3,6 +3,8 @@
 - Status: Proposed
 - Date: 2026-06-05
 
+> **Progress (2026-06-07):** **Phase 1 (dependency-ordered single-pass optimization — `MiddleEnd.topoOrder` + `localOpt`, each module optimized once against already-finalized dependencies) is implemented.** **Phase 2 (streaming / incremental codegen — emit per module, discard the MIR, keep only summaries) is not.** Kept Proposed.
+
 ## Context
 
 The driver (`bin` + `MiddleEnd.optimizeProgram` + `Compiler` + `Codegen`) currently:

@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-06-04
+
+> **Correction (2026-06-07):** Of this design's two new MIR nodes (`Reify`/`Perform`), **`Reify` was never made a node**. The reify half is expressed as an `Impurify` thunk (`\$ev -> …`) — an ordinary lambda — so the MIR has only `Perform`. This lowering was refined into a faithful baseline + guarded collapse in **[ADR 0019](0019-faithful-effect-lowering.md)**. The impurification / whole-program purity / pure-Effect-collapse core still holds.
 - Implemented: impurification (`Optimize/Impurify.purs`, the `Perform` node), whole-program
   purity analysis (`Optimize/Purity.purs`), and host effectful FFI (`MEffect` marshalling,
   the JS glue performs the thunk). Pure `Effect` collapses to constant-stack code and a
@@ -83,7 +85,7 @@ exists:
 
 ### Reify / perform as an inverse pair
 
-Add two constructors to the MIR, denoting the two halves of the function encoding (for
+~~Add two constructors to the MIR, denoting the two halves of the function encoding~~ (for
 `Effect`, `repr` is nullary, so they specialise to the thunk form):
 
 ```

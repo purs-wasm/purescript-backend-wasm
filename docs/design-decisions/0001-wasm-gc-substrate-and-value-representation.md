@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-05-31
 
+> **Correction (2026-06-07):** The ADT value representation was later superseded by **[ADR 0013](0013-int-number-unboxing.md)**. ADTs are no longer the closed `$ADT = (struct i32 (ref $Vals))` of this record, but an **open base `$Data = (struct i32)` plus per-signature subtypes `$Data_<sig>` (scalar fields unboxed)**. The `$ADT` type is unused by current code (only declared in `Codegen/RuntimeTypes`). The rest of this record (the wasm-GC substrate, eqref, `$Int`/`$Num`/`$Str`/`$Clo`, …) still holds.
+
 ## Context
 
 PureScript is a pure functional language: programs allocate large numbers of
@@ -60,7 +62,7 @@ Per-kind representation:
 - **Boolean** and **Unit** → `i31ref` (`Unit` is a singleton).
 - **String** → `(struct (ref (array i8)))`.
 - **Array** → `(array (mut eqref))`.
-- **ADT** → uniform `tag : i32` + `fields : (array eqref)`. A **newtype** is
+- ~~**ADT** → uniform `tag : i32` + `fields : (array eqref)`~~. A **newtype** is
   erased to its underlying value, driven by the CoreFn `IsNewtype` meta.
 - **Record** → a **uniform label-map** (labels sorted; values parallel). This
   works without type information and directly backs Prelude's

@@ -1,6 +1,6 @@
 # 0022. Join points for `case` in argument position (kill the commuting-conversion blowup)
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-07: promoted — implemented (`LetJoin` across Lower/Codegen/Unbox).)_
 - Date: 2026-06-06
 
 ## Context

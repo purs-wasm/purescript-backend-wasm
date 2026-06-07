@@ -1,6 +1,6 @@
 # 0014. User FFI: a foreign-provider ladder and the JS marshalling boundary
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-07: promoted — implemented (full marshalling + `addExportWrapper` + the provider ladder). JS→wasm closures (direction 2) are deferred.)_
 - Date: 2026-06-03
 
 ## Context

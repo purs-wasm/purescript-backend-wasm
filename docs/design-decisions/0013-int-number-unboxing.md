@@ -1,6 +1,6 @@
 # 0013. Unboxing `Int` and `Number`
 
-- Status: Approved
+- Status: ~~Approved~~ **Accepted** _(2026-06-07: vocabulary aligned with the README's "Accepted". Implemented — U1–U3 / enum / front-B.)_
 - Date: 2026-06-02
 
 ## Context

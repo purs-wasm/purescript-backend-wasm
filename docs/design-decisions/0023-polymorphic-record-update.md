@@ -1,6 +1,6 @@
 # 0023. Polymorphic record update via runtime copy-and-set
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-07: promoted — implemented (`RRecSet` across Lower/Codegen).)_
 - Date: 2026-06-06
 
 ## Context

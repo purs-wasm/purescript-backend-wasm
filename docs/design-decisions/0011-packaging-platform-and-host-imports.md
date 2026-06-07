@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-06-01
 
+> **Status reaffirmed (2026-06-07):** The current implementation does **not yet** use the `--platform` flag scheme. Codegen always imports `$rt.*` ([ADR 0010](0010-runtime-as-a-separate-wasm-module.md)), and `bin` hard-codes a single packaging: a **standalone bundle (wasm-merge) plus a JS loader only when JS foreigns are present (`emitLoader`/`needLoader`)** — effectively the `standalone`/`node` target. `--platform` (`browser`/`browser-split`/the fallback-JS toggle, …) is split out as future work after the real `bin` implementation — see [ADR 0025](0025-multi-platform-packaging.md). This record's core (packaging is platform-specific, codegen is not) still holds.
+
 ## Context
 
 ADR 0010 makes the shared runtime a separate wasm module that generated code
@@ -23,7 +25,7 @@ through and wants on record:
 
 The generated module **always** imports `$rt.*` (one codegen path, ADR 0010). How
 those imports — and any host imports — are satisfied is a **packaging-stage**
-choice, selected by a CLI `--platform` flag. Codegen never changes per platform.
+choice, ~~selected by a CLI `--platform` flag~~. Codegen never changes per platform.
 
 | `--platform` | runtime | packaging |
 | --- | --- | --- |

@@ -1,6 +1,6 @@
 # 0012. A `ulib` directory for curated-package wasm FFI
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-07: promoted — implemented (`Ulib.parseUlibSigs` + `ulib/` + the provider ladder). Per-module migration into `ulib` is ongoing.)_
 - Date: 2026-06-02
 
 ## Context

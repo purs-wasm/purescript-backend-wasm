@@ -3,6 +3,8 @@
 - Status: Proposed
 - Date: 2026-06-05
 
+> **Progress (2026-06-07):** The NbE core (`Semantics`'s `Sem`/`eval`/`quote`) is implemented and is **the default reducer** (`DictElim.useNbE = true`), plus a stack-safe `IR.Eq` (migration step 1). The main goal — **reduction-aware inlining decisions (step 3) — is not yet started** (currently stage 2: NbE merely reproduces the existing inline set `Inline.inlineCandidates`). Kept Proposed.
+
 ## Context
 
 Building the purs-backend-optimizer README *overview* examples surfaced the first

@@ -1,6 +1,6 @@
 # 0024. Export-boundary arity reconciliation, and the transparent-types-only rule
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-07: promoted — implemented (`addExportWrapper` + `emitLoader`).)_
 - Date: 2026-06-06
 
 ## Context

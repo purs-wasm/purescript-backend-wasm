@@ -1,7 +1,7 @@
 # 0005. A high-level optimization IR
 
-- Status: Proposed (module layout + migration plan firmed up; the IR's *shape* is
-  still open — see Open questions)
+- Status: ~~Proposed (module layout + migration plan firmed up; the IR's *shape* is
+  still open — see Open questions)~~ **Accepted** _(2026-06-07: promoted — implemented. Open questions resolved — curried vs uncurried → **uncurried**; tree vs ANF/NbE → **NbE**. Actual submodules: `DictElim`/`Inline`/`Specialize`/`LambdaLift`/`Purity`/`Impurify`/`Semantics`/`Simplify`/`Analysis`.)_
 - Date: 2026-05-31
 - Revised: 2026-06-02
 

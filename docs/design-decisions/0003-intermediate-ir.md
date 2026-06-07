@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-05-31
 
+> **Correction (2026-06-07):** The eval/apply machinery did **not** adopt PAP/`applyN`. Per [ADR 0004](0004-uniform-eqref-calling-convention.md) ("everything eqref, arity-1 closures"), partial/over-application is handled by an **arity-1 `RApply` chain** (no PAP struct, no `applyN`). `Atom` is per-type literals (`ALitInt`/`ALitNumber`/`ALitBoolean`/`ALitString`) + `AVar (Local | EnvField)` (**no `Global`**; top-level names go through `RCallKnown`/nullary functions). The ANF, closure-conversion, and decision-tree core still holds (in `Lower/IR` and `Lower/Match`).
+
 ## Context
 
 CoreFn is type-erased, fully curried, and keeps nested `let`/`case`
@@ -74,14 +76,14 @@ Compile curried application with the **eval/apply** model:
   **saturated**, emit a native multi-argument `call` / `call_ref`
   (`RCallKnown`). No intermediate closures, no partial-application object, no
   dispatch. This is the common case (e.g. essentially all of Prelude).
-- Only **arity mismatches** go through a generic `applyN` family (`RApply`):
+- ~~Only **arity mismatches** go through a generic `applyN` family (`RApply`):~~
   - `args == arity` → `call_ref` once;
   - `args < arity` → allocate a partial-application (PAP) object;
   - `args > arity` → call with `arity` args, then apply the remainder (loop).
 
 In Wasm GC: a closure is `(struct (field arity i32) (field (ref $Codek))
 captured…)` where `$Codek = (func (param (ref $Clo) a1 … ak) (result eqref))`;
-a PAP is `(struct (field (ref $Clo) orig) (field (ref $Vals) saved))`.
+~~a PAP is `(struct (field (ref $Clo) orig) (field (ref $Vals) saved))`.~~
 Tail calls use `return_call`/`return_call_ref`.
 
 The CoreFn → IR lowering may start conservative (route more calls through

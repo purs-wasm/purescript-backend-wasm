@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-05-31
+
+> **Correction (2026-06-07):** Placement and the extension seam evolved. The tier-2/3 runtime functions are not "all bundled into the module" but split into **separate wasm modules ([ADR 0010](0010-runtime-as-a-separate-wasm-module.md) `runtime.wat` / [ADR 0012](0012-ulib-curated-package-ffi.md) `ulib`)**. No named `ForeignProvider` abstraction was introduced; resolution uses the `foreignIntrinsic`/`qualifiedIntrinsic` tables + `foreignSigs` + the ulib ladder + host imports ([ADR 0014](0014-user-ffi-resolution-and-marshalling.md)). The tier-1 inline-intrinsic core still holds.
 - See also: [ADR 0012](0012-ulib-curated-package-ffi.md) — evolves tiers 2/3 (the
   bundled-runtime / higher-order foreigns) into manifest-driven `ulib` FFI, keeping
   tier 1 as the inline-intrinsics table.
@@ -40,8 +42,8 @@ Implement foreign functions as a **code-generator-internal intrinsics table**
 3. **Higher-order array functions** — `arrayMap` etc., implemented on top of
    the runtime and the closure representation (see ADR 0001).
 
-Expose a single extension seam, `ForeignProvider :: Qualified Ident -> Maybe
-CodeGen`, so user-defined or platform-specific foreign implementations can be
+Expose a single extension seam, ~~`ForeignProvider :: Qualified Ident -> Maybe
+CodeGen`~~, so user-defined or platform-specific foreign implementations can be
 plugged in later without changing the core.
 
 `showNumberImpl` (IEEE-754 double → shortest decimal string) is the hardest
