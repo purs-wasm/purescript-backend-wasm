@@ -5,8 +5,7 @@ here on purpose — the emitted code drifts as the compiler evolves and reading 
 the point. For the value *shapes* see [Runtime representation](./runtime-representation.md),
 for how they are made fast [Optimizations](./optimizations.md), for crossing to
 JavaScript [JS↔WASM interop](./interop.md), and for the build
-[Compilation pipeline](./compilation-pipeline.md). Per-`Prelude`-module notes are in
-[Prelude support](./supported-features/Prelude-support.md).
+[Compilation pipeline](./compilation-pipeline.md).
 
 - [Top-level functions](#top-level-functions)
 - [Algebraic data types and pattern matching](#algebraic-data-types-and-pattern-matching)
@@ -26,7 +25,10 @@ JavaScript [JS↔WASM interop](./interop.md), and for the build
 
 Supported. Arithmetic and comparison go through `Prelude`'s type classes
 (`Semiring`/`Ring`/`Ord`/…) and lower to machine intrinsics (`i32.add`, …); a saturated
-call to a known top-level function is a direct call.
+call to a known top-level function is a direct call. `Int` division/modulo follow
+`Data.EuclideanRing`: a **non-negative remainder** (`(-7) mod 2` is `1`) and a **zero
+guard** (`x div 0` is `0`, no trap), unlike the raw, truncating, `/0`-trapping
+`i32.div_s`/`rem_s`.
 
 ## Algebraic data types and pattern matching
 
@@ -69,7 +71,7 @@ Representation →
 ## Function application, partial and over
 
 Both **partial application** — a known function under-applied is eta-expanded into a
-chain of one-argument closures (a PAP) — and **over-application** (supplying more
+chain of one-argument closures — and **over-application** (supplying more
 arguments than the arity) are supported. Multi-argument application of an *unknown*
 function value is a chain of single-argument `call_ref`s.
 
@@ -104,12 +106,15 @@ method, including superclass access (arbitrarily deep hierarchies work). Derivin
 ## Records
 
 Construction, field access, **monomorphic update** (`r { x = v }`), and **pattern
-destructuring** (`\{ x } -> …`) are supported, as are `Record.Unsafe`'s
+destructuring** (`\{ x } -> …`; field sub-binders are var/wildcard — a nested field
+pattern like `\{ x: Just y } -> …` is not yet supported) are supported, as are
+`Record.Unsafe`'s
 dynamic-`String`-key operations (`unsafeGet` / `unsafeSet` / `unsafeHas` /
 `unsafeDelete`), bridged by an emitted `internStr` resolver (label string → interned
 id). Records share the label-map representation with dictionaries (→
-[runtime-representation § Record](./runtime-representation.md#record)). **Deferred**:
-polymorphic update of an open row (the unknown extra fields need a runtime copy).
+[runtime-representation § Record](./runtime-representation.md#record)). **Polymorphic
+update** of an open row is supported too — the unknown extra fields are preserved by a
+runtime copy-and-set (ADR 0023).
 
 ## The Effect monad
 
@@ -123,10 +128,12 @@ in constant stack where a JavaScript backend overflows (→
 **purity analysis** keeps *genuinely effectful* runs from being dropped, reordered, or
 duplicated, so a `foreign import log :: String -> Effect Unit` runs exactly when and as
 often as written (→ [JS↔WASM interop](./interop.md#an-effectful-foreign)). `unsafePerformEffect`
-is supported, and an `Effect`-typed export (`main :: Effect Unit`) is exposed to JS as a
-callable thunk `() => a` — `exports.main()` runs it (it does not run merely on import).
-**Not yet**: auto-running `main` on load without an explicit call, `EffectFnN`, `ST`, and
-`forE`/`whileE`.
+is supported, as are **native mutable references** (`Effect.Ref`, ADR 0017) and the
+**`effect` control-flow primitives** (`forE` / `foreachE` / `whileE` / `untilE`) and
+**`EffectFnN`** (ADR 0018) — all provided wasm-natively. An `Effect`-typed export
+(`main :: Effect Unit`) is exposed to JS as a callable thunk `() => a` — `exports.main()`
+runs it (it does not run merely on import). **Not yet**: auto-running `main` on load
+without an explicit call, and `ST` (which will share `Effect.Ref`'s representation).
 
 ## Foreign function interface
 
