@@ -49,7 +49,7 @@ import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.Traversable (traverse)
-import Data.Tuple (Tuple(..), fst)
+import Data.Tuple (Tuple(..), fst, snd)
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Intrinsics (qualifiedIntrinsic, foreignIntrinsic)
@@ -469,15 +469,17 @@ lowerRecBind env (Tuple rb slot) = case rb.expr of
 -- | `Lower.Match`: the sub-binder is bound directly to the scrutinee.
 lowerCaseK :: Env -> Array M.Expr -> Array M.Alt -> (Env -> M.Expr -> Lower AnfExpr) -> Lower AnfExpr
 lowerCaseK env scrutinees alternatives finish = case scrutinees of
-  -- A record pattern (`\{ x, y } -> …`) is a single destructuring alternative that
-  -- always matches: bind each field's sub-binder to a label projection. (Record
-  -- binders are the one shape `Lower.Match` does not handle.)
+  -- A *simple* record pattern (`\{ x, y } -> …`, all fields bound to a var/wildcard) is a
+  -- single destructuring alternative that always matches: bind each field directly to a
+  -- label projection, skipping the decision tree. Record patterns with nested field
+  -- sub-binders (`{ x: Just y }`) fall through to `Lower.Match` below.
   [ scrutinee ]
     | Just { fields, body } <- recordPatternAlternative alternatives ->
         lowerArg env scrutinee \scrutAtom -> bindRecordFields env scrutAtom fields body finish
-  -- Everything else — constructor / literal / variable / wildcard / newtype /
-  -- nested patterns, one or many scrutinees — compiles to a decision tree
-  -- (`Lower.Match`). Scrutinees are lowered to occurrence atoms first.
+  -- Everything else — constructor / literal / variable / wildcard / newtype / nested
+  -- patterns (including record patterns with nested field sub-binders), one or many
+  -- scrutinees — compiles to a decision tree (`Lower.Match`). Scrutinees are lowered to
+  -- occurrence atoms first.
   scruts ->
     lowerArgs env scruts \atoms -> compileMatch (matchOps env finish) env atoms alternatives
 
@@ -495,12 +497,22 @@ matchOps env finish =
   }
 
 -- | Recognise a single record-pattern alternative `{ l: b, … } -> body` (a
--- | `LiteralBinder` of an object literal). Records are products, so it is the only
--- | alternative and always matches.
+-- | `LiteralBinder` of an object literal) whose every field sub-binder is irrefutable
+-- | and trivial (a var or wildcard). Records are products, so such an alternative is the
+-- | only one and always matches — the fast `bindRecordFields` path projects each field
+-- | directly. A field with a *nested* sub-binder (a constructor / literal / inner record,
+-- | e.g. `{ x: Just y }`) is left to the decision-tree compiler (`Lower.Match`, which
+-- | splices field sub-binders via `specializeRecord`) by returning `Nothing` here.
 recordPatternAlternative :: Array M.Alt -> Maybe { fields :: Array (Tuple String Binder), body :: M.Expr }
 recordPatternAlternative = case _ of
-  [ { binders: [ LiteralBinder _ (LitObject fields) ], result: Right body } ] -> Just { fields, body }
+  [ { binders: [ LiteralBinder _ (LitObject fields) ], result: Right body } ]
+    | Array.all (isTrivialField <<< snd) fields -> Just { fields, body }
   _ -> Nothing
+  where
+  isTrivialField = case _ of
+    NullBinder _ -> true
+    VarBinder _ _ -> true
+    _ -> false
 
 -- | Bind a record pattern's fields, each to a label projection out of the
 -- | scrutinee, then lower the body.
