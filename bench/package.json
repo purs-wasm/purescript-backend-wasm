@@ -9,6 +9,7 @@
     "base": "npm run build:ps && npm run build:wasm:base && node run.mjs",
     "snapshot": "./snapshot.sh",
     "graph": "./graph.sh",
-    "graph:count-state": "./count-state-graph.sh"
+    "graph:count-state": "./count-state-graph.sh",
+    "graph:curry": "./curry-graph.sh"
   }
 }

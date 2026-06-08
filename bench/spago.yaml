@@ -6,3 +6,5 @@ package:
     - lists
     - arrays
     - foldable-traversable
+    - functions
+    - partial
