@@ -73,6 +73,7 @@ language and are kept out of version control.)
 | 0023 | [Polymorphic record update via runtime copy-and-set](0023-polymorphic-record-update.md) | Accepted |
 | 0024 | [Export-boundary arity reconciliation, and the transparent-types-only rule](0024-export-boundary-arity-and-transparent-types.md) | Accepted |
 | 0025 | [Multi-platform packaging (`--platform`) and the fallback-JS toggle](0025-multi-platform-packaging.md) | Proposed |
+| 0027 | [Specialize after inlining: the `where`-worker / forwarder idiom](0027-specialize-after-inlining.md) | Proposed |
 
 ## Scope
 

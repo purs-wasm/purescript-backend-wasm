@@ -106,13 +106,19 @@ narrowest on the arithmetic ones (`fib` ~1.9×): much of the win comes from the 
 Wasm-GC value representation — tagged structs reclaimed by the host GC, versus JavaScript
 object allocation — as well as from the arithmetic unboxing.
 
-The **library higher-order benchmarks are the current frontier**, not yet a win:
-`mapFold` maps and left-folds a `Data.List` with *pure-PureScript* HOFs (the closures
-specialize away into a direct loop), and `mapFoldArray` does the same over a `Data.Array`
-through the *foreign* `ulib` HOFs. Both still trail `purs-backend-es` — the list's
-cons-cell allocation, and (for the foreign array HOFs) closures the optimizer cannot
-specialize *into* a foreign plus per-element boxing, are costs V8's allocator absorbs more
-cheaply. Closing this is tracked in issue #5 (foreign HOF specialization).
+The **library higher-order benchmarks** turn on whether the `map`/`foldl` closure is
+*specialized* (fused into a direct loop) or applied per element via an indirect `call_ref`
+on boxed operands. `mapFold` left-folds a `Data.List`: its `map`/`foldl` use the
+`where`-worker idiom, which a **post-inline specialization pass**
+([ADR 0027](./docs/design-decisions/0027-specialize-after-inlining.md)) reaches once
+inlining collapses the forwarder — so the closures fuse, cutting `mapFold` ~7× (from ~8×
+behind `purs-backend-es` to roughly **on par** with it). It does not yet *beat* `purs-backend-es`:
+the residual gap is that a `Data.List` `Int` element stays **boxed**, whereas V8 keeps it
+unboxed — a separate cost that needs monomorphization (issue #19). `mapFoldArray` does the
+same over a `Data.Array`, but its `map`/`foldl` are *foreign* (`ulib` `.wat`, no body to
+specialize into), so the closure cannot be fused at all and it still trails further — **the
+current frontier**; moving the array HOFs into PureScript over first-order primitives
+(WasmBase, issue #26) is what lets ADR 0027 reach them too. Tracked in issue #5.
 
 The **curry-vs-uncurry** graph isolates a property the wasm backend gets *for free*:
 `Fn` / `EffectFn` lower to the same closures as curried code, so curried and uncurried

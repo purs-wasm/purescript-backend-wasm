@@ -22,8 +22,16 @@ node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.
 
 cd "$here"
 node graph.mjs
+# Render only the algorithm benchmarks (graph.mjs's output), which use plot-compare.gp's
+# `size  js-naive  js-es  wasm` schema. curry / count-state / count-effect have a DIFFERENT
+# dat schema and their own plot templates (rendered by their dedicated *-graph.sh scripts) —
+# rendering them here with plot-compare.gp mismaps the columns (e.g. curry's es-ratio would be
+# drawn as the wasm line), so skip them.
 for dat in results/*.dat; do
   bench="$(basename "$dat" .dat)"
+  case "$bench" in
+    curry | count-state | count-effect) continue ;;
+  esac
   gnuplot -e "datafile='$dat'; outfile='results/$bench.png'; name='$bench'" plot-compare.gp
 done
 echo "wrote bench/results/*.png"
