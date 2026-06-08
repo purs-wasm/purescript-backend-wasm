@@ -11,7 +11,8 @@
             "functions",
             "lists",
             "partial",
-            "prelude"
+            "prelude",
+            "wasm-base"
           ]
         },
         "test": {
@@ -211,6 +212,15 @@
             "strings",
             "tuples"
           ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
+      "wasm-base": {
+        "path": "wasm-base",
+        "core": {
+          "dependencies": []
         },
         "test": {
           "dependencies": []

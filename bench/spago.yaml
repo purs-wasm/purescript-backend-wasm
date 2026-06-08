@@ -8,3 +8,4 @@ package:
     - foldable-traversable
     - functions
     - partial
+    - wasm-base
