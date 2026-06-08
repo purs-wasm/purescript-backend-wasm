@@ -38,6 +38,7 @@ documentation/regeneration inputs, not compiled with the suite.
 | `Data.Int.corefn.json`             | (real Prelude) | `Test.E2E.PreludeNumber` | `toNumber` (Int → Number) |
 
 | `Guards.corefn.json`  | `Guards.purs.sample`  | `Test.E2E.PreludeGuards`      | **case guards**: multiple guards in one alternative + fallthrough to a later alternative; guarded constructor patterns (linked with `Data.Eq` / `Data.Ord` / `Data.Ordering` for `>`) |
+| `AsPattern.corefn.json` | `AsPattern.purs.sample` | `Test.E2E.AsPattern`        | **as-patterns** (`name@pat`, regression for #4): a head as-pattern over a 3-deep cons (binds the whole value), an as-pattern on a constructor sub-binder, and a named scalar — all were silently dropped before the `Lower.Match` peel fix. Links `Data.{Eq,Ring,Semiring}` |
 | `GenSC.corefn.json`   | `GenSC.purs.sample`   | `Test.E2E.PreludeGenericShowCompare` | **`genericCompare` + `genericShow`**: folds the `Generic` rep to `Ordering` / a rendered `String` (`reflectSymbol` is already a value-level string in the synthesised `IsSymbol` dict; `intercalate` → `$rt.intercalate`). Links `Data.{Ord,Show}.Generic` / `Data.Symbol` / `Type.Proxy` / `Data.{Show,Ring,Semiring,Semigroup}` on top of the genericEq set |
 | `Data.Ord.Generic.corefn.json`   | (real Prelude) | `Test.E2E.PreludeGenericShowCompare` | `genericCompare` over the rep |
 | `Data.Show.Generic.corefn.json`  | (real Prelude) | `Test.E2E.PreludeGenericShowCompare` | `genericShow` + the `intercalate` foreign |

@@ -93,9 +93,12 @@ compile ops env occs rows0 = case Array.head rows of
   -- An *unguarded* all-irrefutable row matches everything unconditionally, so rows
   -- after it are unreachable and dropped. A guarded one is not a catch-all (its
   -- guards may all fail), so it never truncates the matrix.
-  rows = case Array.findIndex isCatchAll rows0 of
-    Just i -> Array.take (i + 1) rows0
-    Nothing -> rows0
+  -- Strip as-patterns first (bind each `name@` to its column's occurrence, leaving the
+  -- inner binder), so column selection and specialization never see a `NamedBinder`.
+  peeled = map (peelNamed occs) rows0
+  rows = case Array.findIndex isCatchAll peeled of
+    Just i -> Array.take (i + 1) peeled
+    Nothing -> peeled
   isCatchAll r = isUnguarded r && Array.all (not <<< isRefutable) r.pats
 
 -- | Every column of the first row is irrefutable: bind the variables and run the
@@ -304,6 +307,22 @@ defaultRow occ col row = case Array.index row.pats col of
   Just (C.VarBinder _ name) -> Just (row { pats = removeAt col row.pats, binds = Array.snoc row.binds (Tuple name occ) })
   Just (C.NullBinder _) -> Just (row { pats = removeAt col row.pats })
   _ -> Nothing
+
+-- | Strip as-patterns (`name@inner`) from a row's columns: bind each `name` to its
+-- | column's occurrence and replace the column with `inner` (recursively, for a nested
+-- | `a@b@…`). Run once at the top of `compile`, so the column readers (`columnKind` /
+-- | `ctorOf` / …) and the `specialize*` / `defaultRow` functions — which only understand
+-- | `Constructor` / `Literal` / `Var` / `Null` — never encounter a `NamedBinder` (which
+-- | they would otherwise drop, silently failing the alternative).
+peelNamed :: Array Atom -> Clause -> Clause
+peelNamed occs row
+  | Array.null row.pats = row
+  | otherwise = foldl peelCol row (Array.range 0 (Array.length row.pats - 1))
+      where
+      peelCol r i = case Array.index occs i, Array.index r.pats i of
+        Just occ, Just (C.NamedBinder _ name inner) ->
+          peelCol (r { pats = fromMaybe r.pats (Array.updateAt i inner r.pats), binds = Array.snoc r.binds (Tuple name occ) }) i
+        _, _ -> r
 
 -- | The leftmost refutable column of a row, or `Nothing` if all are irrefutable.
 selectColumn :: Array C.Binder -> Maybe Int

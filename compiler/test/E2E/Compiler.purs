@@ -48,6 +48,7 @@ import Test.E2E.Counter as Counter
 import Test.E2E.HostEff as HostEff
 import Test.E2E.IntConv as IntConv
 import Test.E2E.FibAnd as FibAnd
+import Test.E2E.AsPattern as AsPattern
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -95,3 +96,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   HostEff.spec
   IntConv.spec
   FibAnd.spec
+  AsPattern.spec
