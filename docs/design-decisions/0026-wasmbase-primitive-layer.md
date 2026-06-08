@@ -12,6 +12,33 @@
 > Wherever this record says WasmBase HOFs must avoid the `where`-worker idiom, read it as
 > "ADR 0027 handles it".
 
+> **Distribution decided (2026-06-08):** WasmBase ships as a **normal published spago package
+> `wasm-base`** (module namespace `Wasm.*`), *not* compiler-injected like `Prim`. A wasm-backend
+> project does `spago install wasm-base` (lists it in `dependencies`), so it lands in `.spago`
+> and `purs` resolves `import Wasm.Array` like any package. The package **carries JS foreigns**
+> for its primitives, so a `wasm-base`-using project also compiles + runs on stock `purs` /
+> `purs-backend-es` (it is *not* locked to this backend) — develop/test with ordinary tooling,
+> deploy to wasm. On the wasm backend the `Wasm.*` foreigns resolve to **intrinsics** (the JS
+> foreigns are ignored), per the existing provider ladder. **Version coupling:** the set of
+> `Wasm.*` names the backend recognizes as intrinsics *is* the ABI contract; `wasm-base@v` must
+> stay within what `backend@v` recognizes (an unrecognized primitive degrades to the slow
+> JS-fallback path on wasm). So `wasm-base` and the backend **co-evolve** — `wasm-base`'s SemVer
+> tracks the backend's recognized primitive set. This concretizes axis 2 below: the ABI coupling
+> is concentrated in one published package + the backend's intrinsic table, not scattered per
+> library.
+
+> **Enforcement refined (2026-06-09):** the coupling is enforced by a **capability check**, not
+> a version-equality lock — because while `wasm-base` is **intrinsic-only** it exposes *no*
+> GC-type ABI (its `Wasm.*` foreigns are just names that map to intrinsics). `bin` verifies that
+> every `Wasm.*` foreign a program uses resolves to a known intrinsic in *this* backend and errors
+> clearly otherwise ("backend does not provide `Wasm.X.y`; your `wasm-base` is newer than this
+> backend supports"), so a too-new `wasm-base` fails loudly instead of silently degrading to the
+> JS-foreign path on wasm. This is version-independent and matches the intrinsic-only reality. A
+> **strict version lock** (`major.minor` match, read from the `wasm-base-X.Y.Z` source path)
+> becomes necessary only once `wasm-base` ships **hand-written `.wat`** for some primitives — that
+> `.wat` talks the backend's GC types (`$Vals`/`$Bytes`/…) directly, which *is* the axis-2 ABI and
+> demands lockstep. (`wasm-base` still declares a `version` for publishing.)
+
 ## Context
 
 Three threads converge on one missing layer.
