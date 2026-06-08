@@ -16,6 +16,8 @@ module PureScript.Backend.Wasm.Codegen.Imports
   , strCmpHelperName
   , strConcatHelperName
   , arrayConcatHelperName
+  , arrayNewHelperName
+  , arraySetHelperName
   , intModHelperName
   , intDivHelperName
   , intDegreeHelperName
@@ -58,6 +60,10 @@ importRuntime ctx = do
   imp strCmpHelperName "strCmp" [ B.eqref, B.eqref ] B.i32
   imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
   imp arrayConcatHelperName "arrayConcat" [ B.eqref, B.eqref ] B.eqref
+  -- `Wasm.Array` build primitives (WasmBase, ADR 0026): `arrayNew n` allocates; `arraySet`
+  -- writes in place and returns nothing (the intrinsic threads the array back, `Codegen.Prim`).
+  imp arrayNewHelperName "arrayNew" [ B.i32 ] B.eqref
+  imp arraySetHelperName "arraySet" [ B.eqref, B.i32, B.eqref ] B.none
   imp intModHelperName "intMod" [ B.i32, B.i32 ] B.i32
   imp intDivHelperName "intDiv" [ B.i32, B.i32 ] B.i32
   imp intDegreeHelperName "intDegree" [ B.i32 ] B.i32
@@ -117,6 +123,12 @@ strConcatHelperName = "$rt.strConcat"
 -- | The shared array concatenation helper.
 arrayConcatHelperName :: String
 arrayConcatHelperName = "$rt.arrayConcat"
+
+arrayNewHelperName :: String
+arrayNewHelperName = "$rt.arrayNew"
+
+arraySetHelperName :: String
+arraySetHelperName = "$rt.arraySet"
 
 -- | The shared Euclidean `Int` division/remainder/degree helpers.
 intModHelperName :: String

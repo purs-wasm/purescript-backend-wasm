@@ -4,6 +4,14 @@
 - Date: 2026-06-08
 - Supersedes: [0012](0012-ulib-curated-package-ffi.md) (its hand-written-`.wat` mechanism and provider ladder; `ulib`'s curated-core intent carries forward in PureScript form)
 
+> **Update (2026-06-08):** [ADR 0027](0027-specialize-after-inlining.md) (post-inline
+> specialization) has landed on `main`. It makes the `where`-worker HOF idiom specialize, so
+> the "flat-authoring discipline" this record floated (writing WasmBase HOFs in a
+> forwarder-free shape so they specialize) is **no longer needed** — WasmBase HOFs can be
+> written as natural PureScript (`where` workers and all) and still have their closures fused.
+> Wherever this record says WasmBase HOFs must avoid the `where`-worker idiom, read it as
+> "ADR 0027 handles it".
+
 ## Context
 
 Three threads converge on one missing layer.

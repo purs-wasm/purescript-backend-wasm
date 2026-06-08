@@ -69,6 +69,9 @@ primOperandReps = case _ of
   NumEq -> [ F64, F64 ]
   -- Array a -> Int -> a: the array is `eqref`, the index `i32`
   ArrayIndex -> [ Boxed, I32 ]
+  -- Wasm.Array build primitives: lengths / indices are unboxed i32, arrays / values boxed
+  ArrayNew -> [ I32 ]
+  ArraySet -> [ Boxed, I32, Boxed ]
   -- unsafeCompareImpl lt eq gt x y: the selected values are boxed, the operands typed
   OrdInt -> [ Boxed, Boxed, Boxed, I32, I32 ]
   OrdNumber -> [ Boxed, Boxed, Boxed, F64, F64 ]

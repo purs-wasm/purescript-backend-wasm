@@ -17,7 +17,7 @@ import Data.Array as Array
 import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayConcatHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayConcatHelperName, arrayNewHelperName, arraySetHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
 import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtom, genAtomAs, strBytes, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), Rep(..))
@@ -108,6 +108,20 @@ genPrim ctx intr args = case intr, args of
     arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refVals
     idx <- intArg i
     B.arrayGet ctx.mod arr idx B.eqref false
+  -- `Wasm.Array.unsafeNew n`: allocate a length-`n` `$Vals` (elements null until filled).
+  ArrayNew, [ n ] -> do
+    len <- intArg n
+    B.call ctx.mod arrayNewHelperName [ len ] B.eqref
+  -- `Wasm.Array.unsafeSet arr i v`: write `v` at `i` (mutating in place), then return `arr`,
+  -- so the builder loop threads the array through (keeping the write live and ordered). The
+  -- array operand is a local atom, so re-reading it for the block result is just a `local.get`.
+  ArraySet, [ a, i, v ] -> do
+    arr <- genAtomAs ctx Boxed a
+    idx <- intArg i
+    val <- genAtomAs ctx Boxed v
+    setE <- B.call ctx.mod arraySetHelperName [ arr, idx, val ] B.none
+    arrAgain <- genAtomAs ctx Boxed a
+    B.block ctx.mod [ setE, arrAgain ] B.eqref
   -- Data.Bounded constants as raw values (boxed by the binding if needed).
   -- The Int min cannot be written as a literal (out of `Int` range), so build it.
   TopInt, [] -> B.i32Const ctx.mod 2147483647

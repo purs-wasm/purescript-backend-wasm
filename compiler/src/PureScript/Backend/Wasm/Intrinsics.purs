@@ -63,6 +63,15 @@ data Intrinsic
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
   | ArrayConcat -- Array a -> Array a -> Array a (`Data.Semigroup` `<>`: allocate + copy both)
+  -- | `Wasm.Array` (WasmBase, ADR 0026) first-order array-build primitives, so higher-order
+  -- | array combinators (`map`/`foldl`/…) can be written in PureScript over them and thus
+  -- | *specialize* (ADR 0027), unlike the foreign `ulib` HOFs. `ArrayNew n` allocates a
+  -- | length-`n` array (elements null until filled); `ArraySet arr i v` writes `v` at `i`
+  -- | (mutating the wasm array in place) and **returns `arr`**, so the result is threaded
+  -- | through the builder loop — keeping the write live (not DCE'd) and ordered by the data
+  -- | dependency, without needing an effect.
+  | ArrayNew -- Int -> Array a
+  | ArraySet -- Array a -> Int -> a -> Array a (writes, returns the array)
   -- | `Data.Bounded`'s `top` / `bottom` for `Int` / `Char` / `Number`: nullary
   -- | constant values (the foreign is a bare value, not a function — arity 0).
   | TopInt -- maxBound Int (`i32.const 2147483647`)
@@ -243,6 +252,12 @@ qualifiedIntrinsic = case _ of
   "Data.Array.unsafeIndexImpl" -> Just (Tuple ArrayIndex 2)
   -- library array/foldable FFIs implemented natively in the runtime (ulib batch 0)
   "Data.Array.length" -> Just (Tuple ArrayLength 1)
+  -- `Wasm.Array` (WasmBase, ADR 0026): first-order array primitives that PureScript-level
+  -- combinators build on (so they specialize). `length`/`unsafeIndex` reuse the existing ops.
+  "Wasm.Array.length" -> Just (Tuple ArrayLength 1)
+  "Wasm.Array.unsafeIndex" -> Just (Tuple ArrayIndex 2)
+  "Wasm.Array.unsafeNew" -> Just (Tuple ArrayNew 1)
+  "Wasm.Array.unsafeSet" -> Just (Tuple ArraySet 3)
   -- `reverse`/`sliceImpl`/`indexImpl`/`unconsImpl`, `Data.Foldable.fold{l,r}Array`,
   -- `Data.String.CodeUnits.{singleton,toCharArray,fromCharArray}`, `Data.Int.fromStringAsImpl`
   -- now live in `ulib/<Module>/foreign.wat` (ADR 0012), resolved as merged foreigns.

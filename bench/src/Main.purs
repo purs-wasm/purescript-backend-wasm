@@ -14,6 +14,7 @@ import Data.Array as Array
 import Data.Foldable (foldl)
 import Data.List (List(..), (:))
 import Data.List as List
+import Wasm.Array as WA
 
 -- 1. fib — tree recursion + Int arithmetic.
 fib :: Int -> Int
@@ -109,3 +110,14 @@ mapFoldArray iters = loop iters 0
   where
   base = map (\x -> x + 1) (Array.range 1 2000)
   loop k acc = if k == 0 then acc else loop (k - 1) (foldl (\a x -> a + x) acc base)
+
+-- 7c. mapFoldWasmArray — identical computation to `mapFoldArray`, but `map` / `foldl` are the
+--     WasmBase `Wasm.Array` HOFs: ordinary PureScript over first-order array primitives, so
+--     the closures **specialize** (ADR 0026 + 0027) into a direct loop — no per-element
+--     `call_ref`. The contrast with `mapFoldArray` (foreign `ulib` HOFs) isolates the win
+--     from moving the higher-order layer out of foreign `.wat` and into PureScript.
+mapFoldWasmArray :: Int -> Int
+mapFoldWasmArray iters = loop iters 0
+  where
+  base = WA.map (\x -> x + 1) (Array.range 1 2000)
+  loop k acc = if k == 0 then acc else loop (k - 1) (WA.foldl (\a x -> a + x) acc base)
