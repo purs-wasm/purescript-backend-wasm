@@ -67,7 +67,7 @@ optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff 
 -- | trace; when `Nothing` the trace stays empty and costs nothing.
 runOpt :: Boolean -> Set String -> Map String Int -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String }
 runOpt dictElim effectfulForeigns effArities traceTarget modules =
-  if dictElim then { modules: result.done, trace: result.trace }
+  if dictElim then { modules: finalized, trace: result.trace <> snap "after post-inline specialization" finalized }
   else { modules: lifted, trace: snap "initial (translated + lifted)" lifted }
   where
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
@@ -91,6 +91,21 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- cannot compound — a finalized module is never re-inlined — which is what made the old
   -- N-round whole-program loop blow up on transformer-heavy code.
   result = Array.foldl step { done: [], trace: snap "initial (specialized)" specialized } ordered
+
+  -- Post-inline specialization (ADR 0027). The pre-inline `specializeProgram` above misses
+  -- the `where`-worker idiom: `foo f = … go … where go … = … f …` lambda-lifts to a
+  -- *forwarder* `foo` (passes `f`, never applies it — not a static-arg candidate) and a
+  -- *worker* `go$liftN` (applies `f`, but its call sites only ever get the forwarded
+  -- variable, never a literal lambda). The per-module `localOpt` then inlines the forwarder,
+  -- so the lambda finally lands at the worker's call site — where the (unchanged) specializer
+  -- can fuse it. A second `specializeProgram` over the optimized program catches these; a
+  -- β/reduce-only simplify (empty inline set, exactly as `localOpt`'s second simplify) then
+  -- collapses the `(\… -> …)(…)` redexes the static-argument substitution leaves. This is a
+  -- single bounded pass (specialize + reduce, no re-inlining), not a fixed-point loop, so it
+  -- cannot reintroduce the whole-program N-round compounding ADR 0021 removed.
+  respecialized = specializeProgram result.done
+  reCtx = buildContext effectfulForeigns respecialized
+  finalized = map (\m -> DictElim.simplifyModule (reCtx { inline = Map.empty }) m) respecialized
 
   step acc m =
     let

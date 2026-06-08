@@ -7,8 +7,11 @@ import Prelude
 
 import Data.Array as Array
 import Data.Either (Either(..))
+import Data.Map as Map
 import Data.Maybe (Maybe(..))
+import Data.Set as Set
 import Data.String (Pattern(..), contains)
+import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translModule)
@@ -36,6 +39,25 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize" do
         case Array.find (declIs "use") m.decls of
           Just (M.NonRec _ _ (M.Abs _ body)) -> hasSpecCall body `shouldEqual` true
           _ -> fail "expected use to remain a function"
+
+  -- ADR 0027: the `where`-worker idiom defeats the pre-inline specialization pass.
+  it "specializes a forwarder / where-worker idiom after inlining (optimizeProgram)" do
+    -- worker g x = g (worker g x)   -- the applier: static `g`, self-recursive
+    -- foo g x    = worker g x       -- a forwarder: passes `g`, never applies it
+    -- use z      = foo (\y -> y) z  -- the lambda reaches only the forwarder
+    -- Pre-inline specialization cannot fire (foo is not a static-arg candidate; worker's
+    -- call sites get the forwarded *variable*, not a lambda). Only after `optimizeProgram`
+    -- inlines `foo` does the lambda land at `worker`'s call site, where the post-inline
+    -- specialization pass fuses it — so a `worker$spec` must appear.
+    let
+      worker = def "worker" (lam "g" (lam "x" (appE (lv "g") (appE (appE (qv "worker") (lv "g")) (lv "x")))))
+      foo = def "foo" (lam "g" (lam "x" (appE (appE (qv "worker") (lv "g")) (lv "x"))))
+      use = def "use" (lam "z" (appE (appE (qv "foo") (lam "y" (lv "y"))) (lv "z")))
+      out = optimizeProgram true Set.empty Map.empty [ moduleNamed [ "T" ] [ worker, foo, use ] ]
+    case Array.find (\m -> m.name == [ "T" ]) out of
+      Nothing -> fail "expected module T"
+      Just m ->
+        Array.any (contains (Pattern "worker$spec")) (m.decls >>= declNames) `shouldEqual` true
 
 declNames :: M.Bind -> Array String
 declNames = case _ of
