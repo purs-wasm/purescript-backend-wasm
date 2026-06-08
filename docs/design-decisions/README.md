@@ -59,7 +59,7 @@ language and are kept out of version control.)
 | 0009 | [Build and linking model: multi-module input, single-wasm output](0009-build-and-linking-model.md) | Accepted |
 | 0010 | [The shared runtime as a separate, hand-written wasm module](0010-runtime-as-a-separate-wasm-module.md) | Accepted |
 | 0011 | [Packaging, platform targets, and host imports](0011-packaging-platform-and-host-imports.md) | Accepted |
-| 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Accepted |
+| 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Superseded by 0026 |
 | 0013 | [Unboxing `Int` and `Number`](0013-int-number-unboxing.md) | Accepted |
 | 0014 | [User FFI: a foreign-provider ladder and the JS marshalling boundary](0014-user-ffi-resolution-and-marshalling.md) | Accepted |
 | 0015 | [Effect reflection: collapsing function-represented monads to straight-line code](0015-effect-native-support.md) | Accepted |
@@ -73,6 +73,7 @@ language and are kept out of version control.)
 | 0023 | [Polymorphic record update via runtime copy-and-set](0023-polymorphic-record-update.md) | Accepted |
 | 0024 | [Export-boundary arity reconciliation, and the transparent-types-only rule](0024-export-boundary-arity-and-transparent-types.md) | Accepted |
 | 0025 | [Multi-platform packaging (`--platform`) and the fallback-JS toggle](0025-multi-platform-packaging.md) | Proposed |
+| 0026 | [WasmBase: a stable primitive layer between `Prim` and `Prelude`](0026-wasmbase-primitive-layer.md) | Proposed |
 
 ## Scope
 

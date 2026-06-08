@@ -1,7 +1,14 @@
 # 0012. A `ulib` directory for curated-package wasm FFI
 
-- Status: ~~Proposed~~ **Accepted** _(2026-06-07: promoted — implemented (`Ulib.parseUlibSigs` + `ulib/` + the provider ladder). Per-module migration into `ulib` is ongoing.)_
+- Status: ~~Proposed~~ ~~**Accepted**~~ **Superseded by [0026](0026-wasmbase-primitive-layer.md)** _(2026-06-07: promoted — implemented (`Ulib.parseUlibSigs` + `ulib/` + the provider ladder). Per-module migration into `ulib` is ongoing.)_
 - Date: 2026-06-02
+
+> **Superseded by [0026](0026-wasmbase-primitive-layer.md) (2026-06-08).** WasmBase moves the
+> first-order primitives into a compiler-owned layer and reimplements `ulib`'s
+> higher-order/library code as PureScript over it. `ulib` persists but changes *form*
+> (hand-written `.wat` → WasmBase-based PureScript), and the provider ladder changes (a
+> per-module `.wat` is no longer sought in `ulib`; raw wat survives only inside WasmBase).
+> The curated-core *intent* of this record carries forward; its wat-FFI *mechanism* does not.
 
 ## Context
 
