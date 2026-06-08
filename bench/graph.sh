@@ -9,8 +9,14 @@ cd "$here/.."
 
 # 1. PureScript -> CoreFn + the stock JS backend output (js-naive, in ./output)
 spago build -p bench --output bench/output
-# 2. the optimized JS backend (js-es)
+# 2. the optimized JS backend (js-es). purs-backend-es optimizes corefn → JS but does
+#    not copy FFI modules, so mirror the foreign.js files its output still imports
+#    (e.g. `Data.Functor`'s `arrayMap`, now that the benches use the package set) from
+#    the spago output. Inlined foreigns (Int arithmetic under `--int-tags`) need none.
 purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es --int-tags
+( cd bench/output && find . -name foreign.js ) | while read -r f; do
+  f="${f#./}"; mkdir -p "bench/output-js-es/$(dirname "$f")"; cp "bench/output/$f" "bench/output-js-es/$f"
+done
 # 3. our wasm backend
 node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main
 

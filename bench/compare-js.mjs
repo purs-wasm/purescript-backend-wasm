@@ -72,6 +72,7 @@ const benches = [
   { name: "bintreeDfs", size: 17 },
   { name: "bintreeBfs", size: 12 },
   { name: "mapFold", size: 500 },
+  { name: "mapFoldArray", size: 500 },
 ];
 
 console.log(`wasm: ${wasmBytes.length} bytes   node: ${process.version}\n`);

@@ -3,3 +3,8 @@ package:
   dependencies:
     - prelude
     - effect
+    - lists
+    - arrays
+    - foldable-traversable
+    - functions
+    - partial
