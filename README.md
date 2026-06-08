@@ -30,9 +30,12 @@ PureScript behaves identically; the wasm-specific points worth knowing:
   bind chain is not tail-call-optimized) runs flat here. See
   [Optimizations](./docs/optimizations.md#worked-example-the-effect-monad).
 - **Manual uncurrying rarely pays.** `Fn` / `EffectFn` lower to the *same* arity-1 closures
-  as curried code, and the optimizer (higher-order specialization, inlining, tail calls)
-  makes idiomatic curried code fast — so the JS habit of hand-uncurrying hot paths (e.g.
-  Halogen VDom) is usually unnecessary. See [Optimizations](./docs/optimizations.md).
+  as curried code (`mkFnN` is the identity, `runFnN` is the saturated apply), so curried and
+  uncurried application are the *same* code on wasm. The [curry benchmark](#benchmarks)
+  confirms it — curried/uncurried time is ~1.0 on wasm regardless of size, while
+  `purs-backend-es` pays ~3× for curried application through a dynamic boundary. So the JS
+  habit of hand-uncurrying hot paths (e.g. Halogen VDom) is unnecessary here. See
+  [Optimizations](./docs/optimizations.md).
 - **Values are wasm-GC heap objects**, managed by the host garbage collector — no linear
   memory, no manual allocation. `Boolean` is an unboxed `i31`; `Int` / `Number` unbox to
   `i32` / `f64` where boxing is unnecessary. See [Runtime representation](./docs/runtime-representation.md).
@@ -95,17 +98,28 @@ is better):
 - **JS (purs backend)** — `purs`'s stock JavaScript output
 - **JS (with [purs-backend-es](https://github.com/aristanetworks/purescript-backend-optimizer))** — the optimizing JS backend
 
-The wasm build is fastest on every benchmark, and completes the deep-recursion
-`bintreeBfs` where both JS backends overflow the call stack (JavaScript has no
-tail-call elimination). The margin is **widest on the allocation- and
-pattern-match-heavy benchmarks** (`bintreeDfs` / `bintreeBfs`, ~5–8×) rather than the
-arithmetic ones (`fib` ~1.6×): much of the win comes from the compact Wasm-GC value
-representation — tagged structs reclaimed by the host GC, versus JavaScript object
-allocation — as well as from the arithmetic unboxing. Higher-order code (`mapFold`,
-which maps and left-folds a **polymorphic** list with closures) also wins: the
-closures are specialized away into direct, non-allocating loops — even though a
-polymorphic list element stays boxed (so this is a fair fight, with no
-monomorphization advantage over JS's native numbers).
+The wasm build is fastest on the **algorithmic** benchmarks, and completes the
+deep-recursion `bintreeBfs` where both JS backends overflow the call stack (JavaScript
+has no tail-call elimination). The margin is **widest on the allocation- and
+recursion-heavy benchmarks** (`sumLoop` ~12×, `nqueens` / `bintreeDfs` ~2.5×) and
+narrowest on the arithmetic ones (`fib` ~1.9×): much of the win comes from the compact
+Wasm-GC value representation — tagged structs reclaimed by the host GC, versus JavaScript
+object allocation — as well as from the arithmetic unboxing.
+
+The **library higher-order benchmarks are the current frontier**, not yet a win:
+`mapFold` maps and left-folds a `Data.List` with *pure-PureScript* HOFs (the closures
+specialize away into a direct loop), and `mapFoldArray` does the same over a `Data.Array`
+through the *foreign* `ulib` HOFs. Both still trail `purs-backend-es` — the list's
+cons-cell allocation, and (for the foreign array HOFs) closures the optimizer cannot
+specialize *into* a foreign plus per-element boxing, are costs V8's allocator absorbs more
+cheaply. Closing this is tracked in issue #5 (foreign HOF specialization).
+
+The **curry-vs-uncurry** graph isolates a property the wasm backend gets *for free*:
+`Fn` / `EffectFn` lower to the same closures as curried code, so curried and uncurried
+application are the same code (curried/uncurried time ~1.0 at every size). The same
+PureScript on `purs-backend-es` pays ~3× for curried application across a dynamic boundary
+(the stock `purs` backend's curried closures, by contrast, V8's escape analysis frees) —
+so on wasm the JS habit of hand-uncurrying hot paths is genuinely unnecessary.
 
 These benchmarks measure **steady-state throughput after warmup**: both the JS and
 the Wasm code are run long enough for V8 to tier up hot code before timing, so the
@@ -120,7 +134,7 @@ stack-overflow behaviour are the signal). Reproduce locally with `cd bench && np
 | ![qsort](https://katsujukou.github.io/purescript-backend-wasm/qsort.png) | ![nqueens](https://katsujukou.github.io/purescript-backend-wasm/nqueens.png) |
 | ![bintreeDfs](https://katsujukou.github.io/purescript-backend-wasm/bintreeDfs.png) | ![bintreeBfs](https://katsujukou.github.io/purescript-backend-wasm/bintreeBfs.png) |
 | ![mapFold](https://katsujukou.github.io/purescript-backend-wasm/mapFold.png) | ![countState](https://katsujukou.github.io/purescript-backend-wasm/count-state.png) |
-| ![countEffect](https://katsujukou.github.io/purescript-backend-wasm/count-effect.png) | |
+| ![countEffect](https://katsujukou.github.io/purescript-backend-wasm/count-effect.png) | ![curry](https://katsujukou.github.io/purescript-backend-wasm/curry.png) |
 
 ## Example
 
