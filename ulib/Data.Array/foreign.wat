@@ -78,3 +78,30 @@
       (call $callClo1
         (call $callClo1 (local.get $next) (array.get $Vals (local.get $va) (i32.const 0)))
         (local.get $rest)))))
+
+;; Data.Array.rangeImpl :: Int -> Int -> Array Int  (inclusive; ascending when
+;; start <= end, otherwise descending — matching the JS `function (start, end)`).
+;; Each element is a freshly boxed `$Int`.
+(func (export "rangeImpl") (param $start i32) (param $end i32) (result eqref)
+  (local $n i32)
+  (local $step i32)
+  (local $i i32)
+  (local $v i32)
+  (local $out (ref $Vals))
+  (if (i32.le_s (local.get $start) (local.get $end))
+    (then
+      (local.set $n (i32.add (i32.sub (local.get $end) (local.get $start)) (i32.const 1)))
+      (local.set $step (i32.const 1)))
+    (else
+      (local.set $n (i32.add (i32.sub (local.get $start) (local.get $end)) (i32.const 1)))
+      (local.set $step (i32.const -1))))
+  (local.set $out (array.new $Vals (ref.null none) (local.get $n)))
+  (local.set $v (local.get $start))
+  (block $done
+    (loop $loop
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (array.set $Vals (local.get $out) (local.get $i) (struct.new $Int (local.get $v)))
+      (local.set $v (i32.add (local.get $v) (local.get $step)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+  (local.get $out))

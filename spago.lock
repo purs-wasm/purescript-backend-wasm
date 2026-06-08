@@ -5,7 +5,10 @@
         "path": "bench",
         "core": {
           "dependencies": [
+            "arrays",
             "effect",
+            "foldable-traversable",
+            "lists",
             "prelude"
           ]
         },

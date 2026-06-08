@@ -1,15 +1,19 @@
 -- | Benchmark programs for the wasm backend. Each entry is an `Int -> Int` (the
--- | i32 export ABI) taking a workload size and returning a checksum / result, so
--- | the runner can both time it and sanity-check correctness. All are
--- | self-contained (user-defined ADTs + `Prelude` only — no external packages), so
--- | they run on the current backend and form a stable baseline to measure
--- | optimization against.
+-- | i32 export ABI) taking a workload size and returning a checksum / result, so the
+-- | runner can both time it and sanity-check correctness.
+-- |
+-- | These use the **package set** (`Data.List` / `Data.Array`) rather than hand-rolled
+-- | ADTs — idiomatic PureScript, which also exercises the curated `ulib` foreigns
+-- | (e.g. `Data.Array`'s `map` / `foldl`) end-to-end. Only `fib` / `sumLoop` stay pure
+-- | `Int`, and the binary tree is a local ADT (the package set has no tree type).
 module Bench.Main where
 
 import Prelude
 
--- A self-contained linked list (no `arrays` / `lists` package needed).
-data IntList = Nil | Cons Int IntList
+import Data.Array as Array
+import Data.Foldable (foldl)
+import Data.List (List(..), (:))
+import Data.List as List
 
 -- 1. fib — tree recursion + Int arithmetic.
 fib :: Int -> Int
@@ -22,37 +26,28 @@ sumLoop n = go 0 1
   where
   go acc i = if i > n then acc else go (acc + i * i) (i + 1)
 
--- 3. quicksort — list ADT: predicate closures, `Ord` comparisons, heavy Cons
---    allocation. Returns 1 iff the result is sorted (forces full evaluation).
-append :: IntList -> IntList -> IntList
-append Nil ys = ys
-append (Cons x xs) ys = Cons x (append xs ys)
-
-filterBy :: (Int -> Boolean) -> IntList -> IntList
-filterBy pred = case _ of
-  Nil -> Nil
-  Cons x xs -> if pred x then Cons x (filterBy pred xs) else filterBy pred xs
-
-quicksort :: IntList -> IntList
+-- 3. quicksort — `Data.List`: `filter` predicate closures, `Ord` comparisons, `<>`
+--    append, heavy Cons allocation. Returns 1 iff the result is sorted.
+quicksort :: List Int -> List Int
 quicksort = case _ of
   Nil -> Nil
-  Cons p rest -> append (quicksort (filterBy (\x -> x <= p) rest)) (Cons p (quicksort (filterBy (\x -> x > p) rest)))
+  p : rest ->
+    quicksort (List.filter (_ <= p) rest) <> (p : quicksort (List.filter (_ > p) rest))
 
-buildList :: Int -> Int -> IntList
-buildList k s = if k == 0 then Nil else Cons s (buildList (k - 1) (s * 1103515245 + 12345))
+buildList :: Int -> Int -> List Int
+buildList k s = if k == 0 then Nil else s : buildList (k - 1) (s * 1103515245 + 12345)
 
-isSorted :: IntList -> Boolean
+isSorted :: List Int -> Boolean
 isSorted = case _ of
   Nil -> true
-  Cons _ Nil -> true
-  Cons x (Cons y rest) -> if x <= y then isSorted (Cons y rest) else false
+  _ : Nil -> true
+  x : y : rest -> if x <= y then isSorted (y : rest) else false
 
 qsort :: Int -> Int
 qsort n = if isSorted (quicksort (buildList n 1)) then 1 else 0
 
--- 4. N-Queens — backtracking; returns the number of solutions on an n×n board.
--- (`placeAt` keeps the per-column `if` in its own tail position — a style choice;
--- the backend handles a `case` / `if` in argument position too.)
+-- 4. N-Queens — backtracking; the placed columns are a `Data.List`. Returns the
+--    number of solutions on an n×n board.
 nqueens :: Int -> Int
 nqueens n = go Nil 0
   where
@@ -61,16 +56,16 @@ nqueens n = go Nil 0
     if col == n then 0
     else placeAt col placed row + tryCols (col + 1) placed row
   placeAt col placed row =
-    if safe col placed 1 then go (Cons col placed) (row + 1) else 0
+    if safe col placed 1 then go (col : placed) (row + 1) else 0
   safe col placed dist = case placed of
     Nil -> true
-    Cons c rest ->
+    c : rest ->
       if c == col || c == col - dist || c == col + dist then false
       else safe col rest (dist + 1)
 
--- 5/6. Binary tree traversals.
+-- 5/6. Binary tree traversals. The tree is a local ADT (no tree in the package set);
+--      the BFS queue is a `Data.List`.
 data Tree = Leaf | Node Int Tree Tree
-data TreeQ = QNil | QCons Tree TreeQ
 
 mkTree :: Int -> Int -> Tree
 mkTree depth v = if depth == 0 then Leaf else Node v (mkTree (depth - 1) (v + v)) (mkTree (depth - 1) (v + v + 1))
@@ -84,50 +79,33 @@ dfsSum = case _ of
 bintreeDfs :: Int -> Int
 bintreeDfs depth = dfsSum (mkTree depth 1)
 
-appendQ :: TreeQ -> TreeQ -> TreeQ
-appendQ QNil ys = ys
-appendQ (QCons x xs) ys = QCons x (appendQ xs ys)
-
-bfsSum :: TreeQ -> Int
+bfsSum :: List Tree -> Int
 bfsSum = case _ of
-  QNil -> 0
-  QCons t rest -> case t of
+  Nil -> 0
+  t : rest -> case t of
     Leaf -> bfsSum rest
-    Node v l r -> v + bfsSum (appendQ rest (QCons l (QCons r QNil)))
+    Node v l r -> v + bfsSum (rest <> (l : r : Nil))
 
 -- breadth-first traversal (list-queue) of a balanced tree of the given depth.
 bintreeBfs :: Int -> Int
-bintreeBfs depth = bfsSum (QCons (mkTree depth 1) QNil)
+bintreeBfs depth = bfsSum (mkTree depth 1 : Nil)
 
--- 7. mapFold — higher-order list processing over a **polymorphic** list `List a`.
--- `mapList` / `foldlList` are the standard map / left-fold shape: a recursive
--- function with a *static* function argument (passed unchanged through the
--- recursion). Applying them to closures stresses closure allocation and indirect
--- (`call_ref`) application — the target of higher-order specialization. Because
--- `List a` is polymorphic, the element field is a boxed `eqref`, not an unboxed
--- `i32` (front-B field unboxing applies only to *concrete*-scalar fields) — which is
--- the realistic, fair case: JavaScript stores the number natively in the cell too.
-data List a = LNil | LCons a (List a)
-
-mapList :: forall a b. (a -> b) -> List a -> List b
-mapList f = case _ of
-  LNil -> LNil
-  LCons x xs -> LCons (f x) (mapList f xs)
-
-foldlList :: forall a b. (b -> a -> b) -> b -> List a -> b
-foldlList f acc = case _ of
-  LNil -> acc
-  LCons x xs -> foldlList f (f acc x) xs
-
-range :: Int -> List Int
-range k = if k == 0 then LNil else LCons k (range (k - 1))
-
--- `iters` left-folds (with a closure) a fixed list that was built and mapped (with
--- a closure) once. `mapList` is not tail-recursive, so the list is kept moderate;
--- the iteration is the tail-recursive `loop`, making the per-element closure
--- application — not stack depth or allocation — the thing being measured.
+-- 7a. mapFold — higher-order processing over a `Data.List`. `map` / `foldl` here are
+--     **pure-PureScript** class methods (`functorList` / `foldableList`), so the optimizer
+--     can specialize the closures away into a direct, non-allocating loop.
 mapFold :: Int -> Int
 mapFold iters = loop iters 0
   where
-  base = mapList (\x -> x + 1) (range 2000)
-  loop k acc = if k == 0 then acc else loop (k - 1) (foldlList (\a x -> a + x) acc base)
+  base = map (\x -> x + 1) (List.range 1 2000)
+  loop k acc = if k == 0 then acc else loop (k - 1) (foldl (\a x -> a + x) acc base)
+
+-- 7b. mapFoldArray — the same computation over a `Data.Array`. Here `map` (the `ulib`
+--     `arrayMap` foreign) and `foldl` (`foldlArray`) are **foreign** higher-order
+--     functions: the optimizer cannot specialize the closure *into* a foreign, so each
+--     element is applied via `call_ref` on a boxed `eqref`. The contrast with `mapFold`
+--     measures the cost of foreign-backed library HOFs (a current optimization frontier).
+mapFoldArray :: Int -> Int
+mapFoldArray iters = loop iters 0
+  where
+  base = map (\x -> x + 1) (Array.range 1 2000)
+  loop k acc = if k == 0 then acc else loop (k - 1) (foldl (\a x -> a + x) acc base)
