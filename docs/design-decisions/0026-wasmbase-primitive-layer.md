@@ -70,10 +70,11 @@ operations and representation contract that PureScript cannot express on this ba
 …) are reimplemented in pure PureScript **on top of WasmBase**, so they specialize and are
 ABI-decoupled.
 
-The name is `WasmBase`, or equivalently a top-level `Wasm.*` namespace (`Wasm.Array`,
-`Wasm.String`, … — cf. ReScript's `Js.*` for reaching the host platform). It deliberately
-does **not** live under `Prim`: `Prim` is the compiler's reserved *type-level* namespace,
-whereas WasmBase is *value-level* and must not pollute it.
+Naming (decided 2026-06-08): the *layer* is **WasmBase** (this record's name); the *module
+namespace* is **`Wasm.*`** (`Wasm.Array`, `Wasm.String`, … — short, cf. ReScript's `Js.*`
+for reaching the host platform). It deliberately does **not** live under `Prim`: `Prim` is
+the compiler's reserved *type-level* namespace, whereas WasmBase is *value-level* and must
+not pollute it.
 
 ```
 Prim          types only (compiler-provided)
@@ -243,3 +244,92 @@ requirement of this ADR.
   package set plugs into.
 - `Intrinsics.purs`, `runtime.wat`, `ulib/_header.wat` — the candidate primitive surface
   to be inventoried into WasmBase.
+
+## Appendix: primitive inventory (2026-06-08)
+
+The classification of the candidate surface (`Intrinsics.purs` `Intrinsic` /
+`foreignIntrinsic` / `qualifiedIntrinsic`, `runtime.wat` exports, `ulib/*/foreign.wat`).
+**Key finding:** most first-order primitives *already exist* in `runtime.wat`; they are
+simply not surfaced as PureScript-callable intrinsics. WasmBase is largely "promote existing
+runtime helpers to recognized intrinsics", not new implementation.
+
+Status legend — ✅ existing intrinsic · 🔌 present in `runtime.wat` but not exposed to PS
+(surface work) · ✂️ reshape to a first-order shape.
+
+### A. First-order primitives → WasmBase (provisional modules)
+
+**`Wasm.Array`** — `{unsafeNew, unsafeSet, unsafeIndex, length}` is sufficient to write
+`map`/`foldl`/`filter`/… in PureScript (`$Vals` is mutable; no `freeze` needed — fill, then
+return as `Array`).
+
+| primitive | intrinsic | runtime | arity | status |
+| --- | --- | --- | --- | --- |
+| `length :: Array a -> Int` | `ArrayLength` | `arrayLen` | 1 | ✅ |
+| `unsafeIndex :: Array a -> Int -> a` | `ArrayIndex` | `arrayGet` | 2 | ✅ |
+| `unsafeNew :: Int -> Array a` | — | `arrayNew` | 1 | 🔌 **key enabler** |
+| `unsafeSet :: Array a -> Int -> a -> Unit` | — | `arraySet` | 3 | 🔌 **key enabler** |
+| `concat :: Array a -> Array a -> Array a` | `ArrayConcat` | `arrayConcat` | 2 | ✅ (PS-able) |
+
+**`Wasm.String`** (UTF-8 bytes) — `{byteLength, byteAt, unsafeNew, unsafeSetByte}` is the
+build/read core.
+
+| primitive | intrinsic | runtime | arity | status |
+| --- | --- | --- | --- | --- |
+| `byteLength :: String -> Int` | `StrLen` | `strLen` | 1 | ✅ |
+| `byteAt :: String -> Int -> Int` | — | `strByteAt` | 2 | 🔌 |
+| `unsafeNew :: Int -> String` | — | `strNew` | 1 | 🔌 **key enabler** |
+| `unsafeSetByte :: String -> Int -> Int -> Unit` | — | `strSetByte` | 3 | 🔌 **key enabler** |
+| `concat`/`compare`/`eq` | `StrConcat`/`OrdString`/`StrEq` | `strConcat`/`strCmp`/`strEq` | 2 | ✅ (PS-able) |
+
+**`Wasm.Record`** (String-keyed; label ids interned by codegen) — all inherently primitive,
+keep: `unsafeGet`/`unsafeHas`/`unsafeSet`/`unsafeDelete` (✅ `UnsafeGet`/`Has`/`Set`/`Delete`
+↔ `proj`/`recHas`/`recSet`/`recDelete`) + `empty` (`recEmpty`).
+
+**`Wasm.Ref`** — `new`/`read`/`write` (✅ `RefNew`/`Read`/`Write` ↔ `refNew`/`refRead`/
+`refWrite`). `modify`/`newWithSelf` are excluded → PureScript (see B).
+
+**Scalars** (all ✅): `Wasm.Int` (add/sub/mul/div/mod/degree, eq, compare ✂️, toNumber,
+top/bottom, fromNumber ✂️); `Wasm.Number` (add/sub/mul/div, eq, compare ✂️, toInt,
+top/bottom = ±Inf); `Wasm.Char` (top/bottom, shares `Int` rep); `Wasm.Boolean`
+(and/or/not, eq, compare ✂️).
+
+### B. Move to PureScript (HOFs / closure-applying) → repositioned `ulib`
+
+| item | why | written in PS as |
+| --- | --- | --- |
+| `forE`/`foreachE`/`whileE`/`untilE` | take a body/cond closure | PS recursion over the primitives |
+| `Ref.modify`/`newWithSelf` | apply `f` | PS over `new`/`read`/`write` |
+| `arrayMap`/`foldlArray`/`foldrArray`/`arrayApply`/`arrayBind`/`eqArrayImpl`/`ordArrayImpl` | ulib HOFs | PS recursion over `Wasm.Array` (this is the #5 fix) |
+| `mkFnN`/`runFnN`/`mkEffectFnN`/`runEffectFnN` | closure-ABI bridge (here: identity + ordinary application) | PS over `unsafeCoerce` + application |
+| `_unsafePartial` | `f unit` | PS |
+| ulib first-order library fns (`reverse`/`slice`/`range`/`show*Impl`/`intercalate`/CodeUnits) | library code, not primitives | PS over `Wasm.Array`/`Wasm.String` |
+
+### C. Internal — not public WasmBase API
+
+- `boxInt`/`unboxInt`, `boxNum`/`unboxNum`, `boxBool`/`unboxBool` — the representation
+  contract itself, but emitted by codegen, never called from PS.
+- `applyClo` (`callClo1`) — the closure-call primitive codegen emits for ordinary
+  application; not PS-facing.
+- `IncrCtr`/`ReadCtr` — test-only (`Counter`). Excluded.
+
+### D. Work required (small) + reshapes
+
+- **Surface (🔌):** make `arrayNew`/`arraySet`, `strNew`/`strSetByte`/`strByteAt`
+  recognized intrinsics (new `Intrinsic` constructors + `genPrim` cases + a WasmBase PS
+  module of `foreign import`s). This alone unblocks writing the HOFs in PureScript.
+- **Reshape (✂️):**
+  - `Ord*` 5-operand `lt eq gt x y` → 2-operand `compare :: a -> a -> Int` (-1/0/1); the
+    `Ordering` selection moves to PureScript. Drops the "pass the three `Ordering` values"
+    encoding.
+  - `fromNumberImpl just nothing n` (applies `just`/`nothing` — effectively higher-order) →
+    a first-order primitive (return `{ ok, value }` or a sentinel); the `Maybe` wrapping
+    moves to PureScript.
+
+### E. Conclusion
+
+The minimal-complete first-order set is ≈ 6 groups (Array ×4, String ×4, Record ×5, Ref ×3,
+scalar families). Most already exist; the only real gap is exposing `arrayNew`/`arraySet`
+(and `strNew`/`strSetByte`/`strByteAt`). The current intrinsic table mixes these primitives
+with HOFs (the `forE` family, `Ref.modify`, the `Fn`/`EffectFn` families, `_unsafePartial`,
+the ulib HOFs) and reshape candidates (`Ord*`, `fromNumberImpl`); this inventory fixes that
+split.
