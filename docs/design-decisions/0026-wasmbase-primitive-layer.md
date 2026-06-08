@@ -39,6 +39,18 @@
 > `.wat` talks the backend's GC types (`$Vals`/`$Bytes`/…) directly, which *is* the axis-2 ABI and
 > demands lockstep. (`wasm-base` still declares a `version` for publishing.)
 
+> **Tooling constraint + interim placement (2026-06-09):** `spago publish` (1.0.4) refuses a
+> monorepo *subdir* package — "the registry does not support nested packages yet; only the root
+> package can be published" (verified by a gated pre-flight run; nothing was published). So the
+> "published `spago install wasm-base`" model needs `wasm-base` to be a **repository root** (its
+> own repo), not a subdir of this backend monorepo. **Decision: keep `wasm-base` as an in-repo
+> workspace package for now (unpublished)** — in-repo consumers (bench / examples / the eventual
+> repositioned `ulib`) depend on it via the workspace, and the capability check + JS-foreign
+> portability already work there. **Extract it to its own repo and publish later**, once the
+> intrinsic surface stabilizes (co-evolving the `Wasm.*` names with the backend is easier in one
+> repo while it churns). Only the *external* `spago install wasm-base` path waits on that
+> extraction (or on registry support for nested packages).
+
 ## Context
 
 Three threads converge on one missing layer.
