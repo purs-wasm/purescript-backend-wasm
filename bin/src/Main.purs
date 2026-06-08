@@ -8,7 +8,7 @@ import Data.Array as Array
 import Data.Either (Either(..), either)
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Foldable (for_)
-import Data.Maybe (Maybe(..), isNothing, maybe)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
 import Data.List.NonEmpty as NEL
 import Data.Map as Map
 import Data.Set (Set)
@@ -34,6 +34,7 @@ import Node.Cbor (decodeFirst)
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Compiler (compileModules, mirTrace, parseModule)
+import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic, qualifiedIntrinsic)
 import PureScript.Backend.Wasm.Externs (foreignSigs)
 import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
@@ -154,6 +155,33 @@ reachableClosure roots importMap = go (Set.fromFoldable (map printModname roots)
     in
       if Set.size seen' == Set.size seen then seen else go seen'
 
+-- | Capability check for `wasm-base` (ADR 0026): `Wasm.*` is `wasm-base`'s reserved namespace,
+-- | and its foreigns are meant to resolve to *this* backend's intrinsics (the JS foreigns it
+-- | bundles are for the JS backends only). A `Wasm.*` foreign this backend does not recognize
+-- | means the `wasm-base` is newer than the backend supports — fail with a clear message rather
+-- | than silently degrading to the JS-foreign / trap path on wasm.
+-- |
+-- | While `wasm-base` is intrinsic-only it exposes no GC-type ABI, so a name (capability) check
+-- | is the right, version-independent guard. A stricter version lock becomes necessary only once
+-- | `wasm-base` ships hand-written `.wat` (which talks the backend's GC types directly). See
+-- | ADR 0026.
+checkWasmBaseCompat :: forall r. Array { name :: ModuleName, foreignNames :: Array String | r } -> Either String Unit
+checkWasmBaseCompat modules = case Array.nub (modules >>= unsupported) of
+  [] -> Right unit
+  bad -> Left
+    ( Fmt.fmt
+        @"This purs-wasm backend ({backend}) does not provide {n} `Wasm.*` primitive(s): {names}. Your `wasm-base` is newer than this backend supports — install a `wasm-base` compatible with it."
+        { backend: Version.version, n: Array.length bad, names: Str.joinWith ", " bad }
+    )
+  where
+  -- only `Wasm.*` modules; other foreigns may legitimately resolve via ulib / JS-fallback
+  unsupported m
+    | Array.head m.name == Just "Wasm" = Array.filter (not <<< recognized m.name) (map (qualified m.name) m.foreignNames)
+    | otherwise = []
+  qualified modName fn = Str.joinWith "." modName <> "." <> fn
+  recognized modName qual = isJust (qualifiedIntrinsic qual) || isJust (foreignIntrinsic (lastSegment qual))
+  lastSegment q = fromMaybe q (Array.last (Str.split (Pattern ".") q))
+
 main :: FilePath -> Effect Unit
 main _cliRoot =
   parseArgs >>= case _ of
@@ -189,6 +217,8 @@ buildCmd args = do
     case parseModule source of
       Left err -> throwError (error (printModname mod <> ": " <> err))
       Right m -> pure m
+  -- Fail early on a `wasm-base` whose version is incompatible with this backend (ADR 0026).
+  either (throwError <<< error) pure (checkWasmBaseCompat modules)
   -- Each module's `externs.cbor` carries the top-level type information CoreFn
   -- erased; it drives type-directed lowering (front B). A module without readable
   -- or decodable externs is simply skipped — its constructors fall back to boxed.
