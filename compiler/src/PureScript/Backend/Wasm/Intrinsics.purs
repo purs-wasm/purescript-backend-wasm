@@ -258,6 +258,12 @@ qualifiedIntrinsic = case _ of
   "Wasm.Array.unsafeIndex" -> Just (Tuple ArrayIndex 2)
   "Wasm.Array.unsafeNew" -> Just (Tuple ArrayNew 1)
   "Wasm.Array.unsafeSet" -> Just (Tuple ArraySet 3)
+  -- `Wasm.Int` (WasmBase): first-order `Int` ops, so ulib shadows of low-level prelude
+  -- modules (e.g. `Data.Functor`) need no `Prelude` for their loop arithmetic (ADR 0028).
+  "Wasm.Int.add" -> Just (Tuple IntAdd 2)
+  "Wasm.Int.sub" -> Just (Tuple IntSub 2)
+  "Wasm.Int.mul" -> Just (Tuple IntMul 2)
+  "Wasm.Int.eq" -> Just (Tuple IntEq 2)
   -- `reverse`/`sliceImpl`/`indexImpl`/`unconsImpl`, `Data.Foldable.fold{l,r}Array`,
   -- `Data.String.CodeUnits.{singleton,toCharArray,fromCharArray}`, `Data.Int.fromStringAsImpl`
   -- now live in `ulib/<Module>/foreign.wat` (ADR 0012), resolved as merged foreigns.

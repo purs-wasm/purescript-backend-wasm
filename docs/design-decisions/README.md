@@ -75,6 +75,7 @@ language and are kept out of version control.)
 | 0025 | [Multi-platform packaging (`--platform`) and the fallback-JS toggle](0025-multi-platform-packaging.md) | Proposed |
 | 0026 | [WasmBase: a stable primitive layer between `Prim` and `Prelude`](0026-wasmbase-primitive-layer.md) | Proposed |
 | 0027 | [Specialize after inlining: the `where`-worker / forwarder idiom](0027-specialize-after-inlining.md) | Proposed |
+| 0028 | [ulib as a compiler-bundled library layer: lib-first shadowing of registry modules](0028-ulib-library-layer-shadowing.md) | Proposed |
 
 ## Scope
 

@@ -39,7 +39,7 @@ import PureScript.Backend.Wasm.Externs (foreignSigs)
 import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson, exportManifestJson)
-import PureScript.CoreFn (ModuleName, toModuleName)
+import PureScript.CoreFn (Module, ModuleName, toModuleName)
 import PureScript.ExternsFile.Decoder.Class (decoder)
 import PureScript.ExternsFile.Decoder.Monad (runDecoder)
 import Unsafe.Coerce (unsafeCoerce)
@@ -182,17 +182,84 @@ checkWasmBaseCompat modules = case Array.nub (modules >>= unsupported) of
   recognized modName qual = isJust (qualifiedIntrinsic qual) || isJust (foreignIntrinsic (lastSegment qual))
   lastSegment q = fromMaybe q (Array.last (Str.split (Pattern ".") q))
 
+-- | The registry modules ulib shadows (ADR 0028), each tied to the *package* version its
+-- | shadow was reimplemented against.
+type Shadow = { package :: String, version :: String, corefn :: FilePath }
+
+-- | Scan the ulib lib for shadows: each `<lib>/<package>-<version>/<Module>/corefn.json` is a
+-- | shadow of registry module `<Module>`, tagged with the package version it targets (ADR 0028).
+-- | Returns a `Module name -> Shadow` map. An absent lib (e.g. the lib build hasn't run) → empty.
+loadShadowMap :: FilePath -> Aff (Map.Map String Shadow)
+loadShadowMap libPath = do
+  present <- isNothing <$> FS.access libPath
+  if not present then pure Map.empty
+  else do
+    pkgDirs <- FS.readdir libPath
+    rows <- for pkgDirs \pkgVer -> do
+      let pkgPath = Path.concat [ libPath, pkgVer ]
+      let { pkg, ver } = splitPkgVer pkgVer
+      mods <- try (FS.readdir pkgPath)
+      pure case mods of
+        Right ms -> ms <#> \m -> Tuple m { package: pkg, version: ver, corefn: Path.concat [ pkgPath, m, "corefn.json" ] }
+        Left _ -> []
+    pure (Map.fromFoldable (Array.concat rows))
+
+-- | Split a `<package>-<version>` directory name on its last `-` (versions carry no `-`, but a
+-- | package name may: `foldable-traversable-6.0.0` → package `foldable-traversable`, ver `6.0.0`).
+splitPkgVer :: String -> { pkg :: String, ver :: String }
+splitPkgVer s = case Array.unsnoc (Str.split (Pattern "-") s) of
+  Just { init, last } -> { pkg: Str.joinWith "-" init, ver: last }
+  Nothing -> { pkg: s, ver: "" }
+
+-- | `6.0.2` -> `6.0`. Shadows match a registry version by `major.minor` (a patch bump keeps the
+-- | module interface, so it still applies; a minor/major bump may not — ADR 0028).
+majorMinor :: String -> String
+majorMinor v = Str.joinWith "." (Array.take 2 (Str.split (Pattern ".") v))
+
+-- | Extract `<package>`'s version from a corefn modulePath (`…/<package>-<version>/…`).
+pkgVersionFromPath :: String -> String -> Maybe String
+pkgVersionFromPath pkg path =
+  Array.index (Str.split (Pattern (pkg <> "-")) path) 1 >>= (Array.head <<< Str.split (Pattern "/"))
+
+-- | ulib lib-first shadowing (ADR 0028): if `mod` has a ulib shadow whose target package version
+-- | matches (by `major.minor`) the user's resolved version, use the shadow's corefn (PureScript
+-- | over WasmBase → the closures specialize, ADR 0027). Otherwise keep the registry module
+-- | (correct, but the foreign HOF stays opaque) with a warning. Never fails the build.
+shadowOrRegistry :: Map.Map String Shadow -> ModuleName -> Module -> Aff Module
+shadowOrRegistry shadows mod registryMod = case Map.lookup (printModname mod) shadows of
+  Nothing -> pure registryMod
+  Just s
+    | (majorMinor <$> pkgVersionFromPath s.package registryMod.path) /= Just (majorMinor s.version) -> do
+        Console.log
+          ( Fmt.fmt
+              @"  ulib: {m} not shadowed ({pkg} {got} ≠ supported {want}); using registry (foreign HOF stays slow)"
+              { m: printModname mod, pkg: s.package, got: fromMaybe "?" (pkgVersionFromPath s.package registryMod.path), want: s.version }
+          )
+        pure registryMod
+    | otherwise -> do
+        libSrc <- FS.readTextFile UTF8 s.corefn
+        case parseModule libSrc of
+          Left _ -> pure registryMod
+          Right libMod -> do
+            Console.log (Fmt.fmt @"  ulib: shadowing {m} ({pkg} {ver})" { m: printModname mod, pkg: s.package, ver: s.version })
+            pure libMod
+
 main :: FilePath -> Effect Unit
 main _cliRoot =
   parseArgs >>= case _ of
     Left err -> Console.error (ArgParser.printArgError err)
-    Right (Build args) -> launchAff_ (buildCmd args)
+    Right (Build args) -> launchAff_ (buildCmd _cliRoot args)
 
 -- | Link every module found under `input` into one wasm and write it to
 -- | `output`. Paths are resolved against the current working directory.
-buildCmd :: BuildOption -> Aff Unit
-buildCmd args = do
+buildCmd :: FilePath -> BuildOption -> Aff Unit
+buildCmd cliRoot args = do
   logShow args
+  -- ulib lib (ADR 0028) sits beside the compiler: `node_modules/purs-wasm/lib`, the nix
+  -- store path, or — for this in-repo prototype — the project root `lib/`. `cliRoot` is the
+  -- `bin/` dir (the CLI entry's dirname), so the lib is one level up.
+  let libPath = Path.concat [ cliRoot, "..", "lib" ]
+  shadows <- loadShadowMap libPath
   -- Each subdirectory of `input` is named by its dotted module name; sort for a
   -- deterministic build (ADR 0009).
   entries <- FS.readdir args.input
@@ -216,7 +283,7 @@ buildCmd args = do
     source <- FS.readTextFile UTF8 (Path.concat [ args.input, printModname mod, "corefn.json" ])
     case parseModule source of
       Left err -> throwError (error (printModname mod <> ": " <> err))
-      Right m -> pure m
+      Right m -> shadowOrRegistry shadows mod m
   -- Fail early on a `wasm-base` whose version is incompatible with this backend (ADR 0026).
   either (throwError <<< error) pure (checkWasmBaseCompat modules)
   -- Each module's `externs.cbor` carries the top-level type information CoreFn
