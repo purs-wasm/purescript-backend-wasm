@@ -1,6 +1,6 @@
 # 0026. WasmBase: a stable primitive layer between `Prim` and `Prelude`
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-10: promoted — implemented: the `wasm-base` package with `Wasm.*` primitives resolving to intrinsics, plus the `bin` capability check.)_
 - Date: 2026-06-08
 - Supersedes: [0012](0012-ulib-curated-package-ffi.md) (its hand-written-`.wat` mechanism and provider ladder; `ulib`'s curated-core intent carries forward in PureScript form)
 

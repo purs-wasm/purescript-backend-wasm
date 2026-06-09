@@ -1,6 +1,6 @@
 # 0028. ulib as a compiler-bundled library layer: lib-first shadowing of registry modules
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-10: promoted — implemented: ulib shadows (Data.Functor/Foldable/Array) + lib-first resolution + `ulib install`/`validate`/`check`.)_
 - Date: 2026-06-09
 
 ## Context

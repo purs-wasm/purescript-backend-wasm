@@ -1,5 +1,8 @@
 # 0029. ulib lib distribution and purs-compiler pinning
 
+- Status: Accepted _(2026-06-10: the decision is adopted; the purs pin + `builtWith` link guard + `ulib-compat.mjs` two-sided compiler check are implemented — the nix packaging of the precompiled lib is the tracked next step.)_
+- Date: 2026-06-09
+
 ## Context
 
 The ulib library layer (ADR 0028) ships as a set of PureScript *shadow* sources that must be

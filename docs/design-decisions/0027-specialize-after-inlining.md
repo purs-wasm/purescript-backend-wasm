@@ -1,6 +1,6 @@
 # 0027. Specialize after inlining: the `where`-worker / forwarder idiom
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-10: promoted — implemented: post-inline `specializeProgram` + β-only simplify in `MiddleEnd` (what makes the PureScript shadows specialize).)_
 - Date: 2026-06-08
 
 ## Context
