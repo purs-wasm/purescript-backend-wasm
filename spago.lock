@@ -222,6 +222,7 @@
         "core": {
           "dependencies": [
             "aff",
+            "ansi",
             "argonaut-codecs",
             "argonaut-core",
             "argparse-basic",
@@ -229,6 +230,7 @@
             "arrays",
             "compiler",
             "console",
+            "dodo-printer",
             "effect",
             "either",
             "exceptions",
@@ -247,11 +249,23 @@
             "run",
             "strings",
             "transformers",
+            "typelevel-prelude",
             "unsafe-coerce"
           ]
         },
         "test": {
-          "dependencies": []
+          "dependencies": [
+            "arrays",
+            "console",
+            "effect",
+            "either",
+            "maybe",
+            "ordered-collections",
+            "prelude",
+            "spec",
+            "spec-node",
+            "strings"
+          ]
         }
       },
       "wasm-base": {
@@ -1145,6 +1159,25 @@
         "prelude",
         "tuples",
         "type-equality"
+      ]
+    },
+    "dodo-printer": {
+      "type": "registry",
+      "version": "2.2.3",
+      "integrity": "sha256-z6LZV9tXQPBZvHqzUYyCYGB7zHq6u7TOgV6Pr0wiobs=",
+      "dependencies": [
+        "ansi",
+        "either",
+        "foldable-traversable",
+        "integers",
+        "lists",
+        "maybe",
+        "newtype",
+        "partial",
+        "prelude",
+        "safe-coerce",
+        "strings",
+        "tuples"
       ]
     },
     "effect": {

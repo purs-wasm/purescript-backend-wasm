@@ -7,6 +7,7 @@ package:
   # spago.lock / registry-info JSON). `Node.Cbor` + the externs decoder come via `compiler`.
   dependencies:
     - aff
+    - ansi
     - argonaut-codecs
     - argonaut-core
     - argparse-basic
@@ -14,6 +15,7 @@ package:
     - arrays
     - compiler
     - console
+    - dodo-printer
     - effect
     - either
     - exceptions
@@ -32,4 +34,18 @@ package:
     - run
     - strings
     - transformers
+    - typelevel-prelude
     - unsafe-coerce
+  test:
+    main: Test.Unit.PursWasm
+    dependencies:
+      - spec
+      - spec-node
+      - arrays
+      - console
+      - effect
+      - either
+      - maybe
+      - ordered-collections
+      - prelude
+      - strings
