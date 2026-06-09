@@ -1,0 +1,9 @@
+{
+  "name": "purs-wasm",
+  "version": "0.1.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "version": "echo 'export const version = \"v'$npm_package_version'\";' > ./src/PursWasm/CLI/Version.js && git add ."
+  }
+}
