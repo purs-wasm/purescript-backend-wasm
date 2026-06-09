@@ -26,3 +26,14 @@ export const cases = [
   // Private foreign reconstructed from .purs via cache-db.json (ADR 0016).
   { name: "fixture/Priv", args: ["-I", "compiler/test/fixtures/source-foreign", "-e", "Priv"] },
 ];
+
+// `ulib validate` / `ulib check` produce no build artifact — only stdout + an exit code (0 on
+// success, non-zero on divergence). So parity here is "same exit code AND same normalized stdout"
+// rather than byte-identity. The driver installs a fresh lib (via the `bin` oracle) into a temp
+// dir and appends `-L <that dir>`, so both CLIs see identical inputs. (`ulib install` is NOT a
+// differential case: purs embeds the install scratch dir's absolute path into corefn/externs, so
+// its output is not byte-reproducible even bin-vs-bin — that command is covered by unit tests.)
+export const ulibCases = [
+  { name: "ulib validate", args: ["ulib", "validate"] },
+  { name: "ulib check", args: ["ulib", "check"] },
+];

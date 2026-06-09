@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
 
-import { cases } from "./cases.mjs";
+import { cases, ulibCases } from "./cases.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = "bin/index.dev.js";
@@ -61,6 +61,25 @@ function diffTrees(aTree, bTree) {
   return diffs;
 }
 
+// Run a CLI command to completion, capturing exit code and combined stdout/stderr (the
+// ulib commands log to both). Never throws — a non-zero exit is data, not an error.
+function run(entry, args) {
+  try {
+    const stdout = execFileSync("node", [entry, ...args], { cwd: repo, stdio: "pipe" }).toString();
+    return { code: 0, out: stdout };
+  } catch (e) {
+    return { code: e.status ?? 1, out: (e.stdout?.toString() || "") + (e.stderr?.toString() || "") };
+  }
+}
+
+// Normalize a CLI's output so the two are comparable: drop ANSI colour escapes and the
+// purs-wasm logger's level tags (`[INFO]`/`[WARN]`/`[ERROR]`), which bin doesn't emit. What
+// remains is the message content, which must agree.
+function normalize(s) {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^\[(INFO|WARN|ERROR)\]/gm, "");
+}
+
 let pass = 0;
 const failures = [];
 
@@ -87,7 +106,35 @@ for (const c of cases) {
   }
 }
 
-console.log(`\ndiff: ${pass} passed, ${failures.length} failed (of ${cases.length})`);
+// --- ulib status commands: exit code + normalized stdout parity ---
+// Install a fresh lib via the oracle so both CLIs validate/check against identical inputs.
+const libDir = mkdtempSync(join(tmpdir(), "pw-diff-lib-"));
+try {
+  const install = run(BIN, ["ulib", "install", "-L", libDir, "-f"]);
+  if (install.code !== 0) {
+    failures.push({ name: "ulib (setup: install lib)", why: `oracle install failed:\n${install.out}` });
+  } else {
+    for (const c of ulibCases) {
+      const args = [...c.args, "-L", libDir];
+      const a = run(BIN, args);
+      const b = run(PURS_WASM, args);
+      const diffs = [];
+      if (a.code !== b.code) diffs.push(`exit code: bin ${a.code} vs purs-wasm ${b.code}`);
+      if (normalize(a.out) !== normalize(b.out)) diffs.push(`stdout differs (normalized)`);
+      if (diffs.length === 0) {
+        pass++;
+        console.log(`  ✓ ${c.name}`);
+      } else {
+        failures.push({ name: c.name, why: diffs.join("\n      ") });
+      }
+    }
+  }
+} finally {
+  rmSync(libDir, { recursive: true, force: true });
+}
+
+const total = cases.length + ulibCases.length;
+console.log(`\ndiff: ${pass} passed, ${failures.length} failed (of ${total})`);
 if (failures.length > 0) {
   console.error("\nparity failures:");
   for (const f of failures) console.error(`  ✗ ${f.name}\n      ${f.why}`);

@@ -7,7 +7,7 @@ import Prelude
 import ArgParse.Basic (ArgParser)
 import ArgParse.Basic as ArgParser
 import Data.Either (Either)
-import PursWasm.CLI.Options.Types (BuildOption, Command(..))
+import PursWasm.CLI.Options.Types (BuildOption, Command(..), UlibCheckOption, UlibInstallOption, UlibValidateOption)
 import PursWasm.CLI.Version as Version
 
 buildOptionsParser :: ArgParser BuildOption
@@ -48,6 +48,52 @@ buildOptionsParser =
           # ArgParser.optional
     }
 
+ulibInstallParser :: ArgParser UlibInstallOption
+ulibInstallParser =
+  ArgParser.fromRecord
+    { libPath:
+        ArgParser.argument [ "-L", "--lib-path" ]
+          "Where to store the compiled ulib corefn/externs.\n\
+          \Defaults to the `lib` dir beside the compiler (`<cli>/../lib`)."
+          # ArgParser.optional
+    , purs:
+        ArgParser.argument [ "-x", "--purs" ]
+          "Path to the `purs` executable used to compile the shadows. Defaults to `purs` on PATH."
+          # ArgParser.optional
+    , force:
+        ArgParser.flag [ "-f", "--force" ]
+          "Rebuild even if the lib is already present."
+          # ArgParser.boolean
+    }
+
+ulibValidateParser :: ArgParser UlibValidateOption
+ulibValidateParser =
+  ArgParser.fromRecord
+    { libPath:
+        ArgParser.argument [ "-L", "--lib-path" ]
+          "The installed ulib to validate. Defaults to `<cli>/../lib`."
+          # ArgParser.optional
+    , spago:
+        ArgParser.argument [ "-S", "--spago" ]
+          "The resolved package-set sources to compare against (one dir per package,\n\
+          \`<package>-<version>`). Defaults to `.spago/p`."
+          # ArgParser.optional
+    }
+
+ulibCheckParser :: ArgParser UlibCheckOption
+ulibCheckParser =
+  ArgParser.fromRecord
+    { libPath:
+        ArgParser.argument [ "-L", "--lib-path" ]
+          "The installed ulib to check. Defaults to `<cli>/../lib`."
+          # ArgParser.optional
+    , input:
+        ArgParser.argument [ "-I", "--input" ]
+          "The directory of *your* compiled artifacts (per-module `externs.cbor`) to compare\n\
+          \the shadows' interface against — i.e. your spago build output. Defaults to `output`."
+          # ArgParser.optional
+    }
+
 commandParser :: ArgParser Command
 commandParser =
   ArgParser.choose "command"
@@ -55,6 +101,20 @@ commandParser =
         "Build a wasm module from a PureScript project's compiler artifacts"
         do
           Build <$> buildOptionsParser <* ArgParser.flagHelp
+    , ArgParser.command [ "ulib" ]
+        "Manage the ulib shadow library (ADR 0028)"
+        do
+          ArgParser.choose "ulib command"
+            [ ArgParser.command [ "install" ]
+                "Compile the ulib shadows into the lib (corefn + externs)"
+                (UlibInstall <$> ulibInstallParser <* ArgParser.flagHelp)
+            , ArgParser.command [ "validate" ]
+                "Check each installed shadow's version matches your resolved package set"
+                (UlibValidate <$> ulibValidateParser <* ArgParser.flagHelp)
+            , ArgParser.command [ "check" ]
+                "Compare each shadow's public interface against your compiled module (externs)"
+                (UlibCheck <$> ulibCheckParser <* ArgParser.flagHelp)
+            ] <* ArgParser.flagHelp
     ]
     <* ArgParser.flagHelp
     <* ArgParser.flagInfo [ "--version", "-v" ] "Show version" Version.versionString

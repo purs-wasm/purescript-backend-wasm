@@ -20,6 +20,7 @@ import PursWasm.CLI.Build (buildCmd)
 import PursWasm.CLI.Node (runNode)
 import PursWasm.CLI.Options (parse)
 import PursWasm.CLI.Options.Types (Command(..))
+import PursWasm.CLI.Ulib (ulibCheckCmd, ulibInstallCmd, ulibValidateCmd)
 
 -- `cliRoot` is the entry's directory (passed by
 -- `index.dev.js`), used to locate `<cliRoot>/../lib`
@@ -28,4 +29,8 @@ main cliRoot = do
   cliArgs <- Array.drop 2 <$> Process.argv
   case parse cliArgs of
     Left err -> Console.error (ArgParser.printArgError err)
-    Right (Build args) -> runNode (buildCmd cliRoot args)
+    Right cmd -> runNode $ case cmd of
+      Build args -> buildCmd cliRoot args
+      UlibInstall args -> ulibInstallCmd cliRoot args
+      UlibValidate args -> ulibValidateCmd cliRoot args
+      UlibCheck args -> ulibCheckCmd cliRoot args
