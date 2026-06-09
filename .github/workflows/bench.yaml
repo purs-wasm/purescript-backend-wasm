@@ -74,6 +74,10 @@ jobs:
           pnpm -F ./compiler run build:ulib
           spago build -p bench --output bench/output
           node ./bin/index.dev.js ulib install
+          # Assert the shadows still match the resolved package set (major.minor); a
+          # divergence means the build would silently fall back to the registry module and
+          # the benchmark would measure the un-specialized path — fail the run instead.
+          node ./bin/index.dev.js ulib validate
 
       # graph.sh builds all three backends + renders the 7 algorithm graphs;
       # count-state-graph.sh / count-effect-graph.sh add the State- and Effect-monad
