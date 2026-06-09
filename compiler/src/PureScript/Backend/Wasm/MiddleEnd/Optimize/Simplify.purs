@@ -69,6 +69,10 @@ type Ctx =
   -- `Perform` may be collapsed and whether a binding may be inlined/reordered/dropped.
   , effectfulForeigns :: Set String
   , impureBindings :: Set String
+  -- top-level (post-lambda-lift) bindings whose evaluation writes/allocates memory
+  -- (`Wasm.Array.unsafeNew`/`unsafeSet`, transitively). Kept out of the drop/duplicate
+  -- rules so a buffer fill whose result is discarded still runs (ADR 0026 / 0028).
+  , memEffBindings :: Set String
   }
 
 -- | A generous ceiling on simplification passes; dictionary elimination converges in
@@ -85,7 +89,7 @@ simplifyExpr ctx = fixpoint maxPasses
   where
   -- the purity view (ADR 0015): used to gate effect-sensitive reductions
   pctx :: PCtx
-  pctx = { eff: ctx.effectfulForeigns, impure: ctx.impureBindings }
+  pctx = { eff: ctx.effectfulForeigns, impure: ctx.impureBindings, memEff: ctx.memEffBindings }
 
   fixpoint :: Int -> M.Expr -> M.Expr
   fixpoint n e

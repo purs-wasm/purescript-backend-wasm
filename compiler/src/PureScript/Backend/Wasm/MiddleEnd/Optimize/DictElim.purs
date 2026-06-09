@@ -52,6 +52,7 @@ buildCtx modules =
   -- effectful-foreign seed + purity analysis (ADR 0015)
   , effectfulForeigns: Set.empty
   , impureBindings: Set.empty
+  , memEffBindings: Set.empty
   }
   where
   recordFieldsOf modName = case _ of

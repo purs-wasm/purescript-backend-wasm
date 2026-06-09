@@ -88,7 +88,7 @@ normalize :: Ctx -> M.Expr -> M.Expr
 normalize ctx e = evalState (quote (pctxOf ctx) (eval ctx Set.empty Map.empty e)) 0
 
 pctxOf :: Ctx -> PCtx
-pctxOf ctx = { eff: ctx.effectfulForeigns, impure: ctx.impureBindings }
+pctxOf ctx = { eff: ctx.effectfulForeigns, impure: ctx.impureBindings, memEff: ctx.memEffBindings }
 
 -- evaluation -----------------------------------------------------------------
 

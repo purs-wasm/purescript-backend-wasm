@@ -39,6 +39,7 @@ ctx =
   , instanceFields: Map.singleton "T.heytingBool" [ Tuple "disj" (tv "boolDisj") ]
   , effectfulForeigns: Set.empty
   , impureBindings: Set.empty
+  , memEffBindings: Set.empty
   }
 
 spec :: Spec Unit

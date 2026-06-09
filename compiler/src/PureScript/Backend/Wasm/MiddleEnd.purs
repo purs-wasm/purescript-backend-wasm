@@ -147,6 +147,7 @@ buildContext eff prog =
       , newtypeCtors = Set.union base.newtypeCtors (Inline.newtypeCtorNames prog)
       , effectfulForeigns = eff
       , impureBindings = Purity.impureKeys eff prog
+      , memEffBindings = Purity.memEffKeys prog
       }
 
 -- | Order modules so every module comes after the modules it references (a dependency is

@@ -10,7 +10,7 @@ import Prelude
 import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
-import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity (impureKeys)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity (impureKeys, memEffKeys)
 import PureScript.CoreFn (Literal(..), Qualified(..))
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
@@ -64,3 +64,33 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity" do
     -- op = \k $ev -> perform k     (k a local of unknown effect)
     let impure = impureOf [ def "op" (M.Abs [ "k", "$ev" ] (M.Perform (loc "k"))) ]
     Set.member "T.op" impure `shouldEqual` true
+
+  describe "memEffKeys (memory-write effect set)" do
+    let
+      wa n = M.Var (Qualified (Just [ "Wasm", "Array" ]) n)
+      memEffOf decls = memEffKeys [ { name: [ "T" ], decls } ]
+
+    it "a binding that writes via unsafeSet is memory-effectful" do
+      -- w = \a -> unsafeSet a 0 1
+      let m = memEffOf [ def "w" (M.Abs [ "a" ] (M.App (wa "unsafeSet") [ loc "a", M.Lit (LitInt 0), M.Lit (LitInt 1) ])) ]
+      Set.member "T.w" m `shouldEqual` true
+
+    it "a binding that allocates via unsafeNew is memory-effectful" do
+      -- a = \n -> unsafeNew n
+      let m = memEffOf [ def "a" (M.Abs [ "n" ] (M.App (wa "unsafeNew") [ loc "n" ])) ]
+      Set.member "T.a" m `shouldEqual` true
+
+    it "the write effect is transitive through a caller" do
+      -- w = \a -> unsafeSet a 0 1 ;  caller = \a -> w a
+      let
+        m = memEffOf
+          [ def "w" (M.Abs [ "a" ] (M.App (wa "unsafeSet") [ loc "a", M.Lit (LitInt 0), M.Lit (LitInt 1) ]))
+          , def "caller" (M.Abs [ "a" ] (M.App (tv "w") [ loc "a" ]))
+          ]
+      Set.member "T.w" m `shouldEqual` true
+      Set.member "T.caller" m `shouldEqual` true
+
+    it "a binding that only reads (no write/alloc) is not memory-effectful" do
+      -- r = \a -> unsafeIndex a 0     (a read, not a write)
+      let m = memEffOf [ def "r" (M.Abs [ "a" ] (M.App (wa "unsafeIndex") [ loc "a", M.Lit (LitInt 0) ])) ]
+      Set.member "T.r" m `shouldEqual` false

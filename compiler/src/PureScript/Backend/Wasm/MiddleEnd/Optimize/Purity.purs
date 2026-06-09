@@ -22,6 +22,7 @@
 module PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity
   ( PCtx
   , impureKeys
+  , memEffKeys
   , exprPure
   , runPure
   ) where
@@ -39,9 +40,10 @@ import Data.Tuple (Tuple(..), snd)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn (Literal(..), Qualified(..))
 
--- | The context the predicates consult: effectful foreign names (seed) and the current
--- | set of effectful (impure-running) top-level binding keys.
-type PCtx = { eff :: Set String, impure :: Set String }
+-- | The context the predicates consult: effectful foreign names (seed), the current set of
+-- | effectful (impure-running) top-level binding keys, and the set of top-level keys whose
+-- | evaluation performs a memory write/alloc (`memEffKeys`).
+type PCtx = { eff :: Set String, impure :: Set String, memEff :: Set String }
 
 -- | Evaluating `e` (constructing the value) is free of side effects.
 exprPure :: PCtx -> M.Expr -> Boolean
@@ -51,9 +53,34 @@ exprPure ctx = not <<< evalImpure ctx
 runPure :: PCtx -> M.Expr -> Boolean
 runPure ctx = not <<< runImpure ctx
 
+-- | Intrinsics whose *evaluation* carries a memory effect, so they must be treated like a
+-- | side-effecting `Perform` by the simplifier's drop/duplicate/reorder guards (all of which
+-- | consult `exprPure`): `Wasm.Array.unsafeNew` mints a fresh mutable array (duplicating it
+-- | yields *distinct* arrays, so it must not be copied into multiple use sites), and
+-- | `Wasm.Array.unsafeSet` writes one in place (so its write must survive even when the
+-- | returned array is unused). Without this, a buffer-filling loop that returns a *count*
+-- | rather than the array has its `unsafeSet` writes eliminated as dead pure code, and the
+-- | array reads back uninitialised — an `illegal cast` at run time (ADR 0026 / 0028).
+memoryEffectPrims :: Set String
+memoryEffectPrims = Set.fromFoldable [ "Wasm.Array.unsafeNew", "Wasm.Array.unsafeSet" ]
+
+isMemoryEffect :: Qualified String -> Boolean
+isMemoryEffect = case _ of
+  Qualified (Just m) n -> Set.member (joinWith "." m <> "." <> n) memoryEffectPrims
+  Qualified Nothing _ -> false
+
+-- | A top-level (post-lambda-lift) binding whose evaluation writes/allocates (`memEffKeys`).
+isMemEffKey :: Set String -> Qualified String -> Boolean
+isMemEffKey memEff = case _ of
+  Qualified (Just m) n -> Set.member (joinWith "." m <> "." <> n) memEff
+  Qualified Nothing _ -> false
+
 evalImpure :: PCtx -> M.Expr -> Boolean
 evalImpure ctx = case _ of
   M.Perform e -> runImpure ctx e
+  -- an applied (incl. partially applied) memory-effect intrinsic, or a call to a binding whose
+  -- evaluation writes memory, evaluates a write/alloc — so it must not be dropped/duplicated
+  M.App (M.Var q) _ | isMemoryEffect q || isMemEffKey ctx.memEff q -> true
   M.App f args -> evalImpure ctx f || any (evalImpure ctx) args
   M.Let bs body -> any (evalImpure ctx) (bs >>= bindExprs) || evalImpure ctx body
   M.Case ss alts -> any (evalImpure ctx) ss || any (any (evalImpure ctx) <<< altExprs) alts
@@ -102,10 +129,50 @@ impureKeys eff modules = fixpoint Set.empty
 
   fixpoint impure =
     let
-      ctx = { eff, impure }
+      -- `impureKeys` is purely about Effect *performing*; memory writes are not its concern,
+      -- so `memEff` is empty here (it is computed separately, by `memEffKeys`).
+      ctx = { eff, impure, memEff: Set.empty }
       impure' = Array.foldl (\acc (Tuple k v) -> if bindRunImpure ctx v then Set.insert k acc else acc) impure binds
     in
       if Set.size impure' == Set.size impure then impure else fixpoint impure'
+
+-- | The least-fixpoint set of top-level binding keys whose **evaluation** (when fully applied)
+-- | performs a memory write/allocation, propagated through the call graph from the
+-- | `Wasm.Array.unsafeNew`/`unsafeSet` prims. Lambda-lifting has already promoted the
+-- | buffer-filling local helpers to top level, so this global set reaches them; the simplifier
+-- | consults it (via `evalImpure` on an application head) so a binding that merely *fills* an
+-- | array — its own result discarded — is neither dropped (when dead) nor moved (when single-use),
+-- | because the write must run, in place. Distinct from `impureKeys` (Effect performing, ADR
+-- | 0015): a write happens on plain evaluation, never via a `Perform`, so this analysis ignores
+-- | `Effect` entirely (a `Perform`'s operand is still scanned, in case it writes).
+memEffKeys :: Array M.Module -> Set String
+memEffKeys modules = fixpoint Set.empty
+  where
+  binds = modules >>= \m -> m.decls >>= bindEntries m.name
+  fixpoint memEff =
+    let
+      memEff' = Array.foldl (\acc (Tuple k v) -> if writesMem memEff (stripAbs v) then Set.insert k acc else acc) memEff binds
+    in
+      if Set.size memEff' == Set.size memEff then memEff else fixpoint memEff'
+
+-- | Does evaluating `e` perform a memory write/alloc — directly via a prim, or by applying a
+-- | known memory-effectful binding (`memEff`)? Ignores `Effect` performing (that is
+-- | `impureKeys`' concern), so it never over-marks an Effect binding as memory-effectful.
+writesMem :: Set String -> M.Expr -> Boolean
+writesMem memEff = go
+  where
+  go = case _ of
+    M.App (M.Var q) _ | isMemoryEffect q || isMemEffKey memEff q -> true
+    M.App f args -> go f || any go args
+    M.Let bs body -> any go (bs >>= bindExprs) || go body
+    M.Case ss alts -> any go ss || any (any go <<< altExprs) alts
+    M.Accessor _ e -> go e
+    M.Update e _ kvs -> go e || any (go <<< snd) kvs
+    M.Lit lit -> any go (litExprs lit)
+    M.Perform e -> go e
+    M.Abs _ _ -> false
+    M.Var _ -> false
+    M.Constructor _ _ _ -> false
 
 -- | A binding is effectful if running its fully-applied value runs an effect. Strip
 -- | the binding's parameters (the trailing one is the `perform` unit) to reach the
