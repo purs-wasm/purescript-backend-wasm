@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [compiler, binaryen]
+        target: [compiler, binaryen, purs-wasm]
     steps:
       # Setup Nix envirionment
       - uses: actions/checkout@v5
