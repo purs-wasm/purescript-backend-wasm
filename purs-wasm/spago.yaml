@@ -48,4 +48,5 @@ package:
       - maybe
       - ordered-collections
       - prelude
+      - tuples
       - strings

@@ -1,15 +1,31 @@
--- | Entry point for the `purs-wasm` CLI. During the re-architecture this is a stub; it will
--- | grow into the thin dispatch over `PursWasm.CLI.Options.parseArgs` once the command modules
--- | land (see the plan). `cliRoot` is the CLI entry's directory (passed by `index.dev.js`), used
--- | to locate `<cliRoot>/../lib`, `<cliRoot>/../ulib`, and `<cliRoot>/ulib-install.sh`.
-module PursWasm.CLI.Main where
+-- | The **Node** entry point: the one place that is allowed to depend on platform-native effects.
+-- | It reads `argv` (Node), parses it via the platform-neutral `PursWasm.CLI.Options`, and runs the
+-- | resulting command against the synchronous Node interpreter (`runNode`). A future WASI port adds
+-- | its own `Main` (PureScript has no `#ifdef`, so the per-platform entry is a separate module);
+-- | everything below `Main` stays platform-neutral.
+module PursWasm.CLI.Main
+  ( main
+  ) where
 
 import Prelude
 
+import ArgParse.Basic as ArgParser
+import Data.Array as Array
+import Data.Either (Either(..))
 import Effect (Effect)
 import Effect.Class.Console as Console
 import Node.Path (FilePath)
-import PursWasm.CLI.Version as Version
+import Node.Process as Process
+import PursWasm.CLI.Build (buildCmd)
+import PursWasm.CLI.Node (runNode)
+import PursWasm.CLI.Options (parse)
+import PursWasm.CLI.Options.Types (Command(..))
 
+-- `cliRoot` is the entry's directory (passed by
+-- `index.dev.js`), used to locate `<cliRoot>/../lib`
 main :: FilePath -> Effect Unit
-main _cliRoot = Console.log (Version.versionString <> " — scaffold (no commands wired yet)")
+main cliRoot = do
+  cliArgs <- Array.drop 2 <$> Process.argv
+  case parse cliArgs of
+    Left err -> Console.error (ArgParser.printArgError err)
+    Right (Build args) -> runNode (buildCmd cliRoot args)

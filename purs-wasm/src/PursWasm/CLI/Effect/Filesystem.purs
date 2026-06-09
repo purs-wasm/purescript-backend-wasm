@@ -18,10 +18,12 @@ data FilesystemF a
   | Exists FilePath (Boolean -> a)
   | MkdirP FilePath a
   | Unlink FilePath a
-  -- Binary as `Uint8Array` (not Node's `Buffer`) keeps this abstract effect platform-neutral —
-  -- no `Node.*` import here; the Node interpreter converts at its boundary.
   | ReadBinary FilePath (Maybe Uint8Array -> a)
   | WriteBinary FilePath Uint8Array a
+  -- Path ops are effects too — not for side effects, but for *portability*: 
+  -- the path separator and resolution are environment-specific, so the interpreter owns them.
+  | JoinPath (Array FilePath) (FilePath -> a)
+  | ResolvePath (Array FilePath) FilePath (FilePath -> a)
 
 derive instance functorFilesystemF :: Functor FilesystemF
 
@@ -60,3 +62,11 @@ mkdirP path = Run.lift _fs (MkdirP path unit)
 
 unlink :: forall r. FilePath -> Run (FS + r) Unit
 unlink path = Run.lift _fs (Unlink path unit)
+
+-- | Join path segments (the interpreter supplies the platform separator / `concat` semantics).
+joinPath :: forall r. Array FilePath -> Run (FS + r) FilePath
+joinPath segments = Run.lift _fs (JoinPath segments identity)
+
+-- | Resolve path segments to an absolute, normalised path (mirrors `path.resolve(...segs, last)`).
+resolvePath :: forall r. Array FilePath -> FilePath -> Run (FS + r) FilePath
+resolvePath segments last = Run.lift _fs (ResolvePath segments last identity)

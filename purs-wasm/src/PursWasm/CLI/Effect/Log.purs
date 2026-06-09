@@ -54,8 +54,6 @@ _log = Proxy
 interpret :: forall r a. (Log ~> Run r) -> Run (LOG + r) a -> Run r a
 interpret handler = Run.interpret (Run.on _log handler Run.send)
 
--- | `color`: emit ANSI graphics (off ⇒ plain text, e.g. for non-TTY / redirected output).
--- | `strict`: route `Warn` to stderr (under `--strict`); `Error` always goes to stderr.
 type LoggerConfig = { minLevel :: LogLevel, color :: Boolean, strict :: Boolean }
 
 terminalHandler :: forall r. LoggerConfig -> Log ~> Run (EFFECT + r)

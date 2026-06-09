@@ -19,6 +19,7 @@ import Effect.Exception (try)
 import Node.Encoding (Encoding(..))
 import Node.FS.Perms (permsAll)
 import Node.FS.Sync as Sync
+import Node.Path as Path
 import PursWasm.CLI.Effect.Filesystem (FS, FilesystemF(..))
 import PursWasm.CLI.Effect.Filesystem as FS
 import PursWasm.CLI.Effect.Log (LOG, LogLevel(..), LoggerConfig)
@@ -51,6 +52,8 @@ nodeFsHandler = case _ of
   Exists path k -> k <$> liftEffect (isNothing <$> Sync.access path)
   MkdirP path next -> liftEffect (Sync.mkdir' path { recursive: true, mode: permsAll }) $> next
   Unlink path next -> liftEffect (Sync.unlink path) $> next
+  JoinPath segments k -> pure (k (Path.concat segments))
+  ResolvePath segments last k -> k <$> liftEffect (Path.resolve segments last)
 
 nodeChildProcessHandler :: forall r. ProcF ~> Run (EFFECT + r)
 nodeChildProcessHandler = case _ of

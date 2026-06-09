@@ -11,12 +11,15 @@ import Prelude
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Effect.Exception (try)
+-- NOTE: This is the last place command logic still touches `Node.*` directly. For portability
+-- (the WASI self-host goal) CBOR decoding should be a Run effect interpreted in the Node handler,
+-- as we did for path ops (`joinPath`/`resolvePath`). Deferred: a one-off CBOR effect is not worth
+-- it yet, so `decodeFirstSync` is used inline for now. Revisit when a second backend needs it.
 import Node.Cbor (decodeFirstSync)
-import Node.Path (FilePath)
 import PureScript.ExternsFile (ExternsFile)
 import PureScript.ExternsFile.Decoder.Class (decoder)
 import PureScript.ExternsFile.Decoder.Monad (runDecoder)
-import PursWasm.CLI.Effect (FS, readBinary)
+import PursWasm.CLI.Effect (FS, FilePath, readBinary)
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
 

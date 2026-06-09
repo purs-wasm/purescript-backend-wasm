@@ -264,7 +264,8 @@
             "prelude",
             "spec",
             "spec-node",
-            "strings"
+            "strings",
+            "tuples"
           ]
         }
       },
