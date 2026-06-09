@@ -21,3 +21,4 @@
 /bench/output-wasm
 /bench/output-wasm-noopt
 /ulib/**/*.wasm
+lib/

@@ -111,7 +111,31 @@ buildOptionsParser =
           # ArgParser.optional
     }
 
-data Command = Build BuildOption
+type UlibInstallOption =
+  { libPath :: Maybe FilePath
+  , purs :: Maybe FilePath
+  , force :: Boolean
+  }
+
+ulibInstallParser :: ArgParser UlibInstallOption
+ulibInstallParser =
+  ArgParser.fromRecord
+    { libPath:
+        ArgParser.argument [ "-L", "--lib-path" ]
+          "Where to store the compiled ulib corefn/externs.\n\
+          \Defaults to the `lib` dir beside the compiler (`<cli>/../lib`)."
+          # ArgParser.optional
+    , purs:
+        ArgParser.argument [ "-x", "--purs" ]
+          "Path to the `purs` executable used to compile the shadows. Defaults to `purs` on PATH."
+          # ArgParser.optional
+    , force:
+        ArgParser.flag [ "-f", "--force" ]
+          "Rebuild even if the lib is already present."
+          # ArgParser.boolean
+    }
+
+data Command = Build BuildOption | UlibInstall UlibInstallOption
 
 commandParser :: ArgParser Command
 commandParser =
@@ -120,6 +144,14 @@ commandParser =
         "Build a wasm module from a PureScript project's compiler artifacts"
         do
           Build <$> buildOptionsParser <* ArgParser.flagHelp
+    , ArgParser.command [ "ulib" ]
+        "Manage the ulib shadow library (ADR 0028)"
+        do
+          ArgParser.choose "ulib command"
+            [ ArgParser.command [ "install" ]
+                "Compile the ulib shadows into the lib (corefn + externs)"
+                (UlibInstall <$> ulibInstallParser <* ArgParser.flagHelp)
+            ] <* ArgParser.flagHelp
     ]
     <* ArgParser.flagHelp
     <* ArgParser.flagInfo [ "--version", "-v" ] "Show version" Version.versionString
@@ -176,10 +208,10 @@ checkWasmBaseCompat modules = case Array.nub (modules >>= unsupported) of
   where
   -- only `Wasm.*` modules; other foreigns may legitimately resolve via ulib / JS-fallback
   unsupported m
-    | Array.head m.name == Just "Wasm" = Array.filter (not <<< recognized m.name) (map (qualified m.name) m.foreignNames)
+    | Array.head m.name == Just "Wasm" = Array.filter (not <<< recognized) (map (qualified m.name) m.foreignNames)
     | otherwise = []
   qualified modName fn = Str.joinWith "." modName <> "." <> fn
-  recognized modName qual = isJust (qualifiedIntrinsic qual) || isJust (foreignIntrinsic (lastSegment qual))
+  recognized qual = isJust (qualifiedIntrinsic qual) || isJust (foreignIntrinsic (lastSegment qual))
   lastSegment q = fromMaybe q (Array.last (Str.split (Pattern ".") q))
 
 -- | The registry modules ulib shadows (ADR 0028), each tied to the *package* version its
@@ -249,9 +281,30 @@ main _cliRoot =
   parseArgs >>= case _ of
     Left err -> Console.error (ArgParser.printArgError err)
     Right (Build args) -> launchAff_ (buildCmd _cliRoot args)
+    Right (UlibInstall args) -> launchAff_ (ulibInstallCmd _cliRoot args)
 
 -- | Link every module found under `input` into one wasm and write it to
 -- | `output`. Paths are resolved against the current working directory.
+-- | `purs-wasm ulib install` (ADR 0028): compile the ulib shadows (`<cli>/../ulib/shadow/`)
+-- | into the lib (corefn + externs) via `ulib-install.sh`. Skips if the lib already exists,
+-- | unless `--force`. The shadow set is the dir structure (`<pkg>-<ver>/<Module path>.purs`),
+-- | compiled against the resolved package-set sources (`.spago/p`) with WasmBase overlaid.
+ulibInstallCmd :: FilePath -> UlibInstallOption -> Aff Unit
+ulibInstallCmd cliRoot opt = do
+  let libPath = fromMaybe (Path.concat [ cliRoot, "..", "lib" ]) opt.libPath
+  let purs = fromMaybe "purs" opt.purs
+  let shadowRoot = Path.concat [ cliRoot, "..", "ulib", "shadow" ]
+  let wasmBaseSrc = Path.concat [ cliRoot, "..", "wasm-base", "src" ]
+  let script = Path.concat [ cliRoot, "ulib-install.sh" ]
+  present <- isNothing <$> FS.access libPath
+  if present && not opt.force then
+    Console.log "ulib: lib already present (use -f/--force to rebuild)."
+  else do
+    when opt.force (execFile "rm" [ "-rf", libPath ])
+    Console.log "ulib: compiling shadows -> lib …"
+    execFile "sh" [ script, libPath, shadowRoot, wasmBaseSrc, purs, Path.concat [ ".spago", "p" ] ]
+    Console.log "ulib: done."
+
 buildCmd :: FilePath -> BuildOption -> Aff Unit
 buildCmd cliRoot args = do
   logShow args
