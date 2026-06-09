@@ -38,6 +38,8 @@ import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic, qualifiedIntrinsic)
 import PureScript.Backend.Wasm.Externs (foreignSigs)
 import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
+import PureScript.Backend.Wasm.Ulib.Interface (compatible, diffInterface, interfaceOf)
+import PureScript.ExternsFile (ExternsFile)
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson, exportManifestJson)
 import PureScript.CoreFn (Module, ModuleName, toModuleName)
 import PureScript.ExternsFile.Decoder.Class (decoder)
@@ -135,7 +137,49 @@ ulibInstallParser =
           # ArgParser.boolean
     }
 
-data Command = Build BuildOption | UlibInstall UlibInstallOption
+type UlibValidateOption =
+  { libPath :: Maybe FilePath
+  , spago :: Maybe FilePath
+  }
+
+ulibValidateParser :: ArgParser UlibValidateOption
+ulibValidateParser =
+  ArgParser.fromRecord
+    { libPath:
+        ArgParser.argument [ "-L", "--lib-path" ]
+          "The installed ulib to validate. Defaults to `<cli>/../lib`."
+          # ArgParser.optional
+    , spago:
+        ArgParser.argument [ "-S", "--spago" ]
+          "The resolved package-set sources to compare against (one dir per package,\n\
+          \`<package>-<version>`). Defaults to `.spago/p`."
+          # ArgParser.optional
+    }
+
+type UlibCheckOption =
+  { libPath :: Maybe FilePath
+  , input :: Maybe FilePath
+  }
+
+ulibCheckParser :: ArgParser UlibCheckOption
+ulibCheckParser =
+  ArgParser.fromRecord
+    { libPath:
+        ArgParser.argument [ "-L", "--lib-path" ]
+          "The installed ulib to check. Defaults to `<cli>/../lib`."
+          # ArgParser.optional
+    , input:
+        ArgParser.argument [ "-I", "--input" ]
+          "The directory of *your* compiled artifacts (per-module `externs.cbor`) to compare\n\
+          \the shadows' interface against — i.e. your spago build output. Defaults to `output`."
+          # ArgParser.optional
+    }
+
+data Command
+  = Build BuildOption
+  | UlibInstall UlibInstallOption
+  | UlibValidate UlibValidateOption
+  | UlibCheck UlibCheckOption
 
 commandParser :: ArgParser Command
 commandParser =
@@ -151,6 +195,12 @@ commandParser =
             [ ArgParser.command [ "install" ]
                 "Compile the ulib shadows into the lib (corefn + externs)"
                 (UlibInstall <$> ulibInstallParser <* ArgParser.flagHelp)
+            , ArgParser.command [ "validate" ]
+                "Check each installed shadow's version matches your resolved package set"
+                (UlibValidate <$> ulibValidateParser <* ArgParser.flagHelp)
+            , ArgParser.command [ "check" ]
+                "Compare each shadow's public interface against your compiled module (externs)"
+                (UlibCheck <$> ulibCheckParser <* ArgParser.flagHelp)
             ] <* ArgParser.flagHelp
     ]
     <* ArgParser.flagHelp
@@ -282,6 +332,8 @@ main _cliRoot =
     Left err -> Console.error (ArgParser.printArgError err)
     Right (Build args) -> launchAff_ (buildCmd _cliRoot args)
     Right (UlibInstall args) -> launchAff_ (ulibInstallCmd _cliRoot args)
+    Right (UlibValidate args) -> launchAff_ (ulibValidateCmd _cliRoot args)
+    Right (UlibCheck args) -> launchAff_ (ulibCheckCmd _cliRoot args)
 
 -- | Link every module found under `input` into one wasm and write it to
 -- | `output`. Paths are resolved against the current working directory.
@@ -304,6 +356,104 @@ ulibInstallCmd cliRoot opt = do
     Console.log "ulib: compiling shadows -> lib …"
     execFile "sh" [ script, libPath, shadowRoot, wasmBaseSrc, purs, Path.concat [ ".spago", "p" ] ]
     Console.log "ulib: done."
+
+-- | Decode a `externs.cbor` file, or `Nothing` if it is absent/unreadable/undecodable
+-- | (CBOR → Foreign → `ExternsFile`). Mirrors the externs read in `buildCmd`.
+readExterns :: FilePath -> Aff (Maybe ExternsFile)
+readExterns path = do
+  result <- try do
+    buf <- FS.readFile path
+    fgn <- decodeFirst buf
+    pure (runDecoder decoder fgn)
+  pure case result of
+    Right (Right ef) -> Just ef
+    _ -> Nothing
+
+-- | `purs-wasm ulib validate` (ADR 0028): for each installed shadow, check that the package
+-- | version it was built against still matches (by `major.minor`) the version resolved in your
+-- | workspace (`.spago/p`). A patch bump keeps the interface so the shadow still applies; a
+-- | minor/major divergence means the shadow would be skipped at build time (the foreign HOF
+-- | stays slow) — so this fails loudly and asks you to align your version to the ulib's.
+ulibValidateCmd :: FilePath -> UlibValidateOption -> Aff Unit
+ulibValidateCmd cliRoot opt = do
+  let libPath = fromMaybe (Path.concat [ cliRoot, "..", "lib" ]) opt.libPath
+  let spago = fromMaybe (Path.concat [ ".spago", "p" ]) opt.spago
+  libPresent <- isNothing <$> FS.access libPath
+  if not libPresent then Console.log "ulib: no lib installed (run `ulib install`)."
+  else do
+    pkgDirs <- FS.readdir libPath
+    spagoDirs <- either (const []) identity <$> try (FS.readdir spago)
+    let userVers = Map.fromFoldable (spagoDirs <#> \d -> let { pkg, ver } = splitPkgVer d in Tuple pkg ver)
+    let
+      rows = pkgDirs <#> \pkgVer ->
+        let
+          { pkg, ver } = splitPkgVer pkgVer
+        in
+          { pkg, ulibVer: ver, userVer: Map.lookup pkg userVers }
+    for_ rows \r -> case r.userVer of
+      Nothing ->
+        Console.log (Fmt.fmt @"  ? {pkg}: ulib {u}, not in your workspace" { pkg: r.pkg, u: r.ulibVer })
+      Just uv
+        | majorMinor uv == majorMinor r.ulibVer ->
+            Console.log (Fmt.fmt @"  ✓ {pkg}: ulib {u}, yours {y}" { pkg: r.pkg, u: r.ulibVer, y: uv })
+        | otherwise ->
+            Console.log (Fmt.fmt @"  ✗ {pkg}: ulib {u} ≠ yours {y} (major.minor differs)" { pkg: r.pkg, u: r.ulibVer, y: uv })
+    let mismatches = Array.filter (\r -> maybe false (\uv -> majorMinor uv /= majorMinor r.ulibVer) r.userVer) rows
+    if Array.null mismatches then Console.log "ulib: validate OK."
+    else throwError
+      ( error
+          ( Fmt.fmt
+              @"ulib: {n} package(s) diverge from the shadows. Align your workspace to: {pkgs}."
+              { n: Array.length mismatches, pkgs: Str.joinWith ", " (mismatches <#> \r -> r.pkg <> " " <> r.ulibVer) }
+          )
+      )
+
+-- | `purs-wasm ulib check` (ADR 0028, deep check): compare each installed shadow's *public
+-- | interface* (exported names, from its stored externs) against the same module compiled in
+-- | your workspace (`<input>/<Module>/externs.cbor`, i.e. your spago build output). A shadow
+-- | that drops a name the registry module exports is not a drop-in — that fails the check; a
+-- | shadow that only *adds* names is reported but allowed. A module you have not compiled yet
+-- | is skipped with a note (build your project first to check it).
+ulibCheckCmd :: FilePath -> UlibCheckOption -> Aff Unit
+ulibCheckCmd cliRoot opt = do
+  let libPath = fromMaybe (Path.concat [ cliRoot, "..", "lib" ]) opt.libPath
+  let input = fromMaybe (Path.concat [ ".", "output" ]) opt.input
+  libPresent <- isNothing <$> FS.access libPath
+  if not libPresent then Console.log "ulib: no lib installed (run `ulib install`)."
+  else do
+    pkgDirs <- FS.readdir libPath
+    breaks <- map Array.concat $ for pkgDirs \pkgVer -> do
+      let pkgPath = Path.concat [ libPath, pkgVer ]
+      mods <- either (const []) identity <$> try (FS.readdir pkgPath)
+      map Array.catMaybes $ for mods \mod -> do
+        libExt <- readExterns (Path.concat [ pkgPath, mod, "externs.cbor" ])
+        usrExt <- readExterns (Path.concat [ input, mod, "externs.cbor" ])
+        case libExt, usrExt of
+          _, Nothing -> do
+            Console.log (Fmt.fmt @"  - {m} ({p}): not compiled in your workspace; skipped" { m: mod, p: pkgVer })
+            pure Nothing
+          Nothing, _ -> do
+            Console.log (Fmt.fmt @"  - {m} ({p}): shadow externs unreadable; skipped" { m: mod, p: pkgVer })
+            pure Nothing
+          Just le, Just ue -> do
+            let d = diffInterface (interfaceOf ue) (interfaceOf le)
+            if compatible d then do
+              Console.log
+                ( Fmt.fmt @"  ✓ {m} ({p}): interface OK{extra}"
+                    { m: mod, p: pkgVer, extra: if Array.null d.extra then "" else " (+" <> show (Array.length d.extra) <> " extra)" }
+                )
+              pure Nothing
+            else do
+              Console.log (Fmt.fmt @"  ✗ {m} ({p}): missing {names}" { m: mod, p: pkgVer, names: Str.joinWith ", " d.missing })
+              pure (Just mod)
+    if Array.null breaks then Console.log "ulib: check OK."
+    else throwError
+      ( error
+          ( Fmt.fmt
+              @"ulib: {n} shadow(s) are not drop-in for your workspace: {mods}. Align your version to the ulib's, or update the shadow."
+              { n: Array.length breaks, mods: Str.joinWith ", " breaks }
+          )
+      )
 
 buildCmd :: FilePath -> BuildOption -> Aff Unit
 buildCmd cliRoot args = do

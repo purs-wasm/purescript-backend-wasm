@@ -67,6 +67,32 @@ specialize. It is a distinct layer from wasm-base (ADR 0026): wasm-base = the pr
   foreign HOFs replaced by PureScript over WasmBase — preserving the exact interface (exports
   + types) of the version it targets.
 
+> **Update (2026-06-09): the `ulib` subcommand and its `validate` / `check` tools.**
+> The lib is managed by a `purs-wasm ulib` command group:
+>
+> - **`ulib install`** — compile the shadows (`ulib/shadow/<pkg>-<ver>/<Module>.purs`) against the
+>   resolved package-set sources (`.spago/p`) with WasmBase overlaid, and store each shadowed
+>   module's `corefn.json` **+ `externs.cbor`** into `<lib>/<pkg>-<ver>/<Module>/`. (Externs are
+>   stored so `check` can later compare interfaces.) Skips if the lib exists, unless `-f/--force`.
+> - **`ulib validate`** — for each installed shadow, compare the package version it targets against
+>   the version resolved in the user's workspace (`.spago/p`), by `major.minor` (a patch bump keeps
+>   the interface). A divergence is the case where the build-time lib-first resolution would *skip*
+>   the shadow (fall back to the registry, losing the speedup), so `validate` reports it and exits
+>   non-zero — the user aligns their version to the ulib's (per the resolution direction below).
+> - **`ulib check`** (deep check) — compare each shadow's **public interface** (exported names,
+>   distilled from the stored externs by `Ulib.Interface.interfaceOf`) against the *same module
+>   compiled in the user's workspace* (`<input>/<Module>/externs.cbor`, i.e. their spago build
+>   output). A shadow that **drops** a name the registry module exports is not a drop-in ⇒ fail;
+>   one that only **adds** names is reported but allowed. A not-yet-compiled module is skipped with
+>   a note. This is the operational guard for the "fidelity by copy" risk below. The interface is
+>   export *names* only (values/ops/types+ctors/classes); name-insensitive *type*-level comparison
+>   is deferred.
+>
+> **Resolution direction.** The comparison baseline is the user's workspace packages (`.spago` /
+> their build output), not the upstream registry source — those are what their IDE and spago build
+> actually run against, so any ulib/workspace divergence is what hurts them in practice. On a
+> mismatch, the user aligns *their* version to the ulib's (rather than ulib chasing every user).
+
 ## Consequences
 
 - **Idiomatic code is fast on wasm with no user action** — no `spago install`, no `Wasm.*` in

@@ -18,6 +18,7 @@ import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize as Specia
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify as Impurify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import Test.Unit.PureScript.Backend.Wasm.SourceForeigns as SourceForeigns
+import Test.Unit.PureScript.Backend.Wasm.Ulib.Interface as UlibInterface
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Transl as Transl
 import Test.Unit.PureScript.CoreFn as CoreFn
 import Test.Unit.PureScript.ExternsFile as ExternsFile
@@ -37,4 +38,5 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Impurify.spec
   Purity.spec
   SourceForeigns.spec
+  UlibInterface.spec
   FreeVars.spec
