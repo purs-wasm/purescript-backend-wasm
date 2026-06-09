@@ -78,6 +78,10 @@ jobs:
           # divergence means the build would silently fall back to the registry module and
           # the benchmark would measure the un-specialized path — fail the run instead.
           node ./bin/index.dev.js ulib validate
+          # Assert the shadows are in sync with the *pinned* package set (spago.lock) and that
+          # ulib/compat.json is up to date (ADR 0028 release record). Fails if a shadow is stale
+          # (the set bumped that package past the shadow's major.minor) or compat.json drifted.
+          node ulib-compat.mjs --check
 
       # graph.sh builds all three backends + renders the 7 algorithm graphs;
       # count-state-graph.sh / count-effect-graph.sh add the State- and Effect-monad
