@@ -160,7 +160,7 @@ import Data.Array.ST as STA
 import Data.Array.ST.Iterator as STAI
 import Data.Foldable (class Foldable, traverse_)
 import Data.Foldable as F
-import Data.Function.Uncurried (Fn2, Fn3, Fn4, Fn5, runFn2, runFn3, runFn4, runFn5)
+import Data.Function.Uncurried (Fn2, Fn3, Fn4, runFn2, runFn3, runFn4)
 import Data.FunctorWithIndex as FWI
 import Data.Maybe (Maybe(..), maybe, isJust, fromJust, isNothing)
 import Data.Traversable (sequence, traverse)
@@ -213,9 +213,10 @@ foreign import rangeImpl :: Fn2 Int Int (Array Int)
 -- | replicate 2 "Hi" = ["Hi", "Hi"]
 -- | ```
 replicate :: forall a. Int -> a -> Array a
-replicate = runFn2 replicateImpl
-
-foreign import replicateImpl :: forall a. Fn2 Int a (Array a)
+replicate n x = go 0 (WA.unsafeNew len)
+  where
+  len = if n < 0 then 0 else n
+  go i out = if i == len then out else go (i + 1) (WA.unsafeSet out i x)
 
 -- | An infix synonym for `range`.
 -- | ```purescript
@@ -520,17 +521,16 @@ findLastIndex f xs = go (WA.length xs - 1)
 -- | ```
 -- |
 insertAt :: forall a. Int -> a -> Array a -> Maybe (Array a)
-insertAt = runFn5 _insertAt Just Nothing
-
-foreign import _insertAt
-  :: forall a
-   . Fn5
-       (forall b. b -> Maybe b)
-       (forall b. Maybe b)
-       Int
-       a
-       (Array a)
-       (Maybe (Array a))
+insertAt idx x xs =
+  let
+    n = WA.length xs
+    go j out =
+      if j == n + 1 then out
+      else if j < idx then go (j + 1) (WA.unsafeSet out j (WA.unsafeIndex xs j))
+      else if j == idx then go (j + 1) (WA.unsafeSet out j x)
+      else go (j + 1) (WA.unsafeSet out j (WA.unsafeIndex xs (j - 1)))
+  in
+    if idx < 0 || idx > n then Nothing else Just (go 0 (WA.unsafeNew (n + 1)))
 
 -- | Delete the element at the specified index, creating a new array, or
 -- | returning `Nothing` if the index is out of bounds.
@@ -541,16 +541,15 @@ foreign import _insertAt
 -- | ```
 -- |
 deleteAt :: forall a. Int -> Array a -> Maybe (Array a)
-deleteAt = runFn4 _deleteAt Just Nothing
-
-foreign import _deleteAt
-  :: forall a
-   . Fn4
-       (forall b. b -> Maybe b)
-       (forall b. Maybe b)
-       Int
-       (Array a)
-       (Maybe (Array a))
+deleteAt idx xs =
+  let
+    n = WA.length xs
+    go j out =
+      if j == n - 1 then out
+      else if j < idx then go (j + 1) (WA.unsafeSet out j (WA.unsafeIndex xs j))
+      else go (j + 1) (WA.unsafeSet out j (WA.unsafeIndex xs (j + 1)))
+  in
+    if idx < 0 || idx >= n then Nothing else Just (go 0 (WA.unsafeNew (n - 1)))
 
 -- | Change the element at the specified index, creating a new array, or
 -- | returning `Nothing` if the index is out of bounds.
@@ -561,17 +560,14 @@ foreign import _deleteAt
 -- | ```
 -- |
 updateAt :: forall a. Int -> a -> Array a -> Maybe (Array a)
-updateAt = runFn5 _updateAt Just Nothing
-
-foreign import _updateAt
-  :: forall a
-   . Fn5
-       (forall b. b -> Maybe b)
-       (forall b. Maybe b)
-       Int
-       a
-       (Array a)
-       (Maybe (Array a))
+updateAt idx x xs =
+  let
+    n = WA.length xs
+    go j out =
+      if j == n then out
+      else go (j + 1) (WA.unsafeSet out j (if j == idx then x else WA.unsafeIndex xs j))
+  in
+    if idx < 0 || idx >= n then Nothing else Just (go 0 (WA.unsafeNew n))
 
 -- | Apply a function to the element at the specified index, creating a new
 -- | array, or returning `Nothing` if the index is out of bounds.
@@ -652,7 +648,23 @@ foreign import reverse :: forall a. Array a -> Array a
 -- | concat [[1, 2, 3], [], [4, 5, 6]] = [1, 2, 3, 4, 5, 6]
 -- | ```
 -- |
-foreign import concat :: forall a. Array (Array a) -> Array a
+concat :: forall a. Array (Array a) -> Array a
+concat xss = fill 0 0 (WA.unsafeNew total)
+  where
+  outer = WA.length xss
+  total = sumLen 0 0
+  sumLen i acc = if i == outer then acc else sumLen (i + 1) (acc + WA.length (WA.unsafeIndex xss i))
+  fill i pos out =
+    if i == outer then out
+    else
+      let
+        inner = WA.unsafeIndex xss i
+        n = WA.length inner
+      in
+        fill (i + 1) (pos + n) (copyInto inner 0 n pos out)
+  copyInto src j n pos out =
+    if j == n then out
+    else copyInto src (j + 1) n pos (WA.unsafeSet out (pos + j) (WA.unsafeIndex src j))
 
 -- | Apply a function to each element in an array, and flatten the results
 -- | into a single, new array.
@@ -915,11 +927,45 @@ sort xs = sortBy compare xs
 -- | sortBy compareLength [[1, 2, 3], [7, 9], [-2]] = [[-2],[7,9],[1,2,3]]
 -- | ```
 -- |
+-- A stable top-down merge sort over `Wasm.Array` (the registry `sortByImpl` foreign has no
+-- wasm provider, so without this `sort`/`sortBy` cannot run on wasm at all). On an `EQ` the
+-- left element is taken first, preserving input order (stability).
 sortBy :: forall a. (a -> a -> Ordering) -> Array a -> Array a
-sortBy comp = runFn3 sortByImpl comp case _ of
-  GT -> 1
-  EQ -> 0
-  LT -> -1
+sortBy comp xs0 =
+  let
+    sliceA src lo hi =
+      let
+        cp i o = if i == hi then o else cp (i + 1) (WA.unsafeSet o (i - lo) (WA.unsafeIndex src i))
+      in
+        cp lo (WA.unsafeNew (hi - lo))
+    merge as bs =
+      let
+        la = WA.length as
+        lb = WA.length bs
+        go i j o =
+          if i == la then
+            let cp k oo = if k == lb then oo else cp (k + 1) (WA.unsafeSet oo (la + k) (WA.unsafeIndex bs k)) in cp j o
+          else if j == lb then
+            let cp k oo = if k == la then oo else cp (k + 1) (WA.unsafeSet oo (lb + k) (WA.unsafeIndex as k)) in cp i o
+          else
+            let
+              a = WA.unsafeIndex as i
+              b = WA.unsafeIndex bs j
+            in
+              case comp a b of
+                GT -> go i (j + 1) (WA.unsafeSet o (i + j) b)
+                _ -> go (i + 1) j (WA.unsafeSet o (i + j) a)
+      in
+        go 0 0 (WA.unsafeNew (la + lb))
+    msort a =
+      let
+        m = WA.length a
+      in
+        if m <= 1 then a
+        else
+          let half = m / 2 in merge (msort (sliceA a 0 half)) (msort (sliceA a half m))
+  in
+    msort xs0
 
 -- | Sort the elements of an array in increasing order, where elements are
 -- | sorted based on a projection. Sorting is stable: the order of elements is
@@ -933,7 +979,6 @@ sortBy comp = runFn3 sortByImpl comp case _ of
 sortWith :: forall a b. Ord b => (a -> b) -> Array a -> Array a
 sortWith f = sortBy (comparing f)
 
-foreign import sortByImpl :: forall a. Fn3 (a -> a -> Ordering) (Ordering -> Int) (Array a) (Array a)
 
 --------------------------------------------------------------------------------
 -- Subarrays -------------------------------------------------------------------

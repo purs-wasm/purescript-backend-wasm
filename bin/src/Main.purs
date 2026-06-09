@@ -264,6 +264,30 @@ checkWasmBaseCompat modules = case Array.nub (modules >>= unsupported) of
   recognized qual = isJust (qualifiedIntrinsic qual) || isJust (foreignIntrinsic (lastSegment qual))
   lastSegment q = fromMaybe q (Array.last (Str.split (Pattern ".") q))
 
+-- | The purs compiler version(s) whose CoreFn format this backend's decoder is verified against
+-- | (ADR 0029). A linked module — the user's app *or* a ulib shadow — built with another compiler
+-- | may carry a subtly different CoreFn shape this backend would mis-decode, so it is rejected
+-- | loudly rather than silently miscompiled. Widen only after testing the decoder against the new
+-- | compiler's output (a breaking CoreFn change between two purs releases is exactly what this
+-- | guards: it surfaces as a clear error, not a wrong build).
+supportedCorefn :: Array String
+supportedCorefn = [ "0.15.16" ]
+
+-- | Reject any linked module whose `builtWith` compiler is not one this backend supports.
+checkCorefnVersions :: forall r. Array { name :: ModuleName, builtWith :: String | r } -> Either String Unit
+checkCorefnVersions modules = case Array.filter (\m -> not (Array.elem m.builtWith supportedCorefn)) modules of
+  [] -> Right unit
+  bad -> Left
+    ( Fmt.fmt
+        @"{n} module(s) were compiled with an unsupported purs (version(s): {versions}); e.g. {egs}{more}. This purs-wasm decodes CoreFn from {supported} — rebuild with that compiler (your project and the bundled ulib lib must agree on it)."
+        { n: Array.length bad
+        , versions: Str.joinWith ", " (Array.nub (map _.builtWith bad))
+        , egs: Str.joinWith ", " (map (Str.joinWith "." <<< _.name) (Array.take 5 bad))
+        , more: if Array.length bad > 5 then ", …" else ""
+        , supported: Str.joinWith ", " supportedCorefn
+        }
+    )
+
 -- | The registry modules ulib shadows (ADR 0028), each tied to the *package* version its
 -- | shadow was reimplemented against.
 type Shadow = { package :: String, version :: String, corefn :: FilePath }
@@ -489,6 +513,10 @@ buildCmd cliRoot args = do
       Right m -> shadowOrRegistry shadows mod m
   -- Fail early on a `wasm-base` whose version is incompatible with this backend (ADR 0026).
   either (throwError <<< error) pure (checkWasmBaseCompat modules)
+  -- Reject CoreFn from an unsupported purs (ADR 0029): the user's app and the bundled ulib lib
+  -- must both be the compiler this backend's decoder is verified against, else a CoreFn-format
+  -- change could mis-decode silently.
+  either (throwError <<< error) pure (checkCorefnVersions modules)
   -- Each module's `externs.cbor` carries the top-level type information CoreFn
   -- erased; it drives type-directed lowering (front B). A module without readable
   -- or decodable externs is simply skipped — its constructors fall back to boxed.

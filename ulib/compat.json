@@ -1,0 +1,11 @@
+{
+  "packageSet": "77.4.0",
+  "pursPin": "0.15.16",
+  "pursMin": "0.15.15",
+  "pursMax": "0.15.16",
+  "packages": {
+    "arrays": "7.3.0",
+    "foldable-traversable": "6.0.0",
+    "prelude": "6.0.2"
+  }
+}

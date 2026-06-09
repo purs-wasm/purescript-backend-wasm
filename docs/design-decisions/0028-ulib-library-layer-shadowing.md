@@ -93,6 +93,66 @@ specialize. It is a distinct layer from wasm-base (ADR 0026): wasm-base = the pr
 > actually run against, so any ulib/workspace divergence is what hurts them in practice. On a
 > mismatch, the user aligns *their* version to the ulib's (rather than ulib chasing every user).
 
+> **Update (2026-06-09): `Data.Array` added to the shadow set (arrays 7.3.x).** The third shadow.
+> It is the registry `Data.Array` copied verbatim, with only the higher-order `*Impl` foreigns
+> reimplemented over `Wasm.Array`: `filter`, `partition`, `zipWith`, `scanl`/`scanr`,
+> `findIndex`/`findLastIndex`/`findMap`, `any`/`all`. Structural foreigns
+> (`range`/`reverse`/`slice`/`uncons`/`index`, still wat-provided) and the `Data.Array.ST`-based
+> functions are left as-is — identical behaviour, resolved or DCE'd exactly as for the registry
+> module, so the change is strictly Pareto (some HOFs specialize; nothing regresses).
+>
+> **Follow-up (same day): the structural foreigns that had *no* wasm provider were reimplemented
+> too**, since they were host-imports that simply could not run standalone — `replicate`, `concat`,
+> `insertAt`/`deleteAt`/`updateAt`, and `sortBy`/`sort` (a stable top-down merge sort over
+> `Wasm.Array`). These take no static closure (no specialization win) but close real capability
+> gaps: `sort` and friends now run on a self-contained wasm with no JS loader. Verified on wasm
+> (incl. sort stability); only `fromFoldable` (Foldable-polymorphic) and the five wat-provided
+> readers remain foreign. Unlike the sub-`Prelude`
+> shadows, the index arithmetic uses ordinary `Prelude` `Int` ops (already intrinsics here), so no
+> `Wasm.Int` is needed. Verified on wasm: all reimplemented HOFs match registry semantics; the
+> public interface is unchanged (`ulib check` ✓). No benchmark case was kept: a `filter`-based
+> bench was prototyped but it is allocation/GC-bound (a fresh result array per call) and boxing-
+> bound (#19), so it measures heap churn, not the specialization, and cannot beat js-es's native
+> arrays until int unboxing lands — revisit array-HOF benchmarks after #19. The shadow's actual
+> win is on the wasm side (the predicate specializes into the loop instead of an opaque per-element
+> `call_ref`), which the wasm-vs-js bench harness cannot isolate.
+>
+> **Single-allocation invariant (gotcha).** Each reimplemented HOF must call `Wasm.Array.unsafeNew`
+> **exactly once** and thread that one buffer through a single recursion. The optimizer treats
+> `unsafeNew` as pure, so a working buffer referenced from two places (e.g. fill into it, then a
+> separate pass to trim it) is **duplicated** — each site allocates its own array, and the second
+> reads an uninitialised one (→ `illegal cast` at run time). `filter`, whose result size isn't
+> known up front, therefore counts matches in a cheap first pass and then fills one exact-size
+> buffer, rather than over-allocating and trimming. (The deeper fix — marking `unsafeNew` impure so
+> the optimizer never duplicates it — is a separate compiler change; the single-allocation
+> discipline is the shadow-level workaround.)
+
+> **Update (2026-06-09): the optimizer now treats the array mutators as memory-effectful, so the
+> single-allocation discipline above is no longer load-bearing.** `Purity` gained `memEffKeys` — a
+> least-fixpoint set of top-level bindings whose *evaluation* writes/allocates memory, seeded by
+> `Wasm.Array.unsafeNew`/`unsafeSet` and propagated through the call graph (lambda-lifting has
+> already promoted the buffer-filling local helpers to top level, so the set reaches them).
+> `evalImpure` consults it on an application head, so the simplifier's drop/duplicate/move rules
+> (all gated on `exprPure`) now leave a buffer fill alone even when its own result is discarded —
+> the write runs, in place. This is distinct from `impureKeys` (Effect *performing*, ADR 0015): a
+> memory write happens on plain evaluation, never via a `Perform`, so `memEffKeys` ignores `Effect`
+> and does not over-mark Effect bindings (no regression to the State/Effect collapse — full suite
+> green). Both the trapping patterns (a direct write whose result is unused, and a local helper
+> that fills then returns a count) now run correctly; the `filter` shadow's count-first shape is
+> kept (it also avoids over-allocating) but is no longer *required* for correctness.
+
+> **Update (2026-06-09): the compat-map is realised + a sync guard.** `ulib/compat.json` records
+> the pinned package-set version (`workspace.package_set.address.registry` in `spago.lock`, here
+> `77.4.0`) and, per shadowed package, the version that set resolves (`package_set.content`). It is
+> git-managed — the explicit statement of what a ulib release targets. `ulib-compat.mjs` generates
+> it (`node ulib-compat.mjs`) and verifies it (`--check`, wired into the bench workflow): a shadow
+> whose `major.minor` diverges from the pinned set is **stale** and fails the check (the package set
+> bumped that package past what the shadow targets — re-shadow it), a patch-only divergence warns,
+> and a missing/out-of-date `compat.json` fails. This closes the release/sync loop: when the pinned
+> set is bumped, `--check` flags exactly which shadow dirs (`ulib/shadow/<pkg>-<ver>/`) need
+> updating. (Distinct from `ulib validate`, which compares the installed lib against the *user's*
+> workspace; this compares the shadows against the *project's pinned set*.)
+
 ## Consequences
 
 - **Idiomatic code is fast on wasm with no user action** — no `spago install`, no `Wasm.*` in
