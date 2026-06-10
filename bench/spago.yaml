@@ -9,3 +9,5 @@ package:
     - functions
     - partial
     - wasm-base
+    - run
+    - tuples
