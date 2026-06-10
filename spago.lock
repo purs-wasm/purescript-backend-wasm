@@ -143,7 +143,9 @@
           "dependencies": [
             "console",
             "effect",
-            "prelude"
+            "maybe",
+            "prelude",
+            "strings"
           ]
         },
         "test": {

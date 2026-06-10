@@ -10,7 +10,7 @@
     "test:unit": "spago test --monochrome",
     "test:e2e": "npm run build:runtime && npm run build:ulib && spago test -m Test.E2E.Compiler --monochrome",
     "test:shownumber": "npm run build:runtime && npm run build:ulib && node test/showNumber.mjs",
-    "test:bin": "npm run build:runtime && npm run build:ulib && node test/effectMain.mjs && node test/sourceForeign.mjs && node test/refNative.mjs && node test/effectPrim.mjs && node test/effectRefMain.mjs && node test/runStringEffect.mjs && node test/examplesRun.mjs && node test/ulibShadow.mjs",
+    "test:bin": "npm run build:runtime && npm run build:ulib && node test/effectMain.mjs && node test/sourceForeign.mjs && node test/refNative.mjs && node test/effectPrim.mjs && node test/effectRefMain.mjs && node test/runStringEffect.mjs && node test/examplesRun.mjs && node test/ulibShadow.mjs && node test/stringShadow.mjs",
     "test": "npm run test:unit && npm run test:e2e && npm run test:shownumber && npm run test:bin",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test"

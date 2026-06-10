@@ -3,4 +3,6 @@ package:
   dependencies:
     - console
     - effect
+    - maybe
     - prelude
+    - strings
