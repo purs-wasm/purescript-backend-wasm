@@ -3,6 +3,16 @@
 - Status: Accepted _(2026-06-10: the decision is adopted; the purs pin + `builtWith` link guard + `ulib-compat.mjs` two-sided compiler check are implemented — the nix packaging of the precompiled lib is the tracked next step.)_
 - Date: 2026-06-09
 
+> **Update (2026-06-10):** The `ulib-compat.mjs` prototype has been reimplemented as the
+> `purs-wasm ulib compat` subcommand — a PureScript port producing the same `compat.json`
+> (byte-for-byte, verified by a differential test against the prototype) with the same generate /
+> `--check` modes. The registry `compilers` query (`spago registry info <pkg> --json`) now sits
+> behind an abstract `REGISTRY` effect (`PursWasm.CLI.Effect.Registry`): the production interpreter
+> shells out to `spago`, while tests substitute a pure stub, so the generate path is unit-testable
+> with no network and the registry source is swappable for the WASI self-host goal. **Every
+> reference to `ulib-compat.mjs` in this ADR now denotes that subcommand.** (The old `.mjs` stays
+> in-tree only until the `bin` CLI is retired.)
+
 ## Context
 
 The ulib library layer (ADR 0028) ships as a set of PureScript *shadow* sources that must be
