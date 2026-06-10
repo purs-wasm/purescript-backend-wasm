@@ -3,12 +3,12 @@
 // other through `Fn3` (`op(a, b, c)`). Sweeping the iteration count `n`, it measures the
 // per-backend currying tax — the curry/uncurry slowdown ratio — on the same PureScript
 // source across three backends:
-//   * wasm     : our GC backend (output-wasm/index.wasm, optimized)
+//   * wasm     : our GC backend (output-wasm-curry/index.wasm, optimized)
 //   * js-naive : purs's stock JS backend (output, dictionary-passing)
 //   * js-es    : purs-backend-es (output-js-es, the optimized JS people ship)
 //
 //   build:  spago build -p bench --output bench/output
-//           node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e BenchCurry
+//           node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-curry -e BenchCurry
 //           purs-backend-es build --corefn-dir ./bench/output --output-dir ./bench/output-js-es --int-tags
 //   run:    node bench/curry.mjs
 //
@@ -22,7 +22,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/index.wasm", import.meta.url)));
+const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm-curry/index.wasm", import.meta.url)));
 const wasmModule = await WebAssembly.compile(wasmBytes);
 // Both exports are i32-in/i32-out, so the raw exports need no marshalling. One warmed
 // instance per backend (reused across sizes) so V8 tiers the wasm up to TurboFan —
