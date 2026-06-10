@@ -1,0 +1,8 @@
+package:
+  name: examples-run
+  dependencies:
+    - console
+    - effect
+    - fmt
+    - prelude
+    - run
