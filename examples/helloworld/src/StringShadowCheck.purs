@@ -1,22 +1,24 @@
--- Regression fixture for the ulib `Data.String.CodeUnits` shadow (ADR 0028 / 0030): the registry
--- module's UTF-16 JS foreigns are reimplemented in PureScript over `Wasm.String` with **code-point**
--- semantics over the UTF-8 `$Str`. `ulib check` guards the interface; this guards the runtime
--- semantics of the hand-written UTF-8 codec across 1/2/3-byte code points. Driven by
--- `compiler/test/stringShadow.mjs`.
+-- Regression fixture for the ulib `Data.String.CodeUnits` / `Data.String.Common` shadows (ADR 0028
+-- / 0030): the registry modules' UTF-16 JS foreigns are reimplemented in PureScript over
+-- `Wasm.String` with **code-point** semantics over the UTF-8 `$Str`. `ulib check` guards the
+-- interface; this guards the runtime semantics of the hand-written UTF-8 codecs across 1/2/3-byte
+-- code points. Driven by `compiler/test/stringShadow.mjs`.
 -- |
--- `check n` returns a 16-bit pass mask (65535 = all pass), one bit per operation. The test string
--- `"aé☺b"` mixes a 1-byte ('a'/'b'), a 2-byte ('é' = U+00E9) and a 3-byte ('☺' = U+263A) code
--- point, so a byte-vs-code-point confusion in any operation flips its bit.
+-- `check n` returns a 24-bit pass mask (16777215 = all pass), one bit per operation. The test
+-- string `"aé☺b"` mixes a 1-byte ('a'/'b'), a 2-byte ('é' = U+00E9) and a 3-byte ('☺' = U+263A)
+-- code point, so a byte-vs-code-point confusion in any operation flips its bit.
 module Examples.HelloWorld.StringShadowCheck where
 
 import Prelude
 
 import Data.Maybe (Maybe(..))
+import Data.String.Common as C
 import Data.String.CodeUnits as S
-import Data.String.Pattern (Pattern(..))
+import Data.String.Pattern (Pattern(..), Replacement(..))
 
 check :: Int -> Int
 check _ =
+  -- Data.String.CodeUnits (bits 0-15)
   bit 0 (S.length s == 4)
     + bit 1 (S.take 2 s == "aé")
     + bit 2 (S.drop 2 s == "☺b")
@@ -33,6 +35,15 @@ check _ =
     + bit 13 (S.stripPrefix (Pattern "aé") s == Just "☺b")
     + bit 14 (S.uncons s == Just { head: 'a', tail: "é☺b" })
     + bit 15 (S.toChar "☺" == Just '☺' && S.toChar "aé" == Nothing)
+    -- Data.String.Common (bits 16-23)
+    + bit 16 (C.split (Pattern ",") "a,b,c" == [ "a", "b", "c" ])
+    + bit 17 (C.split (Pattern "") "aé☺" == [ "a", "é", "☺" ])
+    + bit 18 (C.joinWith ", " [ "a", "é", "☺" ] == "a, é, ☺")
+    + bit 19 (C.replace (Pattern "é") (Replacement "X") "aéaé" == "aXaé")
+    + bit 20 (C.replaceAll (Pattern "é") (Replacement "X") "aéaé" == "aXaX")
+    + bit 21 (C.trim "  aé  " == "aé")
+    + bit 22 (C.null "" && not (C.null "a"))
+    + bit 23 (C.split (Pattern "☺") "a☺b☺c" == [ "a", "b", "c" ])
   where
   s = "aé☺b"
   bit n b = if b then pow2 n else 0

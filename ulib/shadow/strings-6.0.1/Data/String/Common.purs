@@ -1,0 +1,226 @@
+-- | ulib SHADOW of `strings`' `Data.String.Common` (ADR 0028 / 0030), targeting strings 6.0.1.
+-- |
+-- | The structural foreigns — `replace` / `replaceAll` / `split` / `joinWith` / `trim` — are
+-- | reimplemented in PureScript over the byte-level `Wasm.String` primitives (UTF-8, code-point
+-- | semantics, ADR 0030), so they run standalone on wasm. `trim`'s whitespace set is the finite
+-- | ECMAScript `WhiteSpace` + `LineTerminator` set, hard-coded.
+-- |
+-- | `toLower` / `toUpper` / `_localeCompare` are KEPT as foreign imports: full Unicode case mapping
+-- | (~1400 entries) and locale collation (CLDR) need large host data, so they stay a JS host import
+-- | (ADR 0030 — host-data-dependent operations fall back to JS; a program using them runs under the
+-- | loader). The public interface is unchanged, so this shadows the registry module.
+-- |
+-- | NOTE: the UTF-8 byte helpers below duplicate those in the `Data.String.CodeUnits` shadow; a
+-- | shared internal module is a future refactor (kept self-contained for now).
+module Data.String.Common
+  ( null
+  , localeCompare
+  , replace
+  , replaceAll
+  , split
+  , toLower
+  , toUpper
+  , trim
+  , joinWith
+  ) where
+
+import Prelude
+
+import Data.String.Pattern (Pattern(..), Replacement(..))
+import Wasm.Array as WA
+import Wasm.String as WS
+
+-------------------------------------------------------------------------------
+-- UTF-8 byte helpers (private)
+-------------------------------------------------------------------------------
+
+-- | Decode the code point at byte offset `o` (`< byteLength`), returning it and the next offset.
+decodeAt :: String -> Int -> { cp :: Int, next :: Int }
+decodeAt s o =
+  let
+    b0 = WS.byteAt s o
+    cont k = WS.byteAt s (o + k) `mod` 64
+  in
+    if b0 < 0x80 then { cp: b0, next: o + 1 }
+    else if b0 < 0xE0 then { cp: (b0 `mod` 32) * 64 + cont 1, next: o + 2 }
+    else if b0 < 0xF0 then { cp: (b0 `mod` 16) * 4096 + cont 1 * 64 + cont 2, next: o + 3 }
+    else { cp: (b0 `mod` 8) * 262144 + cont 1 * 4096 + cont 2 * 64 + cont 3, next: o + 4 }
+
+-- | Copy `src` bytes `[from, to)` into `dst` starting at `off`, returning the threaded `dst`.
+blit :: String -> Int -> Int -> String -> Int -> String
+blit src from to dst off = go from off dst
+  where
+  go i o d = if i >= to then d else go (i + 1) (o + 1) (WS.unsafeSetByte d o (WS.byteAt src i))
+
+-- | Copy the bytes `[from, to)` of `s` into a fresh string (empty if `to <= from`).
+sliceBytes :: String -> Int -> Int -> String
+sliceBytes s from to =
+  if to <= from then WS.unsafeNew 0
+  else blit s from to (WS.unsafeNew (to - from)) 0
+
+-- | The first byte offset `>= from` at which `needle` occurs in `hay`, or `-1`.
+byteIndexOf :: String -> String -> Int -> Int
+byteIndexOf hay needle from = go from
+  where
+  hn = WS.byteLength hay
+  nn = WS.byteLength needle
+  matchAt i j = if j >= nn then true else if WS.byteAt hay (i + j) == WS.byteAt needle j then matchAt i (j + 1) else false
+  go i = if i + nn > hn then -1 else if matchAt i 0 then i else go (i + 1)
+
+-- | The ECMAScript `String.prototype.trim` whitespace set (`WhiteSpace` + `LineTerminator`).
+isWhitespace :: Int -> Boolean
+isWhitespace cp =
+  cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0B || cp == 0x0C || cp == 0x0D
+    || cp == 0xA0
+    || cp == 0x1680
+    || (cp >= 0x2000 && cp <= 0x200A)
+    || cp == 0x2028
+    || cp == 0x2029
+    || cp == 0x202F
+    || cp == 0x205F
+    || cp == 0x3000
+    || cp == 0xFEFF
+
+-------------------------------------------------------------------------------
+
+-- | Returns `true` if the given string is empty.
+null :: String -> Boolean
+null s = s == ""
+
+-- | Compare two strings in a locale-aware fashion (kept foreign — needs host CLDR collation data).
+localeCompare :: String -> String -> Ordering
+localeCompare = _localeCompare LT EQ GT
+
+foreign import _localeCompare
+  :: Ordering
+  -> Ordering
+  -> Ordering
+  -> String
+  -> String
+  -> Ordering
+
+-- | Replaces the first occurence of the pattern with the replacement string.
+replace :: Pattern -> Replacement -> String -> String
+replace (Pattern p) (Replacement r) s =
+  let
+    i = byteIndexOf s p 0
+  in
+    if i < 0 then s
+    else
+      let
+        pn = WS.byteLength p
+        rn = WS.byteLength r
+        sn = WS.byteLength s
+        out0 = WS.unsafeNew (sn - pn + rn)
+        out1 = blit s 0 i out0 0
+        out2 = blit r 0 rn out1 i
+      in
+        blit s (i + pn) sn out2 (i + rn)
+
+-- | Replaces all occurences of the pattern with the replacement string.
+replaceAll :: Pattern -> Replacement -> String -> String
+replaceAll (Pattern p) (Replacement r) s =
+  if pn == 0 then interleave
+  else build 0 0 0 (WS.unsafeNew total)
+  where
+  pn = WS.byteLength p
+  rn = WS.byteLength r
+  sn = WS.byteLength s
+  occ = countOcc 0 0
+  countOcc from acc = let i = byteIndexOf s p from in if i < 0 then acc else countOcc (i + pn) (acc + 1)
+  total = sn + occ * (rn - pn)
+  -- non-empty pattern: copy each segment between matches, inserting `r` at every match
+  build prevEnd from off out =
+    let
+      i = byteIndexOf s p from
+    in
+      if i < 0 then blit s prevEnd sn out off
+      else
+        let
+          out1 = blit s prevEnd i out off
+          off1 = off + (i - prevEnd)
+          out2 = blit r 0 rn out1 off1
+        in
+          build (i + pn) (i + pn) (off1 + rn) out2
+  -- empty pattern: JS inserts `r` around every code point (`"abc"` → `"<r>a<r>b<r>c<r>"`)
+  interleave = go 0 (blit r 0 rn (WS.unsafeNew (rn + sn + occCp * rn)) 0) rn
+    where
+    occCp = cpCount 0 0
+    cpCount o k = if o >= sn then k else cpCount (decodeAt s o).next (k + 1)
+    go o out off =
+      if o >= sn then out
+      else
+        let
+          d = decodeAt s o
+          out1 = blit s o d.next out off
+          out2 = blit r 0 rn out1 (off + (d.next - o))
+        in
+          go d.next out2 (off + (d.next - o) + rn)
+
+-- | Splits the second string along occurences of the first.
+split :: Pattern -> String -> Array String
+split (Pattern sep) s =
+  if WS.byteLength sep == 0 then splitChars
+  else fill 0 0 0 (WA.unsafeNew (occ + 1))
+  where
+  nn = WS.byteLength sep
+  sn = WS.byteLength s
+  occ = countOcc 0 0
+  countOcc from acc = let i = byteIndexOf s sep from in if i < 0 then acc else countOcc (i + nn) (acc + 1)
+  fill k prevEnd from out =
+    let
+      i = byteIndexOf s sep from
+    in
+      if i < 0 then WA.unsafeSet out k (sliceBytes s prevEnd sn)
+      else fill (k + 1) (i + nn) (i + nn) (WA.unsafeSet out k (sliceBytes s prevEnd i))
+  -- empty separator: one element per code point; an empty string splits to `[]`
+  splitChars =
+    if sn == 0 then WA.unsafeNew 0
+    else go 0 0 (WA.unsafeNew (cpCount 0 0))
+    where
+    cpCount o k = if o >= sn then k else cpCount (decodeAt s o).next (k + 1)
+    go o k out = if o >= sn then out else let d = decodeAt s o in go d.next (k + 1) (WA.unsafeSet out k (sliceBytes s o d.next))
+
+-- | Returns the argument converted to lowercase (kept foreign — needs host Unicode case tables).
+foreign import toLower :: String -> String
+
+-- | Returns the argument converted to uppercase (kept foreign — needs host Unicode case tables).
+foreign import toUpper :: String -> String
+
+-- | Removes leading and trailing whitespace (ECMAScript `WhiteSpace` + `LineTerminator`).
+trim :: String -> String
+trim s = walk 0 0 0 false
+  where
+  n = WS.byteLength s
+  -- single pass: `start` = byte offset of the first non-ws code point, `lastEnd` = the offset just
+  -- past the last non-ws code point; the trimmed string is `[start, lastEnd)`.
+  walk o start lastEnd seen =
+    if o >= n then sliceBytes s start lastEnd
+    else
+      let
+        d = decodeAt s o
+      in
+        if isWhitespace d.cp then walk d.next start lastEnd seen
+        else walk d.next (if seen then start else o) d.next true
+
+-- | Joins the strings in the array, inserting the separator between them.
+joinWith :: String -> Array String -> String
+joinWith sep xs =
+  if m == 0 then WS.unsafeNew 0
+  else build 0 0 (WS.unsafeNew total)
+  where
+  m = WA.length xs
+  sepLen = WS.byteLength sep
+  xAt k = WA.unsafeIndex xs k
+  total = sumLen 0 0 + sepLen * (m - 1)
+  sumLen k acc = if k >= m then acc else sumLen (k + 1) (acc + WS.byteLength (xAt k))
+  build k off out =
+    if k >= m then out
+    else
+      let
+        x = xAt k
+        lenX = WS.byteLength x
+        out1 = blit x 0 lenX out off
+      in
+        if k == m - 1 then out1
+        else build (k + 1) (off + lenX + sepLen) (blit sep 0 sepLen out1 (off + lenX))

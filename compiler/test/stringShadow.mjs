@@ -1,11 +1,11 @@
-// CLI-integration regression test (ulib Data.String.CodeUnits shadow, ADR 0028 / 0030): the
-// `purs-wasm build` link step swaps the registry `Data.String.CodeUnits` (UTF-16 JS foreigns) for
-// the ulib shadow, which reimplements them in PureScript over `Wasm.String` with **code-point**
+// CLI-integration regression test (ulib Data.String.CodeUnits / Data.String.Common shadows, ADR
+// 0028 / 0030): the `purs-wasm build` link step swaps the registry modules (UTF-16 JS foreigns) for
+// the ulib shadows, which reimplement them in PureScript over `Wasm.String` with **code-point**
 // semantics on the UTF-8 `$Str`. `ulib check` guards the interface; this guards the runtime
-// semantics of the hand-written UTF-8 codec. Builds `Examples.HelloWorld.StringShadowCheck`, whose
-// `check n :: Int -> Int` runs 16 operations on the mixed-width string "aé☺b" (1/2/3-byte code
-// points) and returns a 16-bit pass mask — 65535 iff every operation matched the code-point
-// semantics. The export is i32-in/i32-out, so it needs no marshalling.
+// semantics of the hand-written UTF-8 codecs. Builds `Examples.HelloWorld.StringShadowCheck`, whose
+// `check n :: Int -> Int` runs the operations on the mixed-width string "aé☺b" (1/2/3-byte code
+// points) and returns a pass mask — all-ones iff every operation matched the code-point semantics.
+// The export is i32-in/i32-out, so it needs no marshalling.
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
@@ -35,15 +35,20 @@ const inst = await WebAssembly.instantiate(await WebAssembly.compile(bytes), {})
 if (typeof inst.exports.check !== "function") fail("export `check` is not a function");
 
 const NAMES = [
+  // Data.String.CodeUnits (bits 0-15)
   "length", "take", "drop", "charAt-in", "charAt-oob", "toCharArray", "fromCharArray", "singleton",
   "splitAt", "slice", "indexOf", "lastIndexOf", "countPrefix", "stripPrefix", "uncons", "toChar",
+  // Data.String.Common (bits 16-23)
+  "Common.split", "Common.split-empty", "Common.joinWith", "Common.replace", "Common.replaceAll",
+  "Common.trim", "Common.null", "Common.split-multibyte",
 ];
+const EXPECT = (1 << NAMES.length) - 1; // 2^24 - 1 = 16777215
 const r = inst.exports.check(0);
-if (r !== 65535) {
+if (r !== EXPECT) {
   const fails = NAMES.filter((_, i) => !(r & (1 << i)));
-  fail(`check(0) = ${r} (expected 65535); failing op(s): ${fails.join(", ") || "none?"}`);
+  fail(`check(0) = ${r} (expected ${EXPECT}); failing op(s): ${fails.join(", ") || "none?"}`);
 }
 
 rmSync(compiled, { recursive: true, force: true });
 rmSync(bundle, { recursive: true, force: true });
-console.log("stringShadow: OK — Data.String.CodeUnits shadow runs correctly on wasm (UTF-8 code-point semantics, 1/2/3-byte)");
+console.log("stringShadow: OK — Data.String.CodeUnits + Data.String.Common shadows run correctly on wasm (UTF-8 code-point semantics, 1/2/3-byte)");
