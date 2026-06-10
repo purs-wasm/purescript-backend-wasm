@@ -3,8 +3,9 @@
 // fallback — and (b) expose the `Effect` as a deferred thunk, so `main(s)()` runs it. The compiled
 // export carries the `Effect` perform-unit as a trailing param (`Codegen.addExportWrapper`
 // synthesises it, exposing only the marshalled arg); the loader returns the thunk and omits the
-// perform-unit (`Build.Loader`). This is the `examples/run` case (purescript-run over a Talk
-// effect), which previously failed with "Cannot convert object to primitive value".
+// perform-unit (`Build.Loader`). Builds the dedicated `Examples.HelloWorld.StrEff` fixture (a stable
+// `main :: String -> Effect Unit`); the bug it guards previously failed with "Cannot convert object
+// to primitive value".
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,11 +20,11 @@ const fail = (m) => {
 
 execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 const compiled = mkdtempSync(join(tmpdir(), "runstr-out-"));
-execFileSync("spago", ["build", "-p", "examples-run", "--output", compiled], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "examples-helloworld", "--output", compiled], { cwd: repo, stdio: "inherit" });
 const bundle = mkdtempSync(join(tmpdir(), "runstr-bundle-"));
 execFileSync(
   "node",
-  ["purs-wasm/index.dev.js", "build", "-e", "Examples.Run.Main", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.dev.js", "build", "-e", "Examples.HelloWorld.StrEff", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 
@@ -41,8 +42,8 @@ thunk();
 console.log = orig;
 
 const got = out.join("\n");
-const want = "Hi!\nWhat's your name?\nNice to meet you, Alice.";
-if (got !== want) fail(`dialogue mismatch:\n  got:  ${JSON.stringify(got)}\n  want: ${JSON.stringify(want)}`);
+const want = "Hello, Alice!";
+if (got !== want) fail(`output mismatch:\n  got:  ${JSON.stringify(got)}\n  want: ${JSON.stringify(want)}`);
 
 rmSync(compiled, { recursive: true, force: true });
 rmSync(bundle, { recursive: true, force: true });
