@@ -118,3 +118,6 @@ magenta msg = foreground Ansi.Magenta (Dodo.text msg)
 
 logAndThrow :: forall r a. String -> Run (LOG + EFFECT + r) a
 logAndThrow msg = error msg *> liftEffect (Exn.throw msg)
+
+br :: forall r. Run (LOG + r) Unit
+br = info ""

@@ -33,6 +33,7 @@ import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
 import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, resolvePath, unlink, writeBinary, writeText)
+import PursWasm.CLI.Effect.Log (br)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
@@ -67,7 +68,8 @@ buildCmd cliRoot args = do
 
   info $
     Log.strong (Log.cyan (Fmt.fmt @"purs-wasm {version}" { version: Version.version }))
-      <> Log.green (Fmt.fmt @" building {target} for {platform} platform...\n" { target: if args.text then "wat" else "wasm", platform: Str.toLower $ show args.platform })
+      <> Log.green (Fmt.fmt @" building {target} for {platform} platform..." { target: if args.text then "wat" else "wasm", platform: Str.toLower $ show args.platform })
+  info ""
   info "Selecting modules to pack in..."
 
   -- ulib lib (ADR 0028) sits beside the compiler (`<cli>/../lib`); `resolvePath` normalises the
@@ -90,7 +92,7 @@ buildCmd cliRoot args = do
     pure (Tuple (printModname mod) (corefnImportsImpl source))
   let reachable = reachableClosure roots (Map.fromFoldable importPairs)
   let mods = Array.filter (\mod -> Set.member (printModname mod) reachable) allMods
-  info $ Log.green (Fmt.fmt @"✓ {count} of {total} module(s) are selected.\n" { count: Array.length mods, total: Array.length allMods })
+  info (Log.green $ Fmt.fmt @"✓ {count} of {total} module(s) are selected." { count: Array.length mods, total: Array.length allMods }) *> br
   modules <- for mods \mod -> do
     source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
     case parseModule source of
@@ -170,6 +172,6 @@ buildCmd cliRoot args = do
       -- footer: elapsed wall-clock time and the artifact's size
       end <- liftEffect nowMsImpl
       size <- maybe "" (\b -> ", " <> humanSize b) <$> fileSize artifact
-      info ""
-      info (Fmt.fmt @"✨️ Finished compilation in {secs}s{size}\n" { secs: toStringWith (fixed 2) ((end - start) / 1000.0), size })
-      info $ Log.strong $ Log.green (Fmt.fmt @"✓ Build succeeded!" { secs: toStringWith (fixed 2) ((end - start) / 1000.0), size })
+      br
+      info (Fmt.fmt @"✨️ Finished compilation in {secs}s{size}" { secs: toStringWith (fixed 2) ((end - start) / 1000.0), size }) *> br
+      info $ Log.strong $ Log.green "✓ Build succeeded!"

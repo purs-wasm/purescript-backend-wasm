@@ -20,7 +20,8 @@ import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Ulib.Interface (compatible, diffInterface, interfaceOf)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, exists, execFile, info, joinPath, logAndThrow, readDir)
+import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
+import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Options.Types (UlibCheckOption, UlibInstallOption, UlibValidateOption)
 import PursWasm.CLI.Ulib.Version (majorMinor, splitPkgVer)
@@ -39,14 +40,16 @@ ulibInstallCmd cliRoot opt = do
   wasmBaseSrc <- joinPath [ cliRoot, "..", "wasm-base", "src" ]
   script <- joinPath [ cliRoot, "ulib-install.sh" ]
   spagoP <- joinPath [ ".spago", "p" ]
-  present <- exists libPath
+  -- "present" means the lib actually holds shadows, not merely that the directory exists — an
+  -- empty `-L` dir must still install (`readDir`: `Nothing` if absent, `Just []` if empty).
+  present <- not <<< Array.null <<< fromMaybe [] <$> readDir libPath
   if present && not opt.force then
     info "ulib: lib already present (use -f/--force to rebuild)."
   else do
     when opt.force (execFile "rm" [ "-rf", libPath ])
-    info "ulib: compiling shadows -> lib …"
+    info $ Log.green "✓ Compiling shadows..."
     execFile "sh" [ script, libPath, shadowRoot, wasmBaseSrc, purs, spagoP ]
-    info "ulib: done."
+    Log.br *> info (Log.strong $ Log.green "✓ ulib successfully installed!")
 
 -- | `purs-wasm ulib validate` (ADR 0028): for each installed shadow, check that the package
 -- | version it was built against still matches (by `major.minor`) the version resolved in your
@@ -57,10 +60,12 @@ ulibValidateCmd :: forall r. FilePath -> UlibValidateOption -> Run (FS + LOG + E
 ulibValidateCmd cliRoot opt = do
   libPath <- maybe (joinPath [ cliRoot, "..", "lib" ]) pure opt.libPath
   spago <- maybe (joinPath [ ".spago", "p" ]) pure opt.spago
-  libPresent <- exists libPath
-  if not libPresent then info "ulib: no lib installed (run `ulib install`)."
+  -- A lib that is absent OR present-but-empty (no shadow dirs) is "not installed": `readDir`
+  -- returns `Nothing` for the former and `Just []` for the latter, so an empty list covers both
+  -- (guarding against a vacuous "OK" on an empty `-L` dir).
+  pkgDirs <- fromMaybe [] <$> readDir libPath
+  if Array.null pkgDirs then info (Log.toLog "No lib installed (run `" <> Log.strong (Log.blue "ulib install") <> Log.toLog "`.)")
   else do
-    pkgDirs <- fromMaybe [] <$> readDir libPath
     spagoDirs <- fromMaybe [] <$> readDir spago
     let userVers = Map.fromFoldable (spagoDirs <#> \d -> let { pkg, ver } = splitPkgVer d in Tuple pkg ver)
     let
@@ -74,14 +79,14 @@ ulibValidateCmd cliRoot opt = do
         info (Fmt.fmt @"  ? {pkg}: ulib {u}, not in your workspace" { pkg: r.pkg, u: r.ulibVer })
       Just uv
         | majorMinor uv == majorMinor r.ulibVer ->
-            info (Fmt.fmt @"  ✓ {pkg}: ulib {u}, yours {y}" { pkg: r.pkg, u: r.ulibVer, y: uv })
+            info (Log.cyan $ Fmt.fmt @"  ✓ {pkg}: ulib {u}, yours {y}" { pkg: r.pkg, u: r.ulibVer, y: uv })
         | otherwise ->
             info (Fmt.fmt @"  ✗ {pkg}: ulib {u} ≠ yours {y} (major.minor differs)" { pkg: r.pkg, u: r.ulibVer, y: uv })
     let mismatches = Array.filter (\r -> maybe false (\uv -> majorMinor uv /= majorMinor r.ulibVer) r.userVer) rows
-    if Array.null mismatches then info "ulib: validate OK."
+    if Array.null mismatches then info (Log.strong $ Log.green "✓ validate OK.")
     else logAndThrow
       ( Fmt.fmt
-          @"ulib: {n} package(s) diverge from the shadows. Align your workspace to: {pkgs}."
+          @"⚠️ {n} package(s) diverge from the shadows. Align your workspace to: {pkgs}."
           { n: Array.length mismatches, pkgs: Str.joinWith ", " (mismatches <#> \r -> r.pkg <> " " <> r.ulibVer) }
       )
 
@@ -95,10 +100,10 @@ ulibCheckCmd :: forall r. FilePath -> UlibCheckOption -> Run (FS + LOG + EFFECT 
 ulibCheckCmd cliRoot opt = do
   libPath <- maybe (joinPath [ cliRoot, "..", "lib" ]) pure opt.libPath
   input <- maybe (joinPath [ ".", "output" ]) pure opt.input
-  libPresent <- exists libPath
-  if not libPresent then info "ulib: no lib installed (run `ulib install`)."
+  -- absent OR present-but-empty (no shadow dirs) ⇒ "not installed" (see `ulibValidateCmd`).
+  pkgDirs <- fromMaybe [] <$> readDir libPath
+  if Array.null pkgDirs then info (Log.toLog "No lib installed (run `" <> Log.strong (Log.blue "ulib install") <> Log.toLog "`.)")
   else do
-    pkgDirs <- fromMaybe [] <$> readDir libPath
     breaks <- map Array.concat $ for pkgDirs \pkgVer -> do
       pkgPath <- joinPath [ libPath, pkgVer ]
       mods <- fromMaybe [] <$> readDir pkgPath
@@ -115,15 +120,15 @@ ulibCheckCmd cliRoot opt = do
           Just le, Just ue -> do
             let d = diffInterface (interfaceOf ue) (interfaceOf le)
             if compatible d then do
-              info
+              info $ Log.cyan
                 ( Fmt.fmt @"  ✓ {m} ({p}): interface OK{extra}"
                     { m: mod, p: pkgVer, extra: if Array.null d.extra then "" else " (+" <> show (Array.length d.extra) <> " extra)" }
                 )
               pure Nothing
             else do
-              info (Fmt.fmt @"  ✗ {m} ({p}): missing {names}" { m: mod, p: pkgVer, names: Str.joinWith ", " d.missing })
+              info $ Log.red (Fmt.fmt @"  ✗ {m} ({p}): missing {names}" { m: mod, p: pkgVer, names: Str.joinWith ", " d.missing })
               pure (Just mod)
-    if Array.null breaks then info "ulib: check OK."
+    if Array.null breaks then info (Log.strong $ Log.green "✓ check OK.")
     else logAndThrow
       ( Fmt.fmt
           @"ulib: {n} shadow(s) are not drop-in for your workspace: {mods}. Align your version to the ulib's, or update the shadow."
