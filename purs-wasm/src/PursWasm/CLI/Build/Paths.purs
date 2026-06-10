@@ -3,6 +3,7 @@
 -- | distinct from the `cliRoot`-relative `lib`/`ulib/shadow` paths the ulib commands use.
 module PursWasm.CLI.Build.Paths
   ( runtimeWasm
+  , loaderGlue
   , ulibDir
   , wasmMergeBin
   , wasmDisBin
@@ -11,6 +12,11 @@ module PursWasm.CLI.Build.Paths
 
 runtimeWasm :: String
 runtimeWasm = "runtime/runtime.wasm"
+
+-- | The shared FFI marshalling glue (Issue #10), copied verbatim next to the generated `index.mjs`
+-- | so the loader can `import { makeMarshal } from "./marshal.js"`.
+loaderGlue :: String
+loaderGlue = "runtime/marshal.js"
 
 ulibDir :: String
 ulibDir = "ulib"

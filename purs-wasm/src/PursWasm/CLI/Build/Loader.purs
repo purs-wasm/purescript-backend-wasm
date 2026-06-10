@@ -1,8 +1,9 @@
 -- | The JS loader for a program with host imports (ADR 0014): copy each used module's `foreign.js`
--- | into `<bundle>/foreign/<Module>.js`, then write a generic `index.mjs` that instantiates the
--- | GC wasm, discovers its imports at run time, and satisfies each from the matching foreign JS
--- | with argument/result marshalling per the baked manifests. `loaderSource` is reproduced
--- | verbatim from the prototype (byte-for-byte; its redesign is tracked in Issues #9 / #10).
+-- | into `<bundle>/foreign/<Module>.js`, copy the shared marshalling glue (`marshal.js`) next to
+-- | the loader, then write a generic `index.mjs` that instantiates the GC wasm, discovers its
+-- | imports at run time, and satisfies each from the matching foreign JS with argument/result
+-- | marshalling per the baked manifests. The conversion glue itself lives in the checked-in
+-- | `runtime/marshal.js` (`makeMarshal`), shared with the e2e harness (Issue #10).
 module PursWasm.CLI.Build.Loader
   ( emitLoader
   , rootExportSigs
@@ -19,6 +20,7 @@ import Fmt as Fmt
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson)
+import PursWasm.CLI.Build.Paths (loaderGlue)
 import PursWasm.CLI.Effect (FS, FilePath, LOG, info, joinPath, mkdirP, readText, writeText)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Module (printModname)
@@ -37,6 +39,8 @@ emitLoader bundleDir input mods sigs exportManifest = do
   foreignDir <- joinPath [ bundleDir, "foreign" ]
   mkdirP foreignDir
   for_ mods (copyForeign foreignDir)
+  marshalDst <- joinPath [ bundleDir, "marshal.js" ]
+  readText loaderGlue >>= maybe (pure unit) (writeText marshalDst)
   indexMjs <- joinPath [ bundleDir, "index.mjs" ]
   writeText indexMjs (loaderSource (manifestJs mods sigs) exportManifest)
   info $ Log.blue (Fmt.fmt @"✓ Wrote {file} (+ {n} foreign module(s))" { file: indexMjs, n: Array.length mods })
@@ -74,6 +78,7 @@ loaderSource :: String -> String -> String
 loaderSource manifest exportManifest =
   """import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { makeMarshal } from "./marshal.js";
 
 const MANIFEST = """ <> manifest
     <>
@@ -86,103 +91,12 @@ const EXPORTS_MANIFEST = """
 const bytes = readFileSync(fileURLToPath(new URL("./index.wasm", import.meta.url)));
 const mod = await WebAssembly.compile(bytes);
 
+// `E` is a *lazy* view of the (post-instantiation) exports, so the marshalling glue can be built
+// before `inst` exists — `wrap` is used while wiring the importObject below. `wasm-merge` folds the
+// runtime + foreign providers into this one module, so every primitive is on `inst.exports`.
 let inst;
-const enc = new TextEncoder();
-const dec = new TextDecoder();
-const strToJs = (ref) => {
-  const n = inst.exports.strLen(ref);
-  const b = new Uint8Array(n);
-  for (let i = 0; i < n; i++) b[i] = inst.exports.strByteAt(ref, i);
-  return dec.decode(b);
-};
-const strFromJs = (s) => {
-  const b = enc.encode(s);
-  const ref = inst.exports.strNew(b.length);
-  for (let i = 0; i < b.length; i++) inst.exports.strSetByte(ref, i, b[i]);
-  return ref;
-};
-// `k` is a parsed encodeMarshalKind value: a string leaf ("i"/"f"/"b"/"s"/"o"), {a:k}
-// (array), {fn:[pk,rk]} (function), or {r:{field:k}} (record). eqref → JS, by kind.
-const eqrefToJs = (k, ref) => {
-  if (typeof k === "string") {
-    if (k === "i") return inst.exports.unboxInt(ref);
-    if (k === "f") return inst.exports.unboxNum(ref);
-    if (k === "b") return !!inst.exports.unboxBool(ref);
-    if (k === "s") return strToJs(ref);
-    return ref;
-  }
-  if (k.a !== undefined) {
-    const n = inst.exports.arrayLen(ref);
-    const out = new Array(n);
-    for (let i = 0; i < n; i++) out[i] = eqrefToJs(k.a, inst.exports.arrayGet(ref, i));
-    return out;
-  }
-  if (k.fn !== undefined) {
-    // a wasm $Clo → a JS function: marshal the arg in, apply via the trampoline, marshal out
-    const [pk, rk] = k.fn;
-    return (a) => eqrefToJs(rk, inst.exports.applyClo(ref, eqrefFromJs(pk, a)));
-  }
-  // Effect a (export side): wasm already performed it, so the value IS the inner result
-  if (k.eff !== undefined) return eqrefToJs(k.eff, ref);
-  // record: read each known field by its interned label id
-  const out = {};
-  for (const name of Object.keys(k.r)) {
-    out[name] = eqrefToJs(k.r[name], inst.exports.proj(ref, inst.exports.internStr(strFromJs(name))));
-  }
-  return out;
-};
-// JS → eqref (a boxed, nested value), by kind.
-const eqrefFromJs = (k, val) => {
-  if (typeof k === "string") {
-    if (k === "i") return inst.exports.boxInt(val);
-    if (k === "f") return inst.exports.boxNum(val);
-    if (k === "b") return inst.exports.boxBool(val ? 1 : 0);
-    if (k === "s") return strFromJs(val);
-    return val;
-  }
-  if (k.a !== undefined) {
-    const ref = inst.exports.arrayNew(val.length);
-    for (let i = 0; i < val.length; i++) inst.exports.arraySet(ref, i, eqrefFromJs(k.a, val[i]));
-    return ref;
-  }
-  if (k.fn !== undefined) {
-    throw new Error("FFI: marshalling a JS function into wasm is not yet supported (ADR 0014, closure direction 2)");
-  }
-  // record: recSet each field onto an empty record, keyed by interned label id
-  let ref = inst.exports.recEmpty();
-  for (const name of Object.keys(k.r)) {
-    ref = inst.exports.recSet(ref, inst.exports.internStr(strFromJs(name)), eqrefFromJs(k.r[name], val[name]));
-  }
-  return ref;
-};
-const isRaw = (k) => k === "i" || k === "f";
-// PureScript FFI foreigns are *curried* (`a => b => c`), so apply one argument at a
-// time — `fn(...xs)` would pass only the first to a curried foreign (a multi-arg
-// foreign like `unfoldrArrayImpl` would return a function, not its result).
-const applyCurried = (fn, xs) => xs.reduce((g, x) => g(x), fn);
-// import direction: wasm calls the JS foreign — args wasm→JS, result JS→wasm
-const wrap = (fn, sig) => (...args) => {
-  const xs = args.map((a, i) => (isRaw(sig.params[i]) ? a : eqrefToJs(sig.params[i], a)));
-  // an effectful foreign (`{eff:k}` result): applying the value args yields the Effect
-  // thunk, which we RUN here (the perform is on the JS side), then marshal the inner
-  // result by `k` (ADR 0015). A *nullary* Effect foreign (`Effect a`, no value args, e.g.
-  // `random`) IS the thunk, so we must not pre-call it. Unit (undefined) → boxed 0.
-  if (sig.result && sig.result.eff !== undefined) {
-    const thunk = applyCurried(fn, xs);
-    const ran = thunk();
-    const k = sig.result.eff;
-    if (ran === undefined || ran === null) return inst.exports.boxInt(0);
-    return isRaw(k) ? ran : eqrefFromJs(k, ran);
-  }
-  const r = applyCurried(fn, xs);
-  return isRaw(sig.result) ? r : eqrefFromJs(sig.result, r);
-};
-// export direction: JS calls the wasm export — args JS→wasm, result wasm→JS
-const wrapExport = (fn, sig) => (...args) => {
-  const xs = args.map((a, i) => (isRaw(sig.params[i]) ? a : eqrefFromJs(sig.params[i], a)));
-  const r = fn(...xs);
-  return isRaw(sig.result) ? r : eqrefToJs(sig.result, r);
-};
+const E = new Proxy({}, { get: (_, p) => inst.exports[p] });
+const { eqrefToJs, eqrefFromJs, isRaw, wrap, wrapExport } = makeMarshal(E);
 
 const importObject = {};
 const nsCache = {};
