@@ -20,6 +20,29 @@ export const cases = [
   { name: "bench/CountEffect", args: ["-I", "bench/output", "-e", "CountEffect"] },
   { name: "bench/CountState", args: ["-I", "bench/output", "-e", "CountState"] },
 
+  // --- example packages (built into `output/` by the prerequisite `spago build`; the build's
+  // reachability pruning makes `-I output` equivalent to a per-package output for parity) ---
+  { name: "examples/HelloWorld", args: ["-I", "output", "-e", "Examples.HelloWorld.Main"] },
+  { name: "examples/EffPrim", args: ["-I", "output", "-e", "Examples.EffPrim.Main"] },
+  { name: "examples/EffRandom", args: ["-I", "output", "-e", "Examples.EffRandom.Main"] },
+  { name: "examples/EffRef.Main", args: ["-I", "output", "-e", "Examples.EffRef.Main"] },
+  { name: "examples/EffRef.Core", args: ["-I", "output", "-e", "Examples.EffRef.Core"] },
+  { name: "examples/Metatheory", args: ["-I", "output", "-e", "Examples.Metatheory.Main"] },
+
+  // --- snapshots package: the optimizer regression suite, each module a distinct closure ---
+  { name: "snapshot/Driver", args: ["-I", "output", "-e", "Snapshot.Driver"] },
+  { name: "snapshot/Cps02", args: ["-I", "output", "-e", "Snapshot.Cps02"] },
+  { name: "snapshot/Fusion01", args: ["-I", "output", "-e", "Snapshot.Fusion01"] },
+  { name: "snapshot/Fusion02", args: ["-I", "output", "-e", "Snapshot.Fusion02"] },
+  { name: "snapshot/KnownConstructors06", args: ["-I", "output", "-e", "Snapshot.KnownConstructors06"] },
+  { name: "snapshot/RecRepro", args: ["-I", "output", "-e", "Snapshot.RecRepro"] },
+  { name: "snapshot/RecursionSchemes01", args: ["-I", "output", "-e", "Snapshot.RecursionSchemes01"] },
+
+  // --- flag variants on the larger example (wat / unoptimized / debug) ---
+  { name: "examples/Metatheory -t (wat)", args: ["-I", "output", "-e", "Examples.Metatheory.Main", "-t"] },
+  { name: "examples/Metatheory --no-opt", args: ["-I", "output", "-e", "Examples.Metatheory.Main", "--no-opt"] },
+  { name: "examples/HelloWorld -g (debug)", args: ["-I", "output", "-e", "Examples.HelloWorld.Main", "-g"] },
+
   // --- committed self-contained fixtures (no spago build of an example needed) ---
   // Effect export exposed as a callable thunk (ADR 0015).
   { name: "fixture/EffMain", args: ["-I", "compiler/test/fixtures/bin-effmain", "-e", "EffMain"] },
