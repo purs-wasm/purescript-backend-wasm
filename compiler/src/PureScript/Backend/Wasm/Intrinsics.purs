@@ -70,6 +70,10 @@ data Intrinsic
   | StrByteAt -- String -> Int -> Int (`array.get` on the `$Bytes`)
   | StrNew -- Int -> String (zeroed `$Str` of `n` bytes)
   | StrSetByte -- String -> Int -> Int -> String (writes the byte, returns the string)
+  -- | `Wasm.Char` (WasmBase, ADR 0026/0030): `Char` ↔ code-point `Int`. A `Char` is already an
+  -- | `i32` code point in this backend (ADR 0030: `Char` = Unicode code point, not a UTF-16 unit),
+  -- | so both directions are the **identity** on the `i32` — the operand *is* the result.
+  | CharCodeId -- Char -> Int / Int -> Char (identity on the i32 code point)
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
   | ArrayConcat -- Array a -> Array a -> Array a (`Data.Semigroup` `<>`: allocate + copy both)
@@ -274,6 +278,9 @@ qualifiedIntrinsic = case _ of
   "Wasm.String.byteAt" -> Just (Tuple StrByteAt 2)
   "Wasm.String.unsafeNew" -> Just (Tuple StrNew 1)
   "Wasm.String.unsafeSetByte" -> Just (Tuple StrSetByte 3)
+  -- `Wasm.Char` (WasmBase, ADR 0030): `Char` ↔ code-point `Int`, both the identity on the i32.
+  "Wasm.Char.toCodePoint" -> Just (Tuple CharCodeId 1)
+  "Wasm.Char.fromCodePoint" -> Just (Tuple CharCodeId 1)
   -- `Wasm.Int` (WasmBase): first-order `Int` ops, so ulib shadows of low-level prelude
   -- modules (e.g. `Data.Functor`) need no `Prelude` for their loop arithmetic (ADR 0028).
   "Wasm.Int.add" -> Just (Tuple IntAdd 2)

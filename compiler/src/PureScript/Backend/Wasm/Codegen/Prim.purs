@@ -104,6 +104,8 @@ genPrim ctx intr args = case intr, args of
     bytes <- strBytes ctx a
     idx <- intArg i
     B.arrayGet ctx.mod bytes idx B.i32 false
+  -- `Wasm.Char.toCodePoint` / `fromCodePoint`: identity on the i32 code point (ADR 0030).
+  CharCodeId, [ x ] -> intArg x
   -- `Wasm.String.unsafeNew n`: allocate a zeroed `$Str` of `n` bytes.
   StrNew, [ n ] -> do
     len <- intArg n
