@@ -28,7 +28,7 @@ execFileSync(
 );
 
 globalThis.__effmain = [];
-const m = await import(pathToFileURL(join(out, "EffMain", "index.mjs")).href);
+const m = await import(pathToFileURL(join(out, "index.mjs")).href);
 
 if (globalThis.__effmain.length !== 0)
   fail(`main ran on import (calls=${JSON.stringify(globalThis.__effmain)}); an Effect export must not run until called`);

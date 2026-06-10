@@ -6,9 +6,17 @@ import Prelude
 
 import ArgParse.Basic (ArgParser)
 import ArgParse.Basic as ArgParser
-import Data.Either (Either)
-import PursWasm.CLI.Options.Types (BuildOption, Command(..), UlibCheckOption, UlibCompatOption, UlibInstallOption, UlibValidateOption)
+import Data.Either (Either(..))
+import PursWasm.CLI.Options.Types (BuildOption, Command(..), Platform(..), UlibCheckOption, UlibCompatOption, UlibInstallOption, UlibValidateOption)
 import PursWasm.CLI.Version as Version
+
+-- | Read the `--platform` value, rejecting anything outside the three targets.
+parsePlatform :: String -> Either String Platform
+parsePlatform = case _ of
+  "node" -> Right Node
+  "browser" -> Right Browser
+  "standalone" -> Right Standalone
+  other -> Left ("unknown platform '" <> other <> "' (expected: node | browser | standalone)")
 
 buildOptionsParser :: ArgParser BuildOption
 buildOptionsParser =
@@ -40,11 +48,27 @@ buildOptionsParser =
           "Skip the middle-end optimization (dictionary elimination); lambda lifting\n\
           \still runs. Use to build an unoptimized baseline for benchmarking."
           # ArgParser.boolean
-    , traceMir:
-        ArgParser.argument [ "--trace-mir" ]
-          "Trace how the given module's middle IR (MIR) changes after every optimizer\n\
+    , platform:
+        ArgParser.argument [ "-p", "--platform" ]
+          "Deployment target: 'node' or 'browser' (single wasm + JS loader) or\n\
+          \'standalone' (self-contained single wasm, no loader). Defaults to 'node'."
+          # ArgParser.unformat "PLATFORM" parsePlatform
+          # ArgParser.default Node
+    , noChunks:
+        ArgParser.flag [ "--no-chunks" ]
+          "Emit a single wasm instead of code-split chunks (browser only; chunking is not\n\
+          \implemented yet, so this is currently the default behaviour for --platform=browser)."
+          # ArgParser.boolean
+    , noJsFallback:
+        ArgParser.flag [ "--no-js-fallback" ]
+          "Fail the build instead of falling back to a foreign.js for a foreign import that\n\
+          \has no foreign.wat provider (only meaningful for --platform=node|browser)."
+          # ArgParser.boolean
+    , dumpMir:
+        ArgParser.argument [ "--dump-mir" ]
+          "Dump how the given module's middle IR (MIR) changes after every optimizer\n\
           \sub-stage (specialize/simplify/impurify) of every round, written to\n\
-          \./mir-trace.txt (debugging; cf. purs-backend-es --trace-rewrites)."
+          \<output>/<MODULE>.mir.txt (debugging; cf. purs-backend-es --trace-rewrites)."
           # ArgParser.optional
     }
 

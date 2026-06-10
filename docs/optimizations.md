@@ -75,8 +75,10 @@ below; inlining happens there, which is why the inline set must be acyclic (see
 (`Optimize/Semantics.purs`, ADR 0020) and the original rule-based fixpoint
 (`Optimize/Simplify.purs`). They perform the **same** reductions — described next.
 
-`node dump-mir.mjs <Fixture>` (after `spago build -p compiler`) prints a fixture's MIR
-through the pretty-printer — the way to watch a pass rewrite the tree.
+`purs-wasm build -I <output> -e <Entry> --dump-mir <Module>` writes that module's MIR after
+every optimizer sub-stage to `<output>/<Module>.mir.txt` — the way to watch a pass rewrite the
+tree (it sees the real reachable closure, unlike the retired `dump-mir.mjs`/`dump-opt.mjs` scripts,
+which only linked the fixtures you named).
 
 ## The reduction kernel: local reductions
 

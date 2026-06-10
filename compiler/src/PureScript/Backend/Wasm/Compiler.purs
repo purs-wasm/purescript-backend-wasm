@@ -118,7 +118,7 @@ compileModulesText :: CompileOptions -> Array ModuleName -> Array Module -> Arra
 compileModulesText opts = withCompiledModule opts B.emitText
 
 -- | Trace the named module's middle IR (MIR) — its form after specialization and after it
--- | is optimized (simplify → impurify → simplify) — the `--trace-mir` companion to the
+-- | is optimized (simplify → impurify → simplify) — the `--dump-mir` companion to the
 -- | normal build, using the *same* effectful-foreign set/arities so the trace matches the
 -- | real pipeline. `target` is a dotted module name (e.g. `Examples.EffRef.Main`).
 mirTrace :: CompileOptions -> Array Module -> Object ForeignSig -> String -> String

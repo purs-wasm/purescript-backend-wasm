@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/Bench.Main/index.wasm", import.meta.url)));
+const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/index.wasm", import.meta.url)));
 const wasmModule = await WebAssembly.compile(wasmBytes);
 const jsNaive = await import("./output/Bench.Main/index.js");
 const jsEs = await import("./output-js-es/Bench.Main/index.js");

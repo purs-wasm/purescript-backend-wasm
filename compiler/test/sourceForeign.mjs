@@ -29,7 +29,7 @@ execFileSync("node", ["purs-wasm/index.dev.js", "build", "-e", "Priv", "-I", inp
   stdio: "inherit",
 });
 
-const m = await import(pathToFileURL(join(bundle, "Priv", "index.mjs")).href);
+const m = await import(pathToFileURL(join(bundle, "index.mjs")).href);
 if (typeof m.exports.triple !== "function")
   fail(`expected exported triple to be a function, got ${typeof m.exports.triple}`);
 const got = m.exports.triple(5);
@@ -51,7 +51,7 @@ try {
 } catch (e) {
   fail(`build must not stop when reconstruction is unavailable (ADR 0016 fallback): ${e.stderr ?? e}`);
 }
-const fb = await import(pathToFileURL(join(fbBundle, "Priv", "index.mjs")).href);
+const fb = await import(pathToFileURL(join(fbBundle, "index.mjs")).href);
 if (typeof fb.exports.triple !== "function") fail("fallback build did not export triple as a function");
 
 rmSync(bundle, { recursive: true, force: true });

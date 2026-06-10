@@ -4,7 +4,7 @@
 // impurification (ADR 0015) + the simplifier collapse those cyclic dicts to a
 // constant-stack tail loop with no residual closure/dispatch, the way the hand-rolled
 // State monad collapses? Compares the same PureScript source across three backends:
-//   * wasm     : our GC backend (output-wasm/CountEffect/index.wasm, optimized)
+//   * wasm     : our GC backend (output-wasm/index.wasm, optimized)
 //   * js-naive : purs's stock JS backend (output, dictionary-passing + () => thunks)
 //   * js-es    : purs-backend-es (output-js-es, the optimized JS people ship)
 //
@@ -19,7 +19,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/CountEffect/index.wasm", import.meta.url)));
+const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/index.wasm", import.meta.url)));
 const wasmModule = await WebAssembly.compile(wasmBytes);
 const freshWasm = async () => (await WebAssembly.instantiate(wasmModule, {})).exports.countTo;
 const naive = (await import("./output/CountEffect/index.js")).countTo;

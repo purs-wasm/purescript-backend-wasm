@@ -2,6 +2,7 @@
 -- | subcommands (install/validate/check; ADR 0028).
 module PursWasm.CLI.Options.Types
   ( BuildOption
+  , Platform(..)
   , UlibInstallOption
   , UlibValidateOption
   , UlibCheckOption
@@ -9,9 +10,26 @@ module PursWasm.CLI.Options.Types
   , Command(..)
   ) where
 
+import Prelude
+
+import Data.Generic.Rep (class Generic)
 import Data.List.NonEmpty (NonEmptyList)
 import Data.Maybe (Maybe)
+import Data.Show.Generic (genericShow)
 import PursWasm.CLI.Effect.Filesystem (FilePath)
+
+-- | The deployment target a build produces (`-p/--platform`). `Node` and `Browser` emit a single
+-- | wasm plus a JS loader; `Standalone` emits a self-contained single wasm with no loader. (Browser
+-- | will eventually emit wasm chunks; until then it behaves like `Node`, see `--no-chunks`.)
+data Platform
+  = Node
+  | Browser
+  | Standalone
+
+derive instance eqPlatform :: Eq Platform
+derive instance genericPlatform :: Generic Platform _
+instance showPlatform :: Show Platform where
+  show = genericShow
 
 type BuildOption =
   { input :: FilePath
@@ -20,7 +38,10 @@ type BuildOption =
   , text :: Boolean
   , debug :: Boolean
   , noOpt :: Boolean
-  , traceMir :: Maybe String
+  , platform :: Platform
+  , noChunks :: Boolean
+  , noJsFallback :: Boolean
+  , dumpMir :: Maybe String
   }
 
 type UlibInstallOption =

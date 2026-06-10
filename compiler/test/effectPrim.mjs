@@ -34,7 +34,7 @@ execFileSync(
   { cwd: repo, stdio: "inherit" },
 );
 
-const m = await import(pathToFileURL(join(bundle, "Examples.EffPrim.Main", "index.mjs")).href);
+const m = await import(pathToFileURL(join(bundle, "index.mjs")).href);
 
 let failures = 0;
 for (const [name, expected, isEffect] of CASES) {

@@ -1,3 +1,3 @@
-import { exports } from "../output-wasm/Examples.HelloWorld.Main/index.mjs";
+import { exports } from "../output-wasm/index.mjs";
 
 exports.main();

@@ -27,7 +27,7 @@ execFileSync(
   { cwd: repo, stdio: "inherit" },
 );
 
-const m = await import(pathToFileURL(join(bundle, "Examples.EffRef.Core", "index.mjs")).href);
+const m = await import(pathToFileURL(join(bundle, "index.mjs")).href);
 if (typeof m.exports.compute !== "function")
   fail(`expected exported compute to be an Effect thunk (function), got ${typeof m.exports.compute}`);
 const got = m.exports.compute();

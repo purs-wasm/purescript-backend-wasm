@@ -4,7 +4,7 @@
 // recurses O(n) deep; the win is collapsing it to a tail loop (newtype transparency +
 // the simplifier reductions + TCE), which this benchmark measures. Compares the same
 // PureScript source across three backends:
-//   * wasm     : our GC backend (output-wasm/CountState/index.wasm, optimized)
+//   * wasm     : our GC backend (output-wasm/index.wasm, optimized)
 //   * js-naive : purs's stock JS backend (output, dictionary-passing)
 //   * js-es    : purs-backend-es (output-js-es, the optimized JS people ship)
 //
@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/CountState/index.wasm", import.meta.url)));
+const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/index.wasm", import.meta.url)));
 const wasmModule = await WebAssembly.compile(wasmBytes);
 // `countTo :: Int -> Int` is i32-in/i32-out, so the raw export needs no marshalling.
 const freshWasm = async () => (await WebAssembly.instantiate(wasmModule, {})).exports.countTo;

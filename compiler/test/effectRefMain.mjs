@@ -28,7 +28,7 @@ execFileSync(
   { cwd: repo, stdio: "inherit" },
 );
 
-const entry = pathToFileURL(join(bundle, "Examples.EffRef.Main", "index.mjs")).href;
+const entry = pathToFileURL(join(bundle, "index.mjs")).href;
 let out;
 try {
   out = execFileSync("node", ["-e", `import(${JSON.stringify(entry)}).then(m => m.exports.main())`], {

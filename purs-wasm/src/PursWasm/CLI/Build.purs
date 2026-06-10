@@ -10,10 +10,10 @@ import Prelude
 
 import Data.Array as Array
 import Data.Either (Either(..), either)
-import Data.List.NonEmpty as NEL
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, isNothing, maybe)
 import Data.Set as Set
+import Data.String (joinWith)
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Foldable (for_)
 import Data.Traversable (for)
@@ -32,7 +32,7 @@ import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
 import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, info, joinPath, logAndThrow, mkdirP, readDir, readText, resolvePath, unlink, writeBinary, writeText)
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
-import PursWasm.CLI.Options.Types (BuildOption)
+import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
 import PursWasm.CLI.Ulib.Shadow (loadShadowMap, shadowOrRegistry)
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
@@ -84,16 +84,20 @@ buildCmd cliRoot args = do
     readExterns =<< joinPath [ args.input, printModname mod, "externs.cbor" ]
   allSigs <- buildForeignSigs args.input externs modules
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
-  -- `--trace-mir <Module>`: dump that module's MIR after every optimizer sub-stage to
-  -- ./mir-trace.txt (debugging the optimizer).
-  case args.traceMir of
+  -- One bundle per build, written flat under `--output` (no per-module subdir): the build emits a
+  -- single linked wasm + optional loader, not per-module artifacts (ADR 0009), so a module-named
+  -- directory would be misleading.
+  let bundleDir = args.outDir
+  mkdirP bundleDir
+  -- `--dump-mir <Module>`: dump that module's MIR after every optimizer sub-stage to
+  -- `<output>/<Module>.mir.txt` (debugging the optimizer; supersedes the old dump-mir/dump-opt
+  -- scripts, which only saw the fixtures you hand-linked — this sees the real reachable closure).
+  case args.dumpMir of
     Nothing -> pure unit
     Just target -> do
-      writeText "mir-trace.txt" (mirTrace opts modules allSigs target)
-      info ("Wrote MIR trace for " <> target <> " to ./mir-trace.txt")
-  -- one bundle per build, in a dir named after the (first) entry module (mirrors purs / es).
-  bundleDir <- joinPath [ args.outDir, NEL.head args.entryModules ]
-  mkdirP bundleDir
+      mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
+      writeText mirPath (mirTrace opts modules allSigs target)
+      info ("Wrote MIR trace for " <> target <> " to " <> mirPath)
   -- The generated module imports the shared runtime (`$rt.*`, ADR 0010). Compile it, then merge
   -- `runtime.wasm` + foreign providers with `wasm-merge` into one self-contained wasm.
   appPath <- joinPath [ bundleDir, "app.wasm" ]
@@ -109,6 +113,12 @@ buildCmd cliRoot args = do
       providers <- for foreignMods (resolveForeign args.input bundleDir)
       let wasmProvided = Array.mapMaybe (\p -> Tuple p.name <$> p.wasm) providers
       let jsProvided = Array.mapMaybe (\p -> if isNothing p.wasm then Just p.name else Nothing) providers
+      -- Policy on foreign imports with no `foreign.wat` provider (they otherwise fall back to a
+      -- `foreign.js` the loader copies). `standalone` has no loader, so any such foreign is fatal;
+      -- `--no-js-fallback` makes it fatal for node/browser too.
+      when (not (Array.null jsProvided)) case args.platform of
+        Standalone -> logAndThrow (Fmt.fmt @"--platform=standalone needs every foreign import provided as wasm, but {n} fall back to JS: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided })
+        _ -> when args.noJsFallback (logAndThrow (Fmt.fmt @"--no-js-fallback set, but {n} foreign import(s) lack a foreign.wat provider: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided }))
       let mergeForeigns = wasmProvided >>= \(Tuple name wp) -> [ wp, name ]
       execFile wasmMergeBin ([ appPath, "app", runtimeWasm, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
       unlink appPath
@@ -123,5 +133,10 @@ buildCmd cliRoot args = do
         -- needs marshalling (a non-`i32`/`f64` param/result); ADR 0014.
         let exportSigs = rootExportSigs roots allSigs
         let needLoader = not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
-        when needLoader (emitLoader bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
+        -- `standalone` is a self-contained wasm with no loader; node/browser emit one when needed.
+        -- (browser currently emits a single wasm — chunking, which `--no-chunks` opts out of, is not
+        -- implemented yet, so browser behaves like node here.)
+        case args.platform of
+          Standalone -> pure unit
+          _ -> when needLoader (emitLoader bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
         info (Fmt.fmt @"Wrote {file}" { file: wasmPath })
