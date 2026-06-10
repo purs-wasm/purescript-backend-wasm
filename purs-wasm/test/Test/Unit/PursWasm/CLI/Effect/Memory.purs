@@ -66,6 +66,7 @@ interpFs = interpret (on _fs handle send)
     WriteBinary path b next -> modify (\w -> w { fs = Map.insert path (Bin b) w.fs }) $> next
     ReadDir path k -> get <#> \w -> k (childrenOf path w.fs)
     Exists path k -> get <#> \w -> k (existsIn path w.fs)
+    FileSize path k -> get <#> \w -> k (sizeOfEntry <$> Map.lookup path w.fs)
     MkdirP _ next -> pure next
     Unlink path next -> modify (\w -> w { fs = Map.delete path w.fs }) $> next
     JoinPath segments k -> pure (k (pureJoin segments))
@@ -93,6 +94,12 @@ textOf :: FileEntry -> Maybe String
 textOf = case _ of
   Text s -> Just s
   _ -> Nothing
+
+-- A rough byte size for the in-memory file (code-unit length of text; binaries are not exercised).
+sizeOfEntry :: FileEntry -> Int
+sizeOfEntry = case _ of
+  Text s -> Str.length s
+  Bin _ -> 0
 
 binOf :: FileEntry -> Maybe Uint8Array
 binOf = case _ of

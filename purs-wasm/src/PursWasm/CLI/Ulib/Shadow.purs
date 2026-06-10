@@ -20,7 +20,7 @@ import Data.Tuple (Tuple(..))
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Compiler (parseModule)
 import PureScript.CoreFn (Module, ModuleName)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, exists, info, joinPath, readDir, readText)
+import PursWasm.CLI.Effect (FS, FilePath, LOG, debug, exists, info, joinPath, readDir, readText)
 import PursWasm.CLI.Module (printModname)
 import PursWasm.CLI.Ulib.Version (majorMinor, pkgVersionFromPath, splitPkgVer)
 import Run (Run)
@@ -65,5 +65,5 @@ shadowOrRegistry shadows mod registryMod = case Map.lookup (printModname mod) sh
         Just libSrc -> case parseModule libSrc of
           Left _ -> pure registryMod
           Right libMod -> do
-            info (Fmt.fmt @"  ulib: shadowing {m} ({pkg} {ver})" { m: printModname mod, pkg: s.package, ver: s.version })
+            debug (Fmt.fmt @"ulib: shadowing {m} ({pkg} {ver})" { m: printModname mod, pkg: s.package, ver: s.version })
             pure libMod

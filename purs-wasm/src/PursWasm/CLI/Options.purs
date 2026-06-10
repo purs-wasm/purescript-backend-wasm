@@ -7,7 +7,8 @@ import Prelude
 import ArgParse.Basic (ArgParser)
 import ArgParse.Basic as ArgParser
 import Data.Either (Either(..))
-import PursWasm.CLI.Options.Types (BuildOption, Command(..), Platform(..), UlibCheckOption, UlibCompatOption, UlibInstallOption, UlibValidateOption)
+import Data.Tuple (Tuple(..))
+import PursWasm.CLI.Options.Types (BuildOption, Command(..), GlobalOptions, Platform(..), UlibCheckOption, UlibCompatOption, UlibInstallOption, UlibValidateOption)
 import PursWasm.CLI.Version as Version
 
 -- | Read the `--platform` value, rejecting anything outside the three targets.
@@ -17,6 +18,23 @@ parsePlatform = case _ of
   "browser" -> Right Browser
   "standalone" -> Right Standalone
   other -> Left ("unknown platform '" <> other <> "' (expected: node | browser | standalone)")
+
+-- | The options every command accepts (logging verbosity, …). Defined once and threaded onto each
+-- | command by `withGlobals`, so there is no per-command copy.
+globalOptionsParser :: ArgParser GlobalOptions
+globalOptionsParser =
+  ArgParser.fromRecord
+    { verbose:
+        ArgParser.flag [ "--verbose" ]
+          "Print all messages, including debug-level logs."
+          # ArgParser.boolean
+    }
+
+-- | Pair a command's own parser with the shared global options. ArgParse confines flags to the
+-- | subcommand they follow, so the globals must live inside each leaf — but the flag definition
+-- | stays in `globalOptionsParser` alone.
+withGlobals :: ArgParser Command -> ArgParser (Tuple GlobalOptions Command)
+withGlobals command = Tuple <$> globalOptionsParser <*> command
 
 buildOptionsParser :: ArgParser BuildOption
 buildOptionsParser =
@@ -129,35 +147,35 @@ ulibCompatParser =
           # ArgParser.boolean
     }
 
-commandParser :: ArgParser Command
+commandParser :: ArgParser (Tuple GlobalOptions Command)
 commandParser =
   ArgParser.choose "command"
     [ ArgParser.command [ "build" ]
         "Build a wasm module from a PureScript project's compiler artifacts"
-        do
-          Build <$> buildOptionsParser <* ArgParser.flagHelp
+        (withGlobals (Build <$> buildOptionsParser) <* ArgParser.flagHelp)
     , ArgParser.command [ "ulib" ]
         "Manage the ulib shadow library (ADR 0028)"
         do
           ArgParser.choose "ulib command"
             [ ArgParser.command [ "install" ]
                 "Compile the ulib shadows into the lib (corefn + externs)"
-                (UlibInstall <$> ulibInstallParser <* ArgParser.flagHelp)
+                (withGlobals (UlibInstall <$> ulibInstallParser) <* ArgParser.flagHelp)
             , ArgParser.command [ "validate" ]
                 "Check each installed shadow's version matches your resolved package set"
-                (UlibValidate <$> ulibValidateParser <* ArgParser.flagHelp)
+                (withGlobals (UlibValidate <$> ulibValidateParser) <* ArgParser.flagHelp)
             , ArgParser.command [ "check" ]
                 "Compare each shadow's public interface against your compiled module (externs)"
-                (UlibCheck <$> ulibCheckParser <* ArgParser.flagHelp)
+                (withGlobals (UlibCheck <$> ulibCheckParser) <* ArgParser.flagHelp)
             , ArgParser.command [ "compat" ]
                 "Regenerate (or --check) ulib/compat.json: the package-set/version/purs pins (ADR 0029)"
-                (UlibCompat <$> ulibCompatParser <* ArgParser.flagHelp)
-            ] <* ArgParser.flagHelp
+                (withGlobals (UlibCompat <$> ulibCompatParser) <* ArgParser.flagHelp)
+            ]
+            <* ArgParser.flagHelp
     ]
     <* ArgParser.flagHelp
     <* ArgParser.flagInfo [ "--version", "-v" ] "Show version" Version.versionString
 
-parse :: Array String -> Either ArgParser.ArgError Command
+parse :: Array String -> Either ArgParser.ArgError (Tuple GlobalOptions Command)
 parse =
   ArgParser.parseArgs "purs-wasm"
     "A PureScript backend for WebAssembly (with GC)"

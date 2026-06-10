@@ -12,6 +12,7 @@ import Prelude
 import ArgParse.Basic as ArgParser
 import Data.Array as Array
 import Data.Either (Either(..))
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Class.Console as Console
 import Node.Path (FilePath)
@@ -28,9 +29,10 @@ import PursWasm.CLI.Ulib.Compat (ulibCompatCmd)
 main :: FilePath -> Effect Unit
 main cliRoot = do
   cliArgs <- Array.drop 2 <$> Process.argv
+
   case parse cliArgs of
     Left err -> Console.error (ArgParser.printArgError err)
-    Right cmd -> runNode $ case cmd of
+    Right (Tuple globals cmd) -> runNode globals $ case cmd of
       Build args -> buildCmd cliRoot args
       UlibInstall args -> ulibInstallCmd cliRoot args
       UlibValidate args -> ulibValidateCmd cliRoot args

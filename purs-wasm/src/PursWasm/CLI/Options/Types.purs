@@ -2,12 +2,13 @@
 -- | subcommands (install/validate/check; ADR 0028).
 module PursWasm.CLI.Options.Types
   ( BuildOption
+  , Command(..)
+  , GlobalOptions
   , Platform(..)
-  , UlibInstallOption
-  , UlibValidateOption
   , UlibCheckOption
   , UlibCompatOption
-  , Command(..)
+  , UlibInstallOption
+  , UlibValidateOption
   ) where
 
 import Prelude
@@ -30,6 +31,10 @@ derive instance eqPlatform :: Eq Platform
 derive instance genericPlatform :: Generic Platform _
 instance showPlatform :: Show Platform where
   show = genericShow
+
+-- | Options every command accepts, parsed once and threaded to the interpreter — not part of any
+-- | command's own option record.
+type GlobalOptions = { verbose :: Boolean }
 
 type BuildOption =
   { input :: FilePath

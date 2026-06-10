@@ -9,13 +9,16 @@ module PursWasm.CLI.Build
 import Prelude
 
 import Data.Array as Array
+import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..), either)
+import Data.Foldable (for_)
+import Data.Int (toNumber)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, isNothing, maybe)
+import Data.Number.Format (fixed, toStringWith)
 import Data.Set as Set
 import Data.String (joinWith)
-import Data.ArrayBuffer.Types (Uint8Array)
-import Data.Foldable (for_)
+import Data.String as Str
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -29,11 +32,13 @@ import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, info, joinPath, logAndThrow, mkdirP, readDir, readText, resolvePath, unlink, writeBinary, writeText)
+import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, resolvePath, unlink, writeBinary, writeText)
+import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
 import PursWasm.CLI.Ulib.Shadow (loadShadowMap, shadowOrRegistry)
+import PursWasm.CLI.Version as Version
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
 
@@ -45,9 +50,26 @@ foreign import corefnImportsImpl :: String -> Array String
 -- | loader must satisfy; ADR 0014).
 foreign import importModulesImpl :: Uint8Array -> Effect (Array String)
 
+-- | A monotonic clock in milliseconds, for the elapsed-time report.
+foreign import nowMsImpl :: Effect Number
+
+-- | A byte count as a human-readable size (`B` / `KB` / `MB`).
+humanSize :: Int -> String
+humanSize b
+  | b < 1024 = show b <> " B"
+  | b < 1048576 = toStringWith (fixed 1) (toNumber b / 1024.0) <> " KB"
+  | otherwise = toStringWith (fixed 1) (toNumber b / 1048576.0) <> " MB"
+
 buildCmd :: forall r. FilePath -> BuildOption -> Run (FS + PROC + LOG + EFFECT + r) Unit
 buildCmd cliRoot args = do
   debug (show args)
+  start <- liftEffect nowMsImpl
+
+  info $
+    Log.strong (Log.cyan (Fmt.fmt @"purs-wasm {version}" { version: Version.version }))
+      <> Log.green (Fmt.fmt @" building {target} for {platform} platform...\n" { target: if args.text then "wat" else "wasm", platform: Str.toLower $ show args.platform })
+  info "Selecting modules to pack in..."
+
   -- ulib lib (ADR 0028) sits beside the compiler (`<cli>/../lib`); `resolvePath` normalises the
   -- `..` to an absolute path. It is an FS-effect op (the interpreter owns `Node.Path`), so this
   -- command logic stays platform-neutral.
@@ -68,7 +90,7 @@ buildCmd cliRoot args = do
     pure (Tuple (printModname mod) (corefnImportsImpl source))
   let reachable = reachableClosure roots (Map.fromFoldable importPairs)
   let mods = Array.filter (\mod -> Set.member (printModname mod) reachable) allMods
-  info (Fmt.fmt @"Linking {count} of {total} module(s) from {dir}" { count: Array.length mods, total: Array.length allMods, dir: args.input })
+  info $ Log.green (Fmt.fmt @"✓ {count} of {total} module(s) are selected.\n" { count: Array.length mods, total: Array.length allMods })
   modules <- for mods \mod -> do
     source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
     case parseModule source of
@@ -97,11 +119,12 @@ buildCmd cliRoot args = do
     Just target -> do
       mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
       writeText mirPath (mirTrace opts modules allSigs target)
-      info ("Wrote MIR trace for " <> target <> " to " <> mirPath)
+      info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
   -- The generated module imports the shared runtime (`$rt.*`, ADR 0010). Compile it, then merge
   -- `runtime.wasm` + foreign providers with `wasm-merge` into one self-contained wasm.
   appPath <- joinPath [ bundleDir, "app.wasm" ]
   wasmPath <- joinPath [ bundleDir, "index.wasm" ]
+  info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length modules })
   liftEffect (compileModules opts roots modules externs allSigs) >>= case _ of
     Left err -> logAndThrow err
     Right bytes -> do
@@ -120,23 +143,33 @@ buildCmd cliRoot args = do
         Standalone -> logAndThrow (Fmt.fmt @"--platform=standalone needs every foreign import provided as wasm, but {n} fall back to JS: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided })
         _ -> when args.noJsFallback (logAndThrow (Fmt.fmt @"--no-js-fallback set, but {n} foreign import(s) lack a foreign.wat provider: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided }))
       let mergeForeigns = wasmProvided >>= \(Tuple name wp) -> [ wp, name ]
+      info (Fmt.fmt @"Linking runtime + {n} foreign provider(s) with wasm-merge…\n" { n: Array.length wasmProvided })
       execFile wasmMergeBin ([ appPath, "app", runtimeWasm, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
       unlink appPath
       for_ providers \p -> when p.assembled (maybe (pure unit) unlink p.wasm)
-      if args.text then do
-        watPath <- joinPath [ bundleDir, "index.wat" ]
-        execFile wasmDisBin [ wasmPath, "-o", watPath, "--all-features" ]
-        unlink wasmPath
-        info (Fmt.fmt @"Wrote {file}" { file: watPath })
-      else do
-        -- emit the JS loader when there are JS foreign imports to satisfy, or when any entry export
-        -- needs marshalling (a non-`i32`/`f64` param/result); ADR 0014.
-        let exportSigs = rootExportSigs roots allSigs
-        let needLoader = not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
-        -- `standalone` is a self-contained wasm with no loader; node/browser emit one when needed.
-        -- (browser currently emits a single wasm — chunking, which `--no-chunks` opts out of, is not
-        -- implemented yet, so browser behaves like node here.)
-        case args.platform of
-          Standalone -> pure unit
-          _ -> when needLoader (emitLoader bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
-        info (Fmt.fmt @"Wrote {file}" { file: wasmPath })
+      artifact <-
+        if args.text then do
+          watPath <- joinPath [ bundleDir, "index.wat" ]
+          execFile wasmDisBin [ wasmPath, "-o", watPath, "--all-features" ]
+          unlink wasmPath
+          info $ Log.blue (Fmt.fmt @"✓ Wrote {file}" { file: watPath })
+          pure watPath
+        else do
+          -- emit the JS loader when there are JS foreign imports to satisfy, or when any entry export
+          -- needs marshalling (a non-`i32`/`f64` param/result); ADR 0014.
+          let exportSigs = rootExportSigs roots allSigs
+          let needLoader = not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
+          -- `standalone` is a self-contained wasm with no loader; node/browser emit one when needed.
+          -- (browser currently emits a single wasm — chunking, which `--no-chunks` opts out of, is not
+          -- implemented yet, so browser behaves like node here.)
+          case args.platform of
+            Standalone -> pure unit
+            _ -> when needLoader (emitLoader bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
+          info $ Log.blue (Fmt.fmt @"✓ Wrote {file}" { file: wasmPath })
+          pure wasmPath
+      -- footer: elapsed wall-clock time and the artifact's size
+      end <- liftEffect nowMsImpl
+      size <- maybe "" (\b -> ", " <> humanSize b) <$> fileSize artifact
+      info ""
+      info (Fmt.fmt @"✨️ Finished compilation in {secs}s{size}\n" { secs: toStringWith (fixed 2) ((end - start) / 1000.0), size })
+      info $ Log.strong $ Log.green (Fmt.fmt @"✓ Build succeeded!" { secs: toStringWith (fixed 2) ((end - start) / 1000.0), size })

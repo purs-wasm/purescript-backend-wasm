@@ -10,6 +10,9 @@ export const corefnImportsImpl = (json) => {
   }
 };
 
+// A monotonic clock in milliseconds, for the build's elapsed-time report.
+export const nowMsImpl = () => performance.now();
+
 // The distinct host-import module names a wasm binary declares (excluding the internal "rt"
 // runtime), i.e. the user `foreign import` modules a JS loader must satisfy (ADR 0014).
 export const importModulesImpl = (bytes) => () => {

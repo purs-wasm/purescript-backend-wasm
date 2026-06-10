@@ -29,17 +29,19 @@ import PursWasm.CLI.Effect.Process (PROC, ProcF(..))
 import PursWasm.CLI.Effect.Process as Proc
 import PursWasm.CLI.Effect.Registry (REGISTRY)
 import PursWasm.CLI.Effect.Registry as Registry
+import PursWasm.CLI.Options.Types (GlobalOptions)
 import Run (EFFECT, Run, liftEffect, runBaseEffect)
 import Type.Row (type (+))
 
--- | Run a CLI program (its effect row fully closed) against the synchronous Node backend. `REGISTRY`
--- | is interpreted first, into `PROC` (it asks `spago`), so it must be peeled before `PROC` is.
-runNode :: forall a. Run (FS + REGISTRY + PROC + LOG + EFFECT + ()) a -> Effect a
-runNode m = m
+-- | Run a CLI program (its effect row fully closed) against the synchronous Node backend, with the
+-- | global options (e.g. `--verbose`) applied to the logger. `REGISTRY` is interpreted first, into
+-- | `PROC` (it asks `spago`), so it must be peeled before `PROC` is.
+runNode :: forall a. GlobalOptions -> Run (FS + REGISTRY + PROC + LOG + EFFECT + ()) a -> Effect a
+runNode globals m = m
   # Registry.interpret Registry.spagoHandler
   # FS.interpret nodeFsHandler
   # Proc.interpret nodeChildProcessHandler
-  # Log.interpret (Log.terminalHandler defaultLoggerConfig)
+  # Log.interpret (Log.terminalHandler (defaultLoggerConfig { minLevel = if globals.verbose then Debug else Info }))
   # runBaseEffect
 
 -- | The default console logging config. The bin prototype logged every message via `Console.log`;
@@ -55,6 +57,7 @@ nodeFsHandler = case _ of
   WriteBinary path bytes next -> liftEffect (writeFileBytesImpl path bytes) $> next
   ReadDir path k -> k <$> liftEffect (hush <$> try (Sync.readdir path))
   Exists path k -> k <$> liftEffect (isNothing <$> Sync.access path)
+  FileSize path k -> k <$> liftEffect (hush <$> try (fileSizeImpl path))
   MkdirP path next -> liftEffect (Sync.mkdir' path { recursive: true, mode: permsAll }) $> next
   Unlink path next -> liftEffect (Sync.unlink path) $> next
   JoinPath segments k -> pure (k (Path.concat segments))
@@ -77,3 +80,6 @@ foreign import execFileCaptureImpl :: String -> Array String -> Effect String
 foreign import readFileBytesImpl :: String -> Effect Uint8Array
 
 foreign import writeFileBytesImpl :: String -> Uint8Array -> Effect Unit
+
+-- | A file's size in bytes (`statSync().size`).
+foreign import fileSizeImpl :: String -> Effect Int

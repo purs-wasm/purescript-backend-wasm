@@ -15,11 +15,12 @@ import Data.Array as Array
 import Data.Foldable (for_)
 import Data.Maybe (maybe)
 import Data.Tuple (Tuple(..))
+import Fmt as Fmt
 import Foreign.Object (Object)
 import Foreign.Object as Object
-import Fmt as Fmt
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson)
 import PursWasm.CLI.Effect (FS, FilePath, LOG, info, joinPath, mkdirP, readText, writeText)
+import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Module (printModname)
 import Run (Run)
 import Type.Row (type (+))
@@ -38,7 +39,7 @@ emitLoader bundleDir input mods sigs exportManifest = do
   for_ mods (copyForeign foreignDir)
   indexMjs <- joinPath [ bundleDir, "index.mjs" ]
   writeText indexMjs (loaderSource (manifestJs mods sigs) exportManifest)
-  info (Fmt.fmt @"Wrote {file} (+ {n} foreign module(s))" { file: indexMjs, n: Array.length mods })
+  info $ Log.blue (Fmt.fmt @"✓ Wrote {file} (+ {n} foreign module(s))" { file: indexMjs, n: Array.length mods })
   where
   copyForeign foreignDir m = do
     src <- joinPath [ input, m, "foreign.js" ]

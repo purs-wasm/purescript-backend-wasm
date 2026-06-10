@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, statSync } from "node:fs";
 
 export const execFileImpl = (cmd) => (args) => () => {
   execFileSync(cmd, args, { stdio: "inherit" });
@@ -15,3 +15,5 @@ export const execFileCaptureImpl = (cmd) => (args) => () =>
 export const readFileBytesImpl = (path) => () => readFileSync(path);
 
 export const writeFileBytesImpl = (path) => (bytes) => () => writeFileSync(path, bytes);
+
+export const fileSizeImpl = (path) => () => statSync(path).size;

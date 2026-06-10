@@ -20,6 +20,7 @@ data FilesystemF a
   | Unlink FilePath a
   | ReadBinary FilePath (Maybe Uint8Array -> a)
   | WriteBinary FilePath Uint8Array a
+  | FileSize FilePath (Maybe Int -> a)
   -- Path ops are effects too — not for side effects, but for *portability*: 
   -- the path separator and resolution are environment-specific, so the interpreter owns them.
   | JoinPath (Array FilePath) (FilePath -> a)
@@ -55,6 +56,10 @@ readDir path = Run.lift _fs (ReadDir path identity)
 
 exists :: forall r. FilePath -> Run (FS + r) Boolean
 exists path = Run.lift _fs (Exists path identity)
+
+-- | The size of a file in bytes, `Nothing` if it cannot be stat'd.
+fileSize :: forall r. FilePath -> Run (FS + r) (Maybe Int)
+fileSize path = Run.lift _fs (FileSize path identity)
 
 -- | Create a directory (and any missing parents).
 mkdirP :: forall r. FilePath -> Run (FS + r) Unit
