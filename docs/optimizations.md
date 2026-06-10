@@ -382,3 +382,17 @@ once each — and prints a real `console.log "Hello, World!"` through the whole 
   do-block works. (`Effect.Ref`, `forE`/`whileE`/`untilE`/`foreachE`, `EffectFnN` and
   `unsafePerformEffect` are now provided wasm-natively — ADR 0017 / 0018 — not gaps; `ST`
   shares `Effect.Ref`'s representation and is the remaining follow-up.)
+- **`Free` / `Run` interpreter performance.** Programs over the `Free` monad or
+  `purescript-run`'s `Run` (extensible effects) **compile and run correctly**, but are currently
+  slow on wasm. A `Run`-over-`State` counter (`bench/count-run.mjs`) measures ~1.65–1.70× the time
+  of `purs-backend-es` — i.e. ~685× a hand-rolled `State` monad, which by contrast collapses to a
+  tail loop and *beats* `purs-backend-es` at ~0.73×. The dominant cost is the `Free`/`VariantF`
+  machinery's per-step allocation (boxed variant cells, bind closures), allocation-heavy in a way
+  wasm-GC handles less efficiently than V8, which the optimizer does not yet specialize away. A
+  smaller, secondary contributor: `purescript-run`'s interpreter loops are *point-free* recursive
+  bindings (`loop = resume f pure`); the backend requires a recursive binding to be a syntactic
+  function, so it **eta-expands** them to `loop = \x -> resume f pure x` (`Lower.lowerRecBind`,
+  sound by the eta law for a binding of positive residual arity) — correct, but it recomputes the
+  `resume f pure` closure per call instead of sharing it once. Planned post-v0.1: specialize/inline
+  the `Run`/`Free` interpreter to remove the per-step allocation (the dominant cost); recovering the
+  eta sharing-loss (a recursive-value knot-tying lowering) is a minor follow-up.

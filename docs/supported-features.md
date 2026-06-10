@@ -83,6 +83,15 @@ what lets it tail-call); a mutually-recursive group is allocated and then **knot
 (its environment slots back-patched to point at the siblings). Top-level (mutual)
 recursion needs nothing special — each call is a direct call.
 
+A **point-free** recursive function — defined without an explicit lambda, e.g.
+`purescript-run`'s `loop = resume f pure` — is **eta-expanded** to `\x -> loop' x` so it lowers
+as a function (sound for a binding of positive residual arity). This is what lets `Free` / `Run`
+code compile, though such interpreters are currently slow on wasm and the eta-expansion gives up
+some closure sharing — see [optimizations § Known gaps](./optimizations.md#known-gaps). A genuinely
+recursive **value** binding (a non-function that references itself, e.g. a self-referential
+`Tuple`) is supported only at the **top level**, as a cyclic value CAF that globalization keeps as
+a recomputed getter (ADR 0006); the same shape inside a local `let` is not yet supported.
+
 ## Tail-call elimination
 
 A direct call in **tail position** runs in **constant stack** (emitted as
