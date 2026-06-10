@@ -225,6 +225,19 @@ for (const name of Object.keys(inst.exports)) {
     // is not a JS-usable CAF, and calling it with no args would trap (`illegal cast` on the
     // missing argument), so expose the raw wasm export rather than evaluating it at load.
     marshalledExports[name] = e;
+  } else if (sig.result && sig.result.eff !== undefined) {
+    // a function returning `Effect a` (e.g. `main :: String -> Effect Unit`): marshal the value
+    // args, then return a JS thunk that performs the effect when CALLED — `f(x)()` — matching
+    // `Effect a ≃ () => a` (ADR 0015). The wasm export carries the trailing perform-unit param
+    // (ADR 0018), which we leave off (as for a nullary Effect); the inner result is marshalled.
+    const k = sig.result.eff;
+    marshalledExports[name] = (...args) => {
+      const xs = args.map((a, i) => (isRaw(sig.params[i]) ? a : eqrefFromJs(sig.params[i], a)));
+      return () => {
+        const r = e(...xs);
+        return isRaw(k) ? r : eqrefToJs(k, r);
+      };
+    };
   } else {
     marshalledExports[name] = wrapExport(e, sig);
   }

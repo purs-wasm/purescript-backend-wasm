@@ -73,5 +73,8 @@ spec = describe "Test.E2E.HostEff (host effectful FFI, ADR 0015)" do
         -- a top-level `Effect Unit` export performs only when CALLED, exactly once;
         -- `deadEff` is never called, so its `record 99` never fires (helloworld's `sub`).
         liftEffect resetSpy
-        liftEffect (callI32x0 inst "mainEff") >>= (_ `shouldEqual` 0)
+        -- `mainEff :: Effect Unit`: its export returns the marshalled (opaque) `Unit`, not an
+        -- i32 (the perform-unit ABI, ADR 0018), so just perform it for the side effect. The
+        -- guard is that it runs exactly once, and only when called.
+        liftEffect (void (callI32x0 inst "mainEff"))
         liftEffect readSpy >>= (_ `shouldEqual` "7")
