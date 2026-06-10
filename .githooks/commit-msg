@@ -2,7 +2,7 @@
 # commit-msg hook: enforce the commit subject convention.
 #
 #   [<Category>] <scope>: <summary>
-#     Category: Feature | Bugfix | Refactor | Chore | Docs | Test | Perf | CI
+#     Category: Feature | Bugfix | Refactor | Chore | Docs | Example | Test | Perf | CI
 #     scope:    ADR-XXXX | subsystem (e.g. ulib, Frontend) | docs
 #     e.g.      [Bugfix] ADR-0019: keep voided effects from being dropped
 #
@@ -18,7 +18,7 @@ case "$subject" in
   "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*) exit 0 ;;
 esac
 
-if [[ "$subject" =~ ^\[(Feature|Bugfix|Refactor|Chore|Docs|Test|Perf|CI)\]\ [^:]+:\ .+ ]]; then
+if [[ "$subject" =~ ^\[(Feature|Bugfix|Refactor|Chore|Example|Docs|Test|Perf|CI)\]\ [^:]+:\ .+ ]]; then
   exit 0
 fi
 
