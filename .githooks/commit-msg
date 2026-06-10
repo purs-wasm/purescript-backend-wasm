@@ -28,7 +28,7 @@ cat >&2 <<EOF
     ${subject}
 
 Expected:  [<Category>] <scope>: <summary>
-  Category: Feature | Bugfix | Refactor | Chore | Docs | Test | Perf | CI
+  Category: Feature | Bugfix | Refactor | Chore | Docs | Example | Test | Perf | CI
   scope:    ADR-XXXX | subsystem (e.g. ulib, Frontend) | docs
   e.g.      [Bugfix] ADR-0019: keep voided effects from being dropped
 

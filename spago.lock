@@ -12,6 +12,8 @@
             "lists",
             "partial",
             "prelude",
+            "run",
+            "tuples",
             "wasm-base"
           ]
         },
@@ -163,6 +165,21 @@
             "prelude",
             "strings",
             "transformers"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
+      "examples-run": {
+        "path": "examples/run",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "fmt",
+            "prelude",
+            "run"
           ]
         },
         "test": {
