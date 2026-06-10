@@ -41,8 +41,11 @@ const NAMES = [
   // Data.String.Common (bits 16-23)
   "Common.split", "Common.split-empty", "Common.joinWith", "Common.replace", "Common.replaceAll",
   "Common.trim", "Common.null", "Common.split-multibyte",
+  // Data.String.CodePoints (bits 24-29) + Data.String.Unsafe (bit 30)
+  "CodePoints.length", "CodePoints.toCodePointArray", "CodePoints.codePointAt", "CodePoints.singleton",
+  "CodePoints.take/drop", "CodePoints.uncons", "Unsafe.charAt/char",
 ];
-const EXPECT = (1 << NAMES.length) - 1; // 2^24 - 1 = 16777215
+const EXPECT = 2 ** NAMES.length - 1; // 31 bits → 2147483647 (max positive i32)
 const r = inst.exports.check(0);
 if (r !== EXPECT) {
   const fails = NAMES.filter((_, i) => !(r & (1 << i)));
@@ -51,4 +54,4 @@ if (r !== EXPECT) {
 
 rmSync(compiled, { recursive: true, force: true });
 rmSync(bundle, { recursive: true, force: true });
-console.log("stringShadow: OK — Data.String.CodeUnits + Data.String.Common shadows run correctly on wasm (UTF-8 code-point semantics, 1/2/3-byte)");
+console.log("stringShadow: OK — Data.String.{CodeUnits,Common,CodePoints,Unsafe} shadows run correctly on wasm (UTF-8 code-point semantics, 1/2/3-byte)");
