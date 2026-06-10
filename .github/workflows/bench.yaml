@@ -59,29 +59,29 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      # The bench scripts shell out to `bin/index.dev.js`, which imports the compiled
-      # CLI at `output/Main` (the `bin` package — `spago build -p bin` also builds its
-      # `compiler` dependency) and merges `runtime/runtime.wasm` + the `ulib/*.wasm`
-      # foreigns, so build those first. Then compile the ulib *shadow* lib (ADR 0028) so
-      # the bench's `bin` builds pick it up — without it, idiomatic `Data.Array.map` /
+      # The bench scripts shell out to `purs-wasm/index.dev.js`, which imports the compiled
+      # CLI at `output/PursWasm.CLI.Main` (the `purs-wasm` package — `spago build -p purs-wasm`
+      # also builds its `compiler` dependency) and merges `runtime/runtime.wasm` + the
+      # `ulib/*.wasm` foreigns, so build those first. Then compile the ulib *shadow* lib
+      # (ADR 0028) so the bench builds pick it up — without it, idiomatic `Data.Array.map` /
       # `foldl` fall back to the foreign HOFs (correct, but the specialization win is
       # lost). `ulib install` needs `.spago` populated with the shadows' dependency
       # closure, so prime it with a `bench` build first.
       - name: Build the compiler CLI, runtime, ulib, and shadow lib
         run: |
-          spago build -p bin
+          spago build -p purs-wasm
           pnpm -F ./compiler run build:runtime
           pnpm -F ./compiler run build:ulib
           spago build -p bench --output bench/output
-          node ./bin/index.dev.js ulib install
+          node ./purs-wasm/index.dev.js ulib install
           # Assert the shadows still match the resolved package set (major.minor); a
           # divergence means the build would silently fall back to the registry module and
           # the benchmark would measure the un-specialized path — fail the run instead.
-          node ./bin/index.dev.js ulib validate
+          node ./purs-wasm/index.dev.js ulib validate
           # Assert the shadows are in sync with the *pinned* package set (spago.lock) and that
           # ulib/compat.json is up to date (ADR 0028 release record). Fails if a shadow is stale
           # (the set bumped that package past the shadow's major.minor) or compat.json drifted.
-          node ulib-compat.mjs --check
+          node ./purs-wasm/index.dev.js ulib compat --check
 
       # graph.sh builds all three backends + renders the 7 algorithm graphs;
       # count-state-graph.sh / count-effect-graph.sh add the State- and Effect-monad

@@ -17,7 +17,7 @@ purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es 
   f="${f#./}"; mkdir -p "bench/output-js-es/$(dirname "$f")"; cp "bench/output/$f" "bench/output-js-es/$f"
 done
 # 3. our wasm backend (BenchCurry entry)
-node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e BenchCurry
+node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e BenchCurry
 
 cd "$here"
 node curry.mjs

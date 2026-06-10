@@ -5,12 +5,8 @@
   "type": "module",
   "scripts": {
     "compile": "spago build -p purs-wasm",
-    "build:runtime": "../binaryen/node_modules/binaryen/bin/wasm-as --all-features ../runtime/runtime.wat -o ../runtime/runtime.wasm",
-    "build:ulib": "cd .. && node build-ulib.mjs",
-    "build:fixtures": "cd .. && spago build && spago build -p bench --output bench/output",
     "test:unit": "spago test -p purs-wasm --monochrome",
-    "test:diff": "npm run build:runtime && npm run build:ulib && npm run build:fixtures && node test/diff/run.mjs",
-    "test": "npm run test:unit && npm run test:diff",
+    "test": "npm run test:unit",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test",
     "version": "echo 'export const version = \"v'$npm_package_version'\";' > ./src/PursWasm/CLI/Version.js && git add ."

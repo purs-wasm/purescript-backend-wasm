@@ -9,7 +9,7 @@
 //   * js-es    : purs-backend-es (output-js-es, the optimized JS people ship)
 //
 //   build:  spago build -p bench --output bench/output
-//           node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e CountState
+//           node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e CountState
 //           purs-backend-es build --corefn-dir ./bench/output --output-dir ./bench/output-js-es --int-tags
 //   run:    node bench/count-state.mjs
 //

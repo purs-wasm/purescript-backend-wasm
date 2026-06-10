@@ -32,9 +32,10 @@ pkgVersionFromPath :: String -> String -> Maybe String
 pkgVersionFromPath pkg path =
   Array.index (Str.split (Pattern (pkg <> "-")) path) 1 >>= (Array.head <<< Str.split (Pattern "/"))
 
--- | Compare two dotted versions numerically over their first three components (missing or
--- | non-numeric components count as 0), matching the prototype's `cmp` in `ulib-compat.mjs`:
--- | `0.15.9 < 0.15.10` (numeric, not lexicographic). Used to order the supported-compiler set and
+-- | Compare two dotted versions numerically over their first 
+-- | three components (missing or non-numeric components count as 0)`:
+-- | `0.15.9 < 0.15.10` (numeric, not lexicographic). 
+-- | Used to order the supported-compiler set and
 -- | to bound-check the purs pin (ADR 0029).
 compareVersion :: String -> String -> Ordering
 compareVersion a b = go 0

@@ -1,7 +1,6 @@
 -- | `purs-wasm ulib compat` — regenerate (or `--check`) `ulib/compat.json`, the record of which
 -- | package-set version the ulib shadows are pinned to, the exact version each shadow targets, and
--- | the `purs` compiler the shipped lib is built with (ADR 0028/0029). A PureScript port of the
--- | prototype `ulib-compat.mjs`.
+-- | the `purs` compiler the shipped lib is built with (ADR 0028/0029).
 -- |
 -- | `spago.lock` is the authoritative version source; the shadow set is the `ulib/shadow/<pkg>-<ver>`
 -- | directory structure; the purs pin is cross-checked (regenerate only, online best-effort) against

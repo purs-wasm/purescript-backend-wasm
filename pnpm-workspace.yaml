@@ -1,7 +1,6 @@
 packages:
   - "./binaryen/**"
   - "./compiler/**"
-  - "./bin/**"
   - "./purs-wasm/**"
   - "./bench/**"
   - "./example/**"

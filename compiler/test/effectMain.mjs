@@ -1,4 +1,4 @@
-// Bin-integration regression test (ADR 0015): an `Effect`-typed export (`main :: Effect
+// CLI-integration regression test (ADR 0015): an `Effect`-typed export (`main :: Effect
 // Unit`) must be exposed by the generated loader as a callable THUNK `() => a` — it runs
 // when CALLED, not at import time. (The bug: nullary exports were eager-evaluated at load,
 // so importing the module fired `main`.) Builds the `EffMain` fixture through the CLI, then
@@ -18,12 +18,12 @@ const fail = (msg) => {
   process.exit(1);
 };
 
-// ensure the CLI (output/Main) is current, then build the fixture bundle
-execFileSync("spago", ["build", "-p", "bin"], { cwd: repo, stdio: "inherit" });
+// ensure the CLI (output/PursWasm.CLI.Main) is current, then build the fixture bundle
+execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 const out = mkdtempSync(join(tmpdir(), "effmain-"));
 execFileSync(
   "node",
-  ["bin/index.dev.js", "build", "-e", "EffMain", "-I", "compiler/test/fixtures/bin-effmain", "-O", out],
+  ["purs-wasm/index.dev.js", "build", "-e", "EffMain", "-I", "compiler/test/fixtures/bin-effmain", "-O", out],
   { cwd: repo, stdio: "inherit" },
 );
 

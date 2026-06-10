@@ -1,4 +1,4 @@
-// Bin-integration regression test (ADR 0019): the full `examples/effect-ref` `main` — a do
+// CLI-integration regression test (ADR 0019): the full `examples/effect-ref` `main` — a do
 // block mixing native `Ref` (new/write/modify_), `whenM`/`when` with a *host foreign*
 // (`Console.log`) body, `<#>`, and `>>=` + `show`. It exercises both Effect-collapse fixes:
 //   * generalized effect reflection (a host foreign in value/branch position is a thunk, not
@@ -20,11 +20,11 @@ const fail = (msg) => {
 
 const compiled = mkdtempSync(join(tmpdir(), "effref-main-out-"));
 execFileSync("spago", ["build", "-p", "examples-effect-ref", "--output", compiled], { cwd: repo, stdio: "inherit" });
-execFileSync("spago", ["build", "-p", "bin"], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 const bundle = mkdtempSync(join(tmpdir(), "effref-main-bundle-"));
 execFileSync(
   "node",
-  ["bin/index.dev.js", "build", "-e", "Examples.EffRef.Main", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.dev.js", "build", "-e", "Examples.EffRef.Main", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 

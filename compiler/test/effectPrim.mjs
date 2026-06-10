@@ -26,11 +26,11 @@ const CASES = [
 
 const compiled = mkdtempSync(join(tmpdir(), "effprim-out-"));
 execFileSync("spago", ["build", "-p", "examples-effect-prim", "--output", compiled], { cwd: repo, stdio: "inherit" });
-execFileSync("spago", ["build", "-p", "bin"], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 const bundle = mkdtempSync(join(tmpdir(), "effprim-bundle-"));
 execFileSync(
   "node",
-  ["bin/index.dev.js", "build", "-e", "Examples.EffPrim.Main", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.dev.js", "build", "-e", "Examples.EffPrim.Main", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 

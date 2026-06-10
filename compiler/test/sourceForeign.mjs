@@ -1,11 +1,11 @@
-// Bin-integration regression test (ADR 0016): a PRIVATE `foreign import` (not in the
-// module's export list) is absent from `externs.cbor`, so resolving it relies on the bin
+// CLI-integration regression test (ADR 0016): a PRIVATE `foreign import` (not in the
+// module's export list) is absent from `externs.cbor`, so resolving it relies on the CLI
 // reconstructing its signature from `.purs` source — located via spago's `cache-db.json`.
 //
 // Self-contained: the fixture `compiler/test/fixtures/source-foreign/` holds a pre-built
 // `Priv` module (`corefn.json`/`externs.cbor`/`foreign.js` for a private `secretImpl :: Int
 // -> Int`, JS `n => n*10`, used by an exported `triple`) plus a `cache-db.json` pointing at
-// the committed `Priv.purs` source (path relative to the repo root = the bin's cwd). No
+// the committed `Priv.purs` source (path relative to the repo root = the CLI's cwd). No
 // spago build / example package needed. We bundle it through the CLI and check
 // `triple(5) === 50`; without source reconstruction the build fails with "unknown callee".
 import { execFileSync } from "node:child_process";
@@ -15,16 +15,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
-const input = "compiler/test/fixtures/source-foreign"; // relative to repo (the bin's cwd)
+const input = "compiler/test/fixtures/source-foreign"; // relative to repo (the CLI's cwd)
 const fail = (msg) => {
   console.error("sourceForeign: FAIL —", msg);
   process.exit(1);
 };
 
-execFileSync("spago", ["build", "-p", "bin"], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 
 const bundle = mkdtempSync(join(tmpdir(), "sf-bundle-"));
-execFileSync("node", ["bin/index.dev.js", "build", "-e", "Priv", "-I", input, "-O", bundle], {
+execFileSync("node", ["purs-wasm/index.dev.js", "build", "-e", "Priv", "-I", input, "-O", bundle], {
   cwd: repo,
   stdio: "inherit",
 });
@@ -44,7 +44,7 @@ cpSync(join(repo, input), fbInput, { recursive: true });
 rmSync(join(fbInput, "cache-db.json"), { force: true });
 const fbBundle = mkdtempSync(join(tmpdir(), "sf-fb-bundle-"));
 try {
-  execFileSync("node", ["bin/index.dev.js", "build", "-e", "Priv", "-I", fbInput, "-O", fbBundle], {
+  execFileSync("node", ["purs-wasm/index.dev.js", "build", "-e", "Priv", "-I", fbInput, "-O", fbBundle], {
     cwd: repo,
     stdio: "pipe",
   });
