@@ -60,6 +60,16 @@ data Intrinsic
   | StrLen -- String -> Int (UTF-8 byte length, `array.len`)
   | StrConcat -- String -> String -> String (allocate + copy both byte arrays)
   | StrEq -- String -> String -> Boolean (length then byte-by-byte compare)
+  -- | `Wasm.String` (WasmBase, ADR 0026/0030) first-order **byte-level** `$Str` primitives, so the
+  -- | `Data.String.*` code-point operations can be written in PureScript over them (UTF-8
+  -- | decode/encode in PureScript) and thus run standalone on wasm — the Rust `.as_bytes()` analog.
+  -- | `StrByteAt s i` reads the `i`-th UTF-8 byte (0-255); `StrNew n` allocates a length-`n`
+  -- | zeroed byte string; `StrSetByte s i b` writes byte `b` at `i` (mutating in place) and
+  -- | **returns `s`**, threaded through the builder loop exactly as `ArraySet` (keeping the write
+  -- | live and ordered without an effect).
+  | StrByteAt -- String -> Int -> Int (`array.get` on the `$Bytes`)
+  | StrNew -- Int -> String (zeroed `$Str` of `n` bytes)
+  | StrSetByte -- String -> Int -> Int -> String (writes the byte, returns the string)
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
   | ArrayConcat -- Array a -> Array a -> Array a (`Data.Semigroup` `<>`: allocate + copy both)
@@ -258,6 +268,12 @@ qualifiedIntrinsic = case _ of
   "Wasm.Array.unsafeIndex" -> Just (Tuple ArrayIndex 2)
   "Wasm.Array.unsafeNew" -> Just (Tuple ArrayNew 1)
   "Wasm.Array.unsafeSet" -> Just (Tuple ArraySet 3)
+  -- `Wasm.String` (WasmBase, ADR 0030): first-order byte-level `$Str` primitives the
+  -- `Data.String.*` code-point ops build on. `byteLength` reuses `StrLen`.
+  "Wasm.String.byteLength" -> Just (Tuple StrLen 1)
+  "Wasm.String.byteAt" -> Just (Tuple StrByteAt 2)
+  "Wasm.String.unsafeNew" -> Just (Tuple StrNew 1)
+  "Wasm.String.unsafeSetByte" -> Just (Tuple StrSetByte 3)
   -- `Wasm.Int` (WasmBase): first-order `Int` ops, so ulib shadows of low-level prelude
   -- modules (e.g. `Data.Functor`) need no `Prelude` for their loop arithmetic (ADR 0028).
   "Wasm.Int.add" -> Just (Tuple IntAdd 2)

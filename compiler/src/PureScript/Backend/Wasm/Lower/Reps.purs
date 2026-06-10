@@ -24,6 +24,7 @@ primRep = case _ of
   IntDegree -> I32
   NumToInt -> I32
   StrLen -> I32
+  StrByteAt -> I32 -- a UTF-8 byte (0-255), as an Int
   ArrayLength -> I32
   TopInt -> I32
   BottomInt -> I32
@@ -72,6 +73,10 @@ primOperandReps = case _ of
   -- Wasm.Array build primitives: lengths / indices are unboxed i32, arrays / values boxed
   ArrayNew -> [ I32 ]
   ArraySet -> [ Boxed, I32, Boxed ]
+  -- Wasm.String byte primitives: the string is boxed ($Str eqref), indices / bytes are i32
+  StrByteAt -> [ Boxed, I32 ]
+  StrNew -> [ I32 ]
+  StrSetByte -> [ Boxed, I32, I32 ]
   -- unsafeCompareImpl lt eq gt x y: the selected values are boxed, the operands typed
   OrdInt -> [ Boxed, Boxed, Boxed, I32, I32 ]
   OrdNumber -> [ Boxed, Boxed, Boxed, F64, F64 ]
