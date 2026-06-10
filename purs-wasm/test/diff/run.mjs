@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
 
-import { cases, ulibCases } from "./cases.mjs";
+import { cases, ulibCases, compatCases } from "./cases.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = "bin/index.dev.js";
@@ -106,7 +106,22 @@ for (const c of cases) {
   }
 }
 
-// --- ulib status commands: exit code + normalized stdout parity ---
+// Compare a no-artifact command (exit code, optionally normalized stdout) across both CLIs.
+function statusParity(name, args, { compareStdout }) {
+  const a = run(BIN, args);
+  const b = run(PURS_WASM, args);
+  const diffs = [];
+  if (a.code !== b.code) diffs.push(`exit code: bin ${a.code} vs purs-wasm ${b.code}`);
+  if (compareStdout && normalize(a.out) !== normalize(b.out)) diffs.push(`stdout differs (normalized)`);
+  if (diffs.length === 0) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    failures.push({ name, why: diffs.join("\n      ") });
+  }
+}
+
+// --- ulib validate/check: exit code + normalized stdout parity ---
 // Install a fresh lib via the oracle so both CLIs validate/check against identical inputs.
 const libDir = mkdtempSync(join(tmpdir(), "pw-diff-lib-"));
 try {
@@ -115,25 +130,19 @@ try {
     failures.push({ name: "ulib (setup: install lib)", why: `oracle install failed:\n${install.out}` });
   } else {
     for (const c of ulibCases) {
-      const args = [...c.args, "-L", libDir];
-      const a = run(BIN, args);
-      const b = run(PURS_WASM, args);
-      const diffs = [];
-      if (a.code !== b.code) diffs.push(`exit code: bin ${a.code} vs purs-wasm ${b.code}`);
-      if (normalize(a.out) !== normalize(b.out)) diffs.push(`stdout differs (normalized)`);
-      if (diffs.length === 0) {
-        pass++;
-        console.log(`  ✓ ${c.name}`);
-      } else {
-        failures.push({ name: c.name, why: diffs.join("\n      ") });
-      }
+      statusParity(c.name, [...c.args, "-L", libDir], { compareStdout: true });
     }
   }
 } finally {
   rmSync(libDir, { recursive: true, force: true });
 }
 
-const total = cases.length + ulibCases.length;
+// --- ulib compat --check: exit code parity (offline, no lib) ---
+for (const c of compatCases) {
+  statusParity(c.name, c.args, { compareStdout: false });
+}
+
+const total = cases.length + ulibCases.length + compatCases.length;
 console.log(`\ndiff: ${pass} passed, ${failures.length} failed (of ${total})`);
 if (failures.length > 0) {
   console.error("\nparity failures:");

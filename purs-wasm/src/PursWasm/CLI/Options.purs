@@ -7,7 +7,7 @@ import Prelude
 import ArgParse.Basic (ArgParser)
 import ArgParse.Basic as ArgParser
 import Data.Either (Either)
-import PursWasm.CLI.Options.Types (BuildOption, Command(..), UlibCheckOption, UlibInstallOption, UlibValidateOption)
+import PursWasm.CLI.Options.Types (BuildOption, Command(..), UlibCheckOption, UlibCompatOption, UlibInstallOption, UlibValidateOption)
 import PursWasm.CLI.Version as Version
 
 buildOptionsParser :: ArgParser BuildOption
@@ -94,6 +94,17 @@ ulibCheckParser =
           # ArgParser.optional
     }
 
+ulibCompatParser :: ArgParser UlibCompatOption
+ulibCompatParser =
+  ArgParser.fromRecord
+    { check:
+        ArgParser.flag [ "--check" ]
+          "Verify (offline) that the shadows are still in sync with the pinned package set and\n\
+          \that ulib/compat.json's version data is current, instead of regenerating it. A\n\
+          \major.minor divergence fails; a patch-only divergence warns."
+          # ArgParser.boolean
+    }
+
 commandParser :: ArgParser Command
 commandParser =
   ArgParser.choose "command"
@@ -114,6 +125,9 @@ commandParser =
             , ArgParser.command [ "check" ]
                 "Compare each shadow's public interface against your compiled module (externs)"
                 (UlibCheck <$> ulibCheckParser <* ArgParser.flagHelp)
+            , ArgParser.command [ "compat" ]
+                "Regenerate (or --check) ulib/compat.json: the package-set/version/purs pins (ADR 0029)"
+                (UlibCompat <$> ulibCompatParser <* ArgParser.flagHelp)
             ] <* ArgParser.flagHelp
     ]
     <* ArgParser.flagHelp

@@ -3,7 +3,7 @@ module Test.Unit.PursWasm.CLI.Ulib.Version (spec) where
 import Prelude
 
 import Data.Maybe (Maybe(..))
-import PursWasm.CLI.Ulib.Version (majorMinor, pkgVersionFromPath, splitPkgVer)
+import PursWasm.CLI.Ulib.Version (compareVersion, majorMinor, pkgVersionFromPath, splitPkgVer)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -29,3 +29,19 @@ spec = describe "PursWasm.CLI.Ulib.Version" do
 
     it "is Nothing when the package is not on the path" do
       pkgVersionFromPath "arrays" "output/Data.Maybe/corefn.json" `shouldEqual` Nothing
+
+  describe "compareVersion" do
+    it "compares numerically, not lexicographically" do
+      compareVersion "0.15.9" "0.15.10" `shouldEqual` LT
+      compareVersion "0.15.10" "0.15.9" `shouldEqual` GT
+      compareVersion "0.15.16" "0.15.15" `shouldEqual` GT
+
+    it "is EQ for equal versions and treats missing components as 0" do
+      compareVersion "1.0.0" "1.0.0" `shouldEqual` EQ
+      compareVersion "1" "1.0.0" `shouldEqual` EQ
+      compareVersion "1.2" "1.2.0" `shouldEqual` EQ
+
+    it "compares major and minor before patch, over the first three components only" do
+      compareVersion "2.0.0" "1.9.9" `shouldEqual` GT
+      compareVersion "1.2.3" "1.3.0" `shouldEqual` LT
+      compareVersion "1.2.3.4" "1.2.3.99" `shouldEqual` EQ

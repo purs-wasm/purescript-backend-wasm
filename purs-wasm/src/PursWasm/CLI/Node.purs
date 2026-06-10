@@ -12,10 +12,11 @@ module PursWasm.CLI.Node
 import Prelude
 
 import Data.ArrayBuffer.Types (Uint8Array)
+import Data.Bifunctor (lmap)
 import Data.Either (hush)
 import Data.Maybe (isNothing)
 import Effect (Effect)
-import Effect.Exception (try)
+import Effect.Exception (message, try)
 import Node.Encoding (Encoding(..))
 import Node.FS.Perms (permsAll)
 import Node.FS.Sync as Sync
@@ -26,12 +27,16 @@ import PursWasm.CLI.Effect.Log (LOG, LogLevel(..), LoggerConfig)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Effect.Process (PROC, ProcF(..))
 import PursWasm.CLI.Effect.Process as Proc
+import PursWasm.CLI.Effect.Registry (REGISTRY)
+import PursWasm.CLI.Effect.Registry as Registry
 import Run (EFFECT, Run, liftEffect, runBaseEffect)
 import Type.Row (type (+))
 
--- | Run a CLI program (its effect row fully closed) against the synchronous Node backend.
-runNode :: forall a. Run (FS + PROC + LOG + EFFECT + ()) a -> Effect a
+-- | Run a CLI program (its effect row fully closed) against the synchronous Node backend. `REGISTRY`
+-- | is interpreted first, into `PROC` (it asks `spago`), so it must be peeled before `PROC` is.
+runNode :: forall a. Run (FS + REGISTRY + PROC + LOG + EFFECT + ()) a -> Effect a
 runNode m = m
+  # Registry.interpret Registry.spagoHandler
   # FS.interpret nodeFsHandler
   # Proc.interpret nodeChildProcessHandler
   # Log.interpret (Log.terminalHandler defaultLoggerConfig)
@@ -58,9 +63,14 @@ nodeFsHandler = case _ of
 nodeChildProcessHandler :: forall r. ProcF ~> Run (EFFECT + r)
 nodeChildProcessHandler = case _ of
   ExecFile cmd args next -> liftEffect (execFileImpl cmd args) $> next
+  ExecFileCapture cmd args k -> k <$> liftEffect (lmap message <$> try (execFileCaptureImpl cmd args))
 
 -- | Run an external tool synchronously (`execFileSync`, stdio inherited; throws on non-zero exit).
 foreign import execFileImpl :: String -> Array String -> Effect Unit
+
+-- | Run an external tool synchronously and return its captured stdout (`execFileSync` with
+-- | `encoding: utf8`); throws on failure, which the handler turns into `Left` via `try`.
+foreign import execFileCaptureImpl :: String -> Array String -> Effect String
 
 -- | Read/write a file as bytes. `node:fs` deals in `Buffer`, which *is* a `Uint8Array`, so these
 -- | convert at the boundary with no copy — keeping the `Filesystem` effect Node-agnostic.

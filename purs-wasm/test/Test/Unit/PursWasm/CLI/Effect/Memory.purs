@@ -16,6 +16,7 @@ import Prelude
 
 import Data.Array as Array
 import Data.ArrayBuffer.Types (Uint8Array)
+import Data.Either (Either(..))
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
@@ -76,6 +77,10 @@ interpProc = interpret (on _proc handle send)
   handle :: ProcF ~> Run (STATE World + r)
   handle = case _ of
     ExecFile cmd args next -> modify (\w -> w { execs = Array.snoc w.execs (Tuple cmd args) }) $> next
+    -- Captured exec is recorded like any other, but not stubbed: the only caller (`ulib compat`)
+    -- is covered by the differential harness and pure-helper tests, not the in-memory interpreter.
+    ExecFileCapture cmd args k -> modify (\w -> w { execs = Array.snoc w.execs (Tuple cmd args) })
+      $> k (Left "execFileCapture is not stubbed in the in-memory interpreter")
 
 interpLog :: forall r. Run (LOG + STATE World + r) ~> Run (STATE World + r)
 interpLog = interpret (on _log handle send)

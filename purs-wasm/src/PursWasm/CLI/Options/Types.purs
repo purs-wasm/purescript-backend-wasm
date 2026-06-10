@@ -5,6 +5,7 @@ module PursWasm.CLI.Options.Types
   , UlibInstallOption
   , UlibValidateOption
   , UlibCheckOption
+  , UlibCompatOption
   , Command(..)
   ) where
 
@@ -38,8 +39,14 @@ type UlibCheckOption =
   , input :: Maybe FilePath
   }
 
+-- | `ulib compat`: regenerate (default) or, with `--check`, verify `ulib/compat.json` (ADR 0029).
+type UlibCompatOption =
+  { check :: Boolean
+  }
+
 data Command
   = Build BuildOption
   | UlibInstall UlibInstallOption
   | UlibValidate UlibValidateOption
   | UlibCheck UlibCheckOption
+  | UlibCompat UlibCompatOption

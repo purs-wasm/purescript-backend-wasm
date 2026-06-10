@@ -37,3 +37,13 @@ export const ulibCases = [
   { name: "ulib validate", args: ["ulib", "validate"] },
   { name: "ulib check", args: ["ulib", "check"] },
 ];
+
+// `ulib compat --check` reads spago.lock + ulib/shadow + ulib/compat.json (no lib, offline), so it
+// runs without the temp lib. We compare exit codes only: the ported command points its "run this to
+// fix it" hints at `purs-wasm ulib compat` rather than the old `node ulib-compat.mjs`, so the
+// stdout text intentionally diverges (the byte-exact compat.json output is covered by an
+// `encodeCompat` unit test + the manual regenerate check; regenerate itself needs the network and
+// is not part of this offline gate).
+export const compatCases = [
+  { name: "ulib compat --check", args: ["ulib", "compat", "--check"] },
+];
