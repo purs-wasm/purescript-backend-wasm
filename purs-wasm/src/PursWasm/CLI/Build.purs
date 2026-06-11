@@ -159,7 +159,7 @@ buildCmd cliRoot args = do
   externs <- map Array.catMaybes $ for modNames \name ->
     if Set.member name allModNames then readExterns =<< joinPath [ args.input, name, "externs.cbor" ]
     else readExterns =<< joinPath [ libPath, name, "externs.cbor" ]
-  allSigs <- buildForeignSigs args.input externs modules
+  allSigs <- buildForeignSigs args.input libPath externs modules
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
   -- One bundle per build, written flat under `--output` (no per-module subdir): the build emits a
   -- single linked wasm + optional loader, not per-module artifacts (ADR 0009), so a module-named
@@ -188,7 +188,7 @@ buildCmd cliRoot args = do
       writeBinary appPath bytes
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader.
-      providers <- for foreignMods (resolveForeign shadows args.input bundleDir)
+      providers <- for foreignMods (resolveForeign shadows libPath args.input bundleDir)
       let wasmProvided = Array.mapMaybe (\p -> Tuple p.name <$> p.wasm) providers
       let jsProvided = Array.mapMaybe (\p -> if isNothing p.wasm then Just p.name else Nothing) providers
       -- Policy on foreign imports with no `foreign.wat` provider (they otherwise fall back to a

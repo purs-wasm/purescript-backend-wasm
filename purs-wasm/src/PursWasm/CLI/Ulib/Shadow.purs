@@ -15,7 +15,7 @@ import Data.Maybe (Maybe(..))
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import PursWasm.CLI.Effect (FS, FilePath, exists, joinPath, readDir)
-import PursWasm.CLI.Ulib.Manifest (ulibManifestFile)
+import PursWasm.CLI.Ulib.Manifest (isLibModuleDir)
 import Run (Run)
 import Type.Row (type (+))
 
@@ -33,8 +33,9 @@ loadShadowMap libPath = do
   if not present then pure Map.empty
   else readDir libPath >>= case _ of
     Nothing -> pure Map.empty
-    -- the lib root also holds the self-describing `ulib-manifest.json` (ADR 0031) — not a module dir.
-    Just ms -> Map.fromFoldable <$> for (Array.filter (_ /= ulibManifestFile) ms) \m -> do
+    -- the lib root also holds self-describing files (`ulib-manifest.json`, `_header.wat`, ADR 0031) —
+    -- `isLibModuleDir` filters those out so only module dirs are scanned.
+    Just ms -> Map.fromFoldable <$> for (Array.filter isLibModuleDir ms) \m -> do
       corefn <- joinPath [ libPath, m, "corefn.json" ]
       foreignWasm <- joinPath [ libPath, m, "foreign.wasm" ]
       pure (Tuple m { corefn, foreignWasm })

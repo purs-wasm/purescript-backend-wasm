@@ -54,15 +54,21 @@ done
 # 4. compile the whole set to corefn (+ externs, for `ulib check`).
 "$PURS" compile --codegen corefn --output "$TMP/output" "$TMP/src/**/*.purs"
 
-# 4b. copy the manifest into the lib root so the precompiled lib is self-describing (ADR 0031): the
-#     build + `ulib validate` read versions from `$LIB/ulib-manifest.json`, needing no ulib source.
+# 4b. copy the manifest + the shared wat header into the lib root so the precompiled lib is
+#     self-describing (ADR 0031): the build + `ulib validate` read versions from
+#     `$LIB/ulib-manifest.json`, and assembling a project-local foreign `.wat` fragment wraps it with
+#     `$LIB/_header.wat` — both needing no ulib source tree (the `ulib upgrade` user flow).
 mkdir -p "$LIB"
 cp "$MANIFEST" "$LIB/ulib-manifest.json"
+cp "$ULIB_SRC/_header.wat" "$LIB/_header.wat"
 
 # 5. extract the shadowed modules into the flat `$LIB/<Module>/` lib layout (ADR 0031 §2.2 — the
 #    version is in the manifest, not the path); a sibling co-located `.wat` (the module's kept
-#    foreign, e.g. Data.Show's showNumberImpl) is assembled into `foreign.wasm`. `pkgver` still runs
-#    (its manifest lookup is the "package must be ulib-covered" check + the install log).
+#    foreign, e.g. Data.Show's showNumberImpl) is assembled into `foreign.wasm` AND copied verbatim as
+#    `foreign.wat` — the build reconstructs the kept foreign's wasm calling-convention signature from
+#    it (ADR 0031 §6.1; the one-line `(func (export …) (param …))` form `parseUlibSigs` reads, which a
+#    `wasm-dis` of `foreign.wasm` does not preserve). `pkgver` still runs (its manifest lookup is the
+#    "package must be ulib-covered" check + the install log).
 for rel in $shadows; do
   pkg="${rel%%/*}"; mod="$(basename "$rel" .purs)"
   pv="$(pkgver "$pkg")"
@@ -71,7 +77,7 @@ for rel in $shadows; do
   cp "$TMP/output/$mod/corefn.json" "$dst/corefn.json"
   cp "$TMP/output/$mod/externs.cbor" "$dst/externs.cbor"
   wat="$ULIB_SRC/$pkg/$mod.wat"
-  [ -f "$wat" ] && assemble_wat "$wat" "$dst/foreign.wasm"
+  [ -f "$wat" ] && { assemble_wat "$wat" "$dst/foreign.wasm"; cp "$wat" "$dst/foreign.wat"; }
   echo "  ulib: installed $mod ($pv)"
 done
 
@@ -87,5 +93,6 @@ for rel in $wats; do
   dst="$LIB/$mod"
   mkdir -p "$dst"
   assemble_wat "$ULIB_SRC/$rel" "$dst/foreign.wasm"
+  cp "$ULIB_SRC/$rel" "$dst/foreign.wat"   # the sig source (see step 5)
   echo "  ulib: installed $mod ($pv, foreign only)"
 done

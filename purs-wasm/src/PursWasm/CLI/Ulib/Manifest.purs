@@ -8,6 +8,8 @@ module PursWasm.CLI.Ulib.Manifest
   ( PkgEntry
   , Manifest
   , ulibManifestFile
+  , headerWatFile
+  , isLibModuleDir
   , readManifest
   , parseManifest
   , LockView
@@ -49,6 +51,17 @@ import Type.Row (type (+))
 -- | source tree) can still resolve shadows and `validate`. Lib scanners filter this entry out.
 ulibManifestFile :: String
 ulibManifestFile = "ulib-manifest.json"
+
+-- | The shared wat header's filename, shipped at the lib root (`$LIB/_header.wat`, ADR 0031) so
+-- | assembling a project-local foreign `.wat` fragment needs no ulib source tree.
+headerWatFile :: String
+headerWatFile = "_header.wat"
+
+-- | Whether a lib-root entry is a module directory rather than one of the self-describing files the
+-- | lib also carries at its root (`ulib-manifest.json`, `_header.wat`). The lib scanners
+-- | (`loadShadowMap`, `ulib check` / `validate`) use this to ignore those files.
+isLibModuleDir :: String -> Boolean
+isLibModuleDir name = name /= ulibManifestFile && name /= headerWatFile
 
 -- | A manifest entry: the one supported version of a ulib package, and the modules it covers.
 type PkgEntry = { version :: String, modules :: Array String }

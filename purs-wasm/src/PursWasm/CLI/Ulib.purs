@@ -26,7 +26,7 @@ import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, execFile, info, joinPath, l
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Options.Types (UlibCheckOption, UlibInstallOption, UlibValidateOption)
-import PursWasm.CLI.Ulib.Manifest (manifestModules, manifestPackages, readManifest, ulibManifestFile)
+import PursWasm.CLI.Ulib.Manifest (isLibModuleDir, manifestModules, manifestPackages, readManifest, ulibManifestFile)
 import PursWasm.CLI.Ulib.Version (majorMinor, splitPkgVer)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
@@ -71,9 +71,9 @@ ulibValidateCmd cliRoot opt = do
   manifestPath <- joinPath [ libPath, ulibManifestFile ]
   -- A lib that is absent OR present-but-empty (no module dirs) is "not installed": `readDir`
   -- returns `Nothing` for the former and `Just []` for the latter, so an empty list covers both
-  -- (guarding against a vacuous "OK" on an empty `-L` dir). The self-describing manifest file is not
-  -- a module dir, so exclude it.
-  libMods <- Array.filter (_ /= ulibManifestFile) <<< fromMaybe [] <$> readDir libPath
+  -- (guarding against a vacuous "OK" on an empty `-L` dir). `isLibModuleDir` drops the lib root's
+  -- self-describing files (`ulib-manifest.json`, `_header.wat`), which are not module dirs.
+  libMods <- Array.filter isLibModuleDir <<< fromMaybe [] <$> readDir libPath
   mManifest <- readManifest manifestPath
   case mManifest of
     _ | Array.null libMods -> info (Log.toLog "No lib installed (run `" <> Log.strong (Log.blue "ulib install") <> Log.toLog "`.)")
@@ -116,9 +116,9 @@ ulibCheckCmd :: forall r. FilePath -> UlibCheckOption -> Run (FS + LOG + EFFECT 
 ulibCheckCmd cliRoot opt = do
   libPath <- maybe (joinPath [ cliRoot, "..", "lib" ]) pure opt.libPath
   input <- maybe (joinPath [ ".", "output" ]) pure opt.input
-  -- absent OR present-but-empty (no module dirs) ⇒ "not installed" (see `ulibValidateCmd`); the
-  -- self-describing `ulib-manifest.json` at the lib root is not a module dir, so exclude it.
-  libMods <- Array.filter (_ /= ulibManifestFile) <<< fromMaybe [] <$> readDir libPath
+  -- absent OR present-but-empty (no module dirs) ⇒ "not installed" (see `ulibValidateCmd`);
+  -- `isLibModuleDir` drops the lib root's self-describing files (manifest, `_header.wat`).
+  libMods <- Array.filter isLibModuleDir <<< fromMaybe [] <$> readDir libPath
   -- the manifest's covered modules are the registry shadows; a lib module outside it is a ulib
   -- *internal* helper (ADR 0031 §6) with no registry counterpart — there is no interface to check.
   covered <- maybe Set.empty manifestModules <$> (readManifest =<< joinPath [ libPath, ulibManifestFile ])

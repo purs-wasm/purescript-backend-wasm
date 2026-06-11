@@ -4,7 +4,6 @@
 module PursWasm.CLI.Build.Paths
   ( runtimeWasm
   , loaderGlue
-  , ulibDir
   , wasmMergeBin
   , wasmDisBin
   , wasmAsBin
@@ -17,9 +16,6 @@ runtimeWasm = "runtime/runtime.wasm"
 -- | so the loader can `import { makeMarshal } from "./marshal.js"`.
 loaderGlue :: String
 loaderGlue = "runtime/marshal.js"
-
-ulibDir :: String
-ulibDir = "ulib"
 
 wasmMergeBin :: String
 wasmMergeBin = "binaryen/node_modules/binaryen/bin/wasm-merge"

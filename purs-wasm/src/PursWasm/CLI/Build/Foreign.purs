@@ -16,23 +16,24 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String (Pattern(..))
 import Data.String as Str
-import PursWasm.CLI.Build.Paths (ulibDir, wasmAsBin)
+import PursWasm.CLI.Build.Paths (wasmAsBin)
 import PursWasm.CLI.Effect (FS, FilePath, PROC, execFile, exists, joinPath, readText, unlink, writeText)
+import PursWasm.CLI.Ulib.Manifest (headerWatFile)
 import PursWasm.CLI.Ulib.Shadow (Shadow)
 import Run (Run)
 import Type.Row (type (+))
 
 type Provider = { name :: String, wasm :: Maybe FilePath, assembled :: Boolean }
 
-resolveForeign :: forall r. Map String Shadow -> FilePath -> FilePath -> String -> Run (FS + PROC + r) Provider
-resolveForeign shadows input bundleDir m = do
+resolveForeign :: forall r. Map String Shadow -> FilePath -> FilePath -> FilePath -> String -> Run (FS + PROC + r) Provider
+resolveForeign shadows libPath input bundleDir m = do
   wasmSrc <- joinPath [ input, m, "foreign.wasm" ]
   hasWasm <- exists wasmSrc
   if hasWasm then pure { name: m, wasm: Just wasmSrc, assembled: false }
   else do
     watSrc <- joinPath [ input, m, "foreign.wat" ]
     hasWat <- exists watSrc
-    if hasWat then assemble bundleDir m watSrc
+    if hasWat then assemble libPath bundleDir m watSrc
     else do
       -- ADR 0031: a ulib module's foreign is the prebuilt per-module `foreign.wasm` in the lib. The
       -- build no longer consults the global `ulib/<M>/foreign.wat` layer (now test-only, for the e2e
@@ -43,10 +44,11 @@ resolveForeign shadows input bundleDir m = do
       pure { name: m, wasm: libWasm, assembled: false }
 
 -- | Assemble a foreign `.wat`. A full `(module …)` is assembled as-is; a *fragment* (no
--- | `(module …)`) is wrapped as `(module <ulib/_header.wat> <fragment>)` first, so it shares the
--- | runtime value types via the one authoritative header (ADR 0010 / 0012).
-assemble :: forall r. FilePath -> String -> FilePath -> Run (FS + PROC + r) Provider
-assemble bundleDir m watSrc = readText watSrc >>= case _ of
+-- | `(module …)`) is wrapped as `(module <$LIB/_header.wat> <fragment>)` first, so it shares the
+-- | runtime value types via the one authoritative header (ADR 0010 / 0012). The header ships in the
+-- | lib (`$LIB/_header.wat`, ADR 0031) so assembling a project foreign needs no ulib source tree.
+assemble :: forall r. FilePath -> FilePath -> String -> FilePath -> Run (FS + PROC + r) Provider
+assemble libPath bundleDir m watSrc = readText watSrc >>= case _ of
   Nothing -> pure { name: m, wasm: Nothing, assembled: false }
   Just content -> do
     out <- joinPath [ bundleDir, m <> ".foreign.wasm" ]
@@ -56,7 +58,7 @@ assemble bundleDir m watSrc = readText watSrc >>= case _ of
       execFile wasmAsBin [ watSrc, "-o", out, "--all-features" ]
       pure { name: m, wasm: Just out, assembled: true }
     else do
-      header <- fromMaybe "" <$> (readText =<< joinPath [ ulibDir, "_header.wat" ])
+      header <- fromMaybe "" <$> (readText =<< joinPath [ libPath, headerWatFile ])
       combined <- joinPath [ bundleDir, m <> ".combined.wat" ]
       writeText combined ("(module\n" <> header <> "\n" <> content <> "\n)\n")
       execFile wasmAsBin [ combined, "-o", out, "--all-features" ]

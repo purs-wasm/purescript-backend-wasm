@@ -21,7 +21,6 @@ import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
 import PureScript.CoreFn (Module)
 import PureScript.ExternsFile (ExternsFile)
-import PursWasm.CLI.Build.Paths (ulibDir)
 import PursWasm.CLI.Effect (FS, FilePath, exists, joinPath, readText)
 import PursWasm.CLI.Module (printModname)
 import Run (Run)
@@ -33,10 +32,11 @@ foreign import cacheDbSourcesImpl :: String -> Object String
 buildForeignSigs
   :: forall r
    . FilePath
+  -> FilePath
   -> Array ExternsFile
   -> Array Module
   -> Run (FS + r) (Object ForeignImport)
-buildForeignSigs input externs modules = do
+buildForeignSigs input libPath externs modules = do
   let externsSigs = foreignSigs externs
   -- externs win over source (`Object.union` is left-biased): externs types are already desugared
   -- by `purs`, so they are authoritative for *exported* foreigns; source fills only the private
@@ -50,18 +50,21 @@ buildForeignSigs input externs modules = do
       Tuple true (Just path) -> maybe Object.empty parseForeignSigs <$> readText path
       _ -> pure Object.empty
   let srcSigs = Array.foldl Object.union Object.empty srcSigsByMod
-  -- ulib (ADR 0012): for a module with no project-local provider, read `ulib/<M>/foreign.wat`'s
-  -- export signatures (the wasm export is the source of truth) — this covers polymorphic `*Impl`
-  -- foreigns whose arity externs cannot reconstruct, and overrides externs/source.
+  -- ulib (ADR 0031 §6.1): for a module with no project-local provider, read the kept foreign's
+  -- export signatures from the lib's `$LIB/<M>/foreign.wat` (shipped beside `foreign.wasm` at
+  -- install) — the wasm export is the source of truth for the calling convention, covering the
+  -- polymorphic / unboxed-`Int` `*Impl` foreigns whose marshalling externs cannot reconstruct (e.g.
+  -- `Data.Array.rangeImpl`'s `(param i32)`); overrides externs/source. Reading from the lib (not the
+  -- ulib source tree) keeps the build self-contained for the `ulib upgrade` user flow.
   ulibSigsByMod <- for modules \m -> do
     let mn = printModname m.name
     projWasm <- exists =<< joinPath [ input, mn, "foreign.wasm" ]
     projWat <- exists =<< joinPath [ input, mn, "foreign.wat" ]
     if projWasm || projWat then pure Object.empty
     else do
-      ulibWat <- joinPath [ ulibDir, mn, "foreign.wat" ]
-      has <- exists ulibWat
-      if has then maybe Object.empty (parseUlibSigs mn) <$> readText ulibWat
+      libWat <- joinPath [ libPath, mn, "foreign.wat" ]
+      has <- exists libWat
+      if has then maybe Object.empty (parseUlibSigs mn) <$> readText libWat
       else pure Object.empty
   let ulibSigs = Array.foldl Object.union Object.empty ulibSigsByMod
   pure (Object.union ulibSigs (Object.union externsSigs srcSigs))
