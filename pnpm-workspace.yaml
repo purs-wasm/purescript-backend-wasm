@@ -4,4 +4,4 @@ packages:
   - "./purs-wasm/**"
   - "./ulib-tooling/**"
   - "./bench/**"
-  - "./example/**"
+  - "./examples/**"

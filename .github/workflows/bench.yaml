@@ -22,7 +22,8 @@ on:
   pull_request:
     paths:
       - "bench/**"
-      - "bin/**"
+      - "purs-wasm/**"
+      - "ulib-tooling/**"
       - "compiler/**"
       - "binaryen/**"
       - "runtime/**"
