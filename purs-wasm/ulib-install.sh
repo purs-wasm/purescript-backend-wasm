@@ -10,10 +10,10 @@
 # keep working unchanged. The new `$LIB/<Module>/` layout lands at the switch (phase 4).
 #
 # Invoked by `purs-wasm ulib install` as:
-#   sh ulib-install.sh <lib> <ulib-src> <wasm-base-src> <purs> <manifest> [<spago-packages-dir>]
+#   sh ulib-install.sh <lib> <ulib-src> <wasm-base-src> <purs> <manifest> <wasm-as> [<spago-packages-dir>]
 set -eu
 
-LIB="$1"; ULIB_SRC="$2"; WASM_BASE="$3"; PURS="$4"; MANIFEST="$5"; SPAGO="${6:-.spago/p}"
+LIB="$1"; ULIB_SRC="$2"; WASM_BASE="$3"; PURS="$4"; MANIFEST="$5"; WASM_AS="$6"; SPAGO="${7:-.spago/p}"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -51,5 +51,13 @@ for rel in $shadows; do
   mkdir -p "$dst"
   cp "$TMP/output/$mod/corefn.json" "$dst/corefn.json"
   cp "$TMP/output/$mod/externs.cbor" "$dst/externs.cbor"
+  # ADR 0031: a sibling co-located `.wat` (the module's kept foreign, e.g. Data.Show's showNumberImpl)
+  # is assembled — wrapped with the shared `_header.wat` (a fragment) — into the lib `foreign.wasm`,
+  # so the build provides it from the lib instead of the global ulib wat layer.
+  wat="$ULIB_SRC/$pkg/$mod.wat"
+  if [ -f "$wat" ]; then
+    { printf '(module\n'; cat "$ULIB_SRC/_header.wat" "$wat"; printf '\n)\n'; } > "$TMP/$mod.foreign.wat"
+    "$WASM_AS" "$TMP/$mod.foreign.wat" -o "$dst/foreign.wasm" --all-features
+  fi
   echo "  ulib: installed $mod ($pkg-$ver)"
 done

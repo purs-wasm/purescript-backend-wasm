@@ -6,21 +6,41 @@ module Test.Unit.PursWasm.CLI.Build.Foreign (spec) where
 import Prelude
 
 import Data.Array as Array
+import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..), fst, snd)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PursWasm.CLI.Build.Paths (wasmAsBin)
+import PursWasm.CLI.Ulib.Shadow (Shadow)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 import Test.Unit.PursWasm.CLI.Effect.Memory (World, runMem, worldOfText)
+
+-- a lib entry whose `foreign.wasm` sits beside the shadow corefn (ADR 0031)
+showShadow :: Shadow
+showShadow =
+  { package: "prelude"
+  , version: "6.0.2"
+  , corefn: "lib/prelude-6.0.2/Data.Show/corefn.json"
+  , foreignWasm: "lib/prelude-6.0.2/Data.Show/foreign.wasm"
+  }
 
 spec :: Spec Unit
 spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
 
   it "uses a project-local foreign.wasm directly (no assembly)" do
     let world = worldOfText [ Tuple "output/Data.Foo/foreign.wasm" "<wasm bytes>" ]
-    let Tuple w prov = runMem world (resolveForeign "output" "bundle" "Data.Foo")
+    let Tuple w prov = runMem world (resolveForeign Map.empty "output" "bundle" "Data.Foo")
     prov.wasm `shouldEqual` Just "output/Data.Foo/foreign.wasm"
+    prov.assembled `shouldEqual` false
+    Array.length w.execs `shouldEqual` 0
+
+  it "uses the lib's per-module foreign.wasm for a ulib module's kept foreign (ADR 0031)" do
+    let
+      shadows = Map.singleton "Data.Show" showShadow
+      world = worldOfText [ Tuple "lib/prelude-6.0.2/Data.Show/foreign.wasm" "<wasm>" ]
+    let Tuple w prov = runMem world (resolveForeign shadows "output" "bundle" "Data.Show")
+    prov.wasm `shouldEqual` Just "lib/prelude-6.0.2/Data.Show/foreign.wasm"
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0
 
@@ -30,7 +50,7 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
         [ Tuple "ulib/Data.Bar/foreign.wat" "(func (export \"f\") (result i32) (i32.const 1))"
         , Tuple "ulib/_header.wat" "(; rt header ;)"
         ]
-    let Tuple w prov = runMem world (resolveForeign "output" "bundle" "Data.Bar")
+    let Tuple w prov = runMem world (resolveForeign Map.empty "output" "bundle" "Data.Bar")
     prov.wasm `shouldEqual` Just "bundle/Data.Bar.foreign.wasm"
     prov.assembled `shouldEqual` true
     -- exactly one wasm-as invocation, on the wrapped combined .wat → the .foreign.wasm output
@@ -38,7 +58,7 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
     (Array.head w.execs >>= (Array.head <<< snd)) `shouldEqual` Just "bundle/Data.Bar.combined.wat"
 
   it "falls back to no in-wasm provider (JS loader) when nothing provides the module" do
-    let Tuple w prov = runMem emptyTextWorld (resolveForeign "output" "bundle" "Data.Nope")
+    let Tuple w prov = runMem emptyTextWorld (resolveForeign Map.empty "output" "bundle" "Data.Nope")
     prov.wasm `shouldEqual` Nothing
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0

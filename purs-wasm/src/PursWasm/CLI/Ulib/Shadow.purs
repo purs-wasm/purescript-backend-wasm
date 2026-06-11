@@ -28,11 +28,13 @@ import PursWasm.CLI.Ulib.Version (splitPkgVer)
 import Run (Run)
 import Type.Row (type (+))
 
--- | The registry modules ulib shadows, each tied to the *package* version its shadow targets.
-type Shadow = { package :: String, version :: String, corefn :: FilePath }
+-- | A lib entry for a registry module: its package/version, the shadow corefn path, and the
+-- | per-module `foreign.wasm` path (the assembled kept-foreign, ADR 0031 — may not exist for a
+-- | module with no kept foreign). Both paths are *candidates*; existence is checked by the caller.
+type Shadow = { package :: String, version :: String, corefn :: FilePath, foreignWasm :: FilePath }
 
--- | Scan the lib for shadows: each `<lib>/<package>-<version>/<Module>/corefn.json` is a shadow of
--- | registry module `<Module>`. Returns a `Module name -> Shadow` map; an absent lib → empty.
+-- | Scan the lib: each `<lib>/<package>-<version>/<Module>/` holds a shadow `corefn.json` and/or a
+-- | kept-foreign `foreign.wasm`. Returns a `Module name -> Shadow` map; an absent lib → empty.
 loadShadowMap :: forall r. FilePath -> Run (FS + r) (Map String Shadow)
 loadShadowMap libPath = do
   present <- exists libPath
@@ -45,8 +47,10 @@ loadShadowMap libPath = do
         let { pkg, ver } = splitPkgVer pkgVer
         readDir pkgPath >>= case _ of
           Nothing -> pure []
-          Just ms -> for ms \m ->
-            joinPath [ pkgPath, m, "corefn.json" ] <#> \corefn -> Tuple m { package: pkg, version: ver, corefn }
+          Just ms -> for ms \m -> do
+            corefn <- joinPath [ pkgPath, m, "corefn.json" ]
+            foreignWasm <- joinPath [ pkgPath, m, "foreign.wasm" ]
+            pure (Tuple m { package: pkg, version: ver, corefn, foreignWasm })
       pure (Map.fromFoldable (Array.concat rows))
 
 -- | Use a module's ulib corefn (lib) iff it is in `shadowed` — the set the manifest-based

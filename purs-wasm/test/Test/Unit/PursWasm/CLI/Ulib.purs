@@ -9,6 +9,7 @@ import Prelude
 
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..), fst)
+import PursWasm.CLI.Build.Paths (wasmAsBin)
 import PursWasm.CLI.Ulib (ulibInstallCmd)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
@@ -27,6 +28,7 @@ defaultInvoke =
     , "cli/../wasm-base/src"
     , "purs"
     , "cli/../ulib/ulib-manifest.json"
+    , wasmAsBin
     , ".spago/p"
     ]
 
@@ -65,6 +67,7 @@ spec = describe "PursWasm.CLI.Ulib.ulibInstallCmd" do
           , "cli/../wasm-base/src"
           , "/usr/bin/purs"
           , "cli/../ulib/ulib-manifest.json"
+          , wasmAsBin
           , ".spago/p"
           ]
       ]

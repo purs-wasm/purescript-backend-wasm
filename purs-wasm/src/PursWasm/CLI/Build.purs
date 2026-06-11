@@ -160,7 +160,7 @@ buildCmd cliRoot args = do
       writeBinary appPath bytes
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader.
-      providers <- for foreignMods (resolveForeign args.input bundleDir)
+      providers <- for foreignMods (resolveForeign shadows args.input bundleDir)
       let wasmProvided = Array.mapMaybe (\p -> Tuple p.name <$> p.wasm) providers
       let jsProvided = Array.mapMaybe (\p -> if isNothing p.wasm then Just p.name else Nothing) providers
       -- Policy on foreign imports with no `foreign.wat` provider (they otherwise fall back to a

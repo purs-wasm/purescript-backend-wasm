@@ -1,8 +1,8 @@
--- | The foreign-provider resolution ladder (ADR 0014 / 0012). For each host-import module the
--- | compiled wasm needs, find a provider: a project-local `foreign.wasm` (used directly) /
--- | `foreign.wat` (assembled), then the curated `ulib/<M>/foreign.wat` (assembled) — both merged
--- | as an in-wasm provider speaking the internal ABI; otherwise none, and it falls back to the JS
--- | loader. A project-local provider wins over ulib.
+-- | The foreign-provider resolution ladder (ADR 0014 / 0012 / 0031). For each host-import module
+-- | the compiled wasm needs, find a provider: a project-local `foreign.wasm` / `foreign.wat`
+-- | (assembled), then the **lib** per-module `foreign.wasm` (a ulib module's kept foreign, ADR
+-- | 0031), then the (test-only, being retired) curated `ulib/<M>/foreign.wat` — all merged as an
+-- | in-wasm provider; otherwise none, and it falls back to the JS loader.
 module PursWasm.CLI.Build.Foreign
   ( Provider
   , resolveForeign
@@ -11,18 +11,21 @@ module PursWasm.CLI.Build.Foreign
 import Prelude
 
 import Data.Array as Array
+import Data.Map (Map)
+import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String (Pattern(..))
 import Data.String as Str
 import PursWasm.CLI.Build.Paths (ulibDir, wasmAsBin)
 import PursWasm.CLI.Effect (FS, FilePath, PROC, execFile, exists, joinPath, readText, unlink, writeText)
+import PursWasm.CLI.Ulib.Shadow (Shadow)
 import Run (Run)
 import Type.Row (type (+))
 
 type Provider = { name :: String, wasm :: Maybe FilePath, assembled :: Boolean }
 
-resolveForeign :: forall r. FilePath -> FilePath -> String -> Run (FS + PROC + r) Provider
-resolveForeign input bundleDir m = do
+resolveForeign :: forall r. Map String Shadow -> FilePath -> FilePath -> String -> Run (FS + PROC + r) Provider
+resolveForeign shadows input bundleDir m = do
   wasmSrc <- joinPath [ input, m, "foreign.wasm" ]
   hasWasm <- exists wasmSrc
   if hasWasm then pure { name: m, wasm: Just wasmSrc, assembled: false }
@@ -31,14 +34,22 @@ resolveForeign input bundleDir m = do
     hasWat <- exists watSrc
     if hasWat then assemble bundleDir m watSrc
     else do
-      ulibWat <- joinPath [ ulibDir, m, "foreign.wat" ]
-      hasUlibWat <- exists ulibWat
-      if hasUlibWat then assemble bundleDir m ulibWat
-      else do
-        ulibWasm <- joinPath [ ulibDir, m, "foreign.wasm" ]
-        hasUlibWasm <- exists ulibWasm
-        if hasUlibWasm then pure { name: m, wasm: Just ulibWasm, assembled: false }
-        else pure { name: m, wasm: Nothing, assembled: false }
+      -- ADR 0031: a ulib module's kept foreign is the prebuilt per-module `foreign.wasm` in the lib.
+      libWasm <- case Map.lookup m shadows of
+        Just s -> exists s.foreignWasm <#> if _ then Just s.foreignWasm else Nothing
+        Nothing -> pure Nothing
+      case libWasm of
+        Just fw -> pure { name: m, wasm: Just fw, assembled: false }
+        Nothing -> do
+          -- (the global ulib wat layer — now used only as the e2e harness's provider, being retired)
+          ulibWat <- joinPath [ ulibDir, m, "foreign.wat" ]
+          hasUlibWat <- exists ulibWat
+          if hasUlibWat then assemble bundleDir m ulibWat
+          else do
+            ulibWasm <- joinPath [ ulibDir, m, "foreign.wasm" ]
+            hasUlibWasm <- exists ulibWasm
+            if hasUlibWasm then pure { name: m, wasm: Just ulibWasm, assembled: false }
+            else pure { name: m, wasm: Nothing, assembled: false }
 
 -- | Assemble a foreign `.wat`. A full `(module …)` is assembled as-is; a *fragment* (no
 -- | `(module …)`) is wrapped as `(module <ulib/_header.wat> <fragment>)` first, so it shares the

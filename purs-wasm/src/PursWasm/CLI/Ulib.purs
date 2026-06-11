@@ -20,6 +20,7 @@ import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Ulib.Interface (compatible, diffInterface, interfaceOf)
+import PursWasm.CLI.Build.Paths (wasmAsBin)
 import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
@@ -50,7 +51,7 @@ ulibInstallCmd cliRoot opt = do
   else do
     when opt.force (execFile "rm" [ "-rf", libPath ])
     info $ Log.green "✓ Compiling shadows..."
-    execFile "sh" [ script, libPath, ulibSrc, wasmBaseSrc, purs, manifest, spagoP ]
+    execFile "sh" [ script, libPath, ulibSrc, wasmBaseSrc, purs, manifest, wasmAsBin, spagoP ]
     Log.br *> info (Log.strong $ Log.green "✓ ulib successfully installed!")
 
 -- | `purs-wasm ulib validate` (ADR 0028): for each installed shadow, check that the package

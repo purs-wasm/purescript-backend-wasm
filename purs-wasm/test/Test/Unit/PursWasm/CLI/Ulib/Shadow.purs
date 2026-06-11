@@ -25,9 +25,19 @@ spec = describe "PursWasm.CLI.Ulib.Shadow.loadShadowMap" do
     let shadows = snd (runMem world (loadShadowMap "lib"))
     Map.size shadows `shouldEqual` 2
     Map.lookup "Data.Array" shadows
-      `shouldEqual` Just { package: "arrays", version: "7.3.0", corefn: "lib/arrays-7.3.0/Data.Array/corefn.json" }
+      `shouldEqual` Just
+        { package: "arrays"
+        , version: "7.3.0"
+        , corefn: "lib/arrays-7.3.0/Data.Array/corefn.json"
+        , foreignWasm: "lib/arrays-7.3.0/Data.Array/foreign.wasm"
+        }
     Map.lookup "Data.Foldable" shadows
-      `shouldEqual` Just { package: "foldable-traversable", version: "6.0.0", corefn: "lib/foldable-traversable-6.0.0/Data.Foldable/corefn.json" }
+      `shouldEqual` Just
+        { package: "foldable-traversable"
+        , version: "6.0.0"
+        , corefn: "lib/foldable-traversable-6.0.0/Data.Foldable/corefn.json"
+        , foreignWasm: "lib/foldable-traversable-6.0.0/Data.Foldable/foreign.wasm"
+        }
 
   it "is empty when the lib directory is absent" do
     let shadows = snd (runMem (worldOfText []) (loadShadowMap "lib"))
