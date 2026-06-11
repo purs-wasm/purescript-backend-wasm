@@ -1,11 +1,9 @@
 -- | ulib support manifest (ADR 0031): `ulib-manifest.json` is the single source of truth for which
--- | packages/modules ulib covers and at which version. This module reads it and runs the build-time
--- | **version check** — for each *reached* ulib package, compare the user's resolved version
--- | (`spago.lock`) to the manifest version. It is self-contained (the `spago.lock` reader lives here,
--- | not in the soon-to-be-retired `Ulib.Compat`) and pure where it can be.
--- |
--- | ADR 0031 migration phase 1: the result is *warned*, never fatal — this lays the new rail beside
--- | the existing `Ulib.Shadow.shadowOrRegistry` without changing behaviour.
+-- | packages/modules ulib covers and at which version. This module reads it and drives resolution:
+-- | `shadowSet` / `resolveModuleSet` decide which modules are taken from the lib, and the build-time
+-- | **version check** (`reachedMismatches`) compares each *reached* ulib package's resolved version
+-- | (`spago.lock`) to the manifest version. Self-contained (the `spago.lock` reader lives here, not in
+-- | the soon-to-be-retired `Ulib.Compat`) and pure where it can be.
 module PursWasm.CLI.Ulib.Manifest
   ( PkgEntry
   , Manifest
@@ -117,10 +115,9 @@ reachedMismatches manifest lock reached =
       if Array.any (\m -> Set.member m reached) entry.modules && got /= Just entry.version then Just { package, want: entry.version, got }
       else Nothing
 
--- | The set of modules that resolve to the ulib (lib) corefn under the new policy (ADR 0031): a
--- | covered module is used iff it is reachable AND its package's resolved version (`spago.lock`)
--- | **exactly** equals the manifest version. This is the resolution the last-wins merge will drive;
--- | in migration phase 2 it is computed only to diff against the legacy `shadowOrRegistry`.
+-- | The set of registry modules that resolve to the ulib (lib) corefn (ADR 0031): a covered module is
+-- | used iff it is reachable AND its package's resolved version (`spago.lock`) **exactly** equals the
+-- | manifest version. `resolveModuleSet` calls this each fixpoint round to decide the shadowed set.
 shadowSet :: Manifest -> LockView -> Set String -> Set String
 shadowSet manifest lock reached =
   Set.fromFoldable (Array.concatMap covered (Map.toUnfoldable manifest))

@@ -62,9 +62,9 @@ humanSize b
   | b < 1048576 = toStringWith (fixed 1) (toNumber b / 1024.0) <> " KB"
   | otherwise = toStringWith (fixed 1) (toNumber b / 1048576.0) <> " MB"
 
--- | ADR 0031 (migration phase 1): warn — never fail — when a *reached* ulib package's resolved
--- | version (`spago.lock`) differs from the version `ulib-manifest.json` supports. Absent
--- | manifest/lock → no-op. The new manifest-based rail beside `shadowOrRegistry`; changes nothing.
+-- | ADR 0031: warn — never fail — when a *reached* ulib package's resolved version (`spago.lock`)
+-- | differs from the version `ulib-manifest.json` supports (those modules then fall back to the
+-- | registry foreign, losing standalone). Absent manifest/lock → no-op.
 warnUlibVersionDrift :: forall r. Maybe Manifest -> Maybe LockView -> Set.Set String -> Run (LOG + r) Unit
 warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
   Just manifest, Just lock ->
