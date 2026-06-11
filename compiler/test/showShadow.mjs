@@ -18,8 +18,8 @@ const fail = (m) => {
   process.exit(1);
 };
 
-execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
-execFileSync("node", ["purs-wasm/index.dev.js", "ulib", "install"], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "ulib-tooling"], { cwd: repo, stdio: "inherit" });
+execFileSync("node", ["ulib-tooling/index.dev.js", "install"], { cwd: repo, stdio: "inherit" });
 
 const compiled = mkdtempSync(join(tmpdir(), "showshadow-out-"));
 execFileSync("spago", ["build", "-p", "examples-helloworld", "--output", compiled], { cwd: repo, stdio: "inherit" });

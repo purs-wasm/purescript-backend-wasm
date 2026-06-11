@@ -15,8 +15,8 @@ import { join } from "node:path";
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const run = (cmd, args) => execFileSync(cmd, args, { cwd: repo, stdio: "inherit" });
 
-run("spago", ["build", "-p", "purs-wasm"]);
-run("node", ["purs-wasm/index.dev.js", "ulib", "install"]);
+run("spago", ["build", "-p", "ulib-tooling"]);
+run("node", ["ulib-tooling/index.dev.js", "install"]);
 const compiled = mkdtempSync(join(tmpdir(), "shownum-out-"));
 run("spago", ["build", "-p", "e2e-fixtures", "--output", compiled]);
 const bundle = mkdtempSync(join(tmpdir(), "shownum-bundle-"));

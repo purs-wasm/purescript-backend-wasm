@@ -279,6 +279,48 @@
           ]
         }
       },
+      "ulib-tooling": {
+        "path": "ulib-tooling",
+        "core": {
+          "dependencies": [
+            "aff",
+            "ansi",
+            "argonaut-codecs",
+            "argonaut-core",
+            "argparse-basic",
+            "arrays",
+            "compiler",
+            "console",
+            "dodo-printer",
+            "effect",
+            "either",
+            "exceptions",
+            "fmt",
+            "foldable-traversable",
+            "foreign-object",
+            "lists",
+            "maybe",
+            "node-fs",
+            "node-path",
+            "node-process",
+            "ordered-collections",
+            "prelude",
+            "purs-wasm",
+            "run",
+            "strings",
+            "transformers"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "console",
+            "effect",
+            "either",
+            "spec",
+            "spec-node"
+          ]
+        }
+      },
       "wasm-base": {
         "path": "wasm-base",
         "core": {

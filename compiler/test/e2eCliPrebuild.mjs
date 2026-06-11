@@ -27,8 +27,8 @@ const walk = (dir) =>
 const entries = walk(srcDir).map(moduleOf).sort();
 
 // the build tooling the CLI needs: its own compile, the installed ulib lib, and the fixtures' corefn.
-run("spago", ["build", "-p", "purs-wasm"]);
-run("node", ["purs-wasm/index.dev.js", "ulib", "install"]);
+run("spago", ["build", "-p", "ulib-tooling"]);
+run("node", ["ulib-tooling/index.dev.js", "install"]);
 const fixturesOut = "compiler/test/e2e-fixtures-out";
 rmSync(join(repo, fixturesOut), { recursive: true, force: true });
 run("spago", ["build", "-p", "e2e-fixtures", "--output", fixturesOut]);

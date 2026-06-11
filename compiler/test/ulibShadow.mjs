@@ -18,10 +18,10 @@ const fail = (m) => {
   process.exit(1);
 };
 
-execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "ulib-tooling"], { cwd: repo, stdio: "inherit" });
 // The shadows must be installed into the lib first (CI does `ulib install` before the bench/test
 // steps; do it here too so the test is self-contained).
-execFileSync("node", ["purs-wasm/index.dev.js", "ulib", "install"], { cwd: repo, stdio: "inherit" });
+execFileSync("node", ["ulib-tooling/index.dev.js", "install"], { cwd: repo, stdio: "inherit" });
 
 const compiled = mkdtempSync(join(tmpdir(), "ulibshadow-out-"));
 execFileSync("spago", ["build", "-p", "examples-helloworld", "--output", compiled], { cwd: repo, stdio: "inherit" });
