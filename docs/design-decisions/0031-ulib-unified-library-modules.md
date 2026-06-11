@@ -182,6 +182,20 @@ This is exactly the in-code form of §3's file merge ("copy the lib modules into
 architecture, not scope outside it. Naming convention: internal modules live under an `*.Internal.*`
 namespace so they never collide with a registry module name.
 
+#### 6.1 Kept-foreign signatures ship in the lib
+
+A kept foreign's **wasm calling convention** (e.g. `Data.Array.rangeImpl`'s `(param i32)`) is the hand
+author's choice, encoded in the co-located `.wat`; externs carry only the PureScript type, so the
+marshalling for unboxed-`Int` / polymorphic foreigns cannot be reconstructed from them. The build
+therefore reads each kept foreign's signature from its `.wat`. To keep the build self-contained (no
+ulib *source* tree — the `ulib upgrade` user flow), `ulib install` ships the co-located `.wat`
+verbatim into the lib as **`$LIB/<Module>/foreign.wat`**, beside the assembled `foreign.wasm`, and
+`ForeignSigs` parses it from there. The raw `.wat` (not a `wasm-dis` of `foreign.wasm`) is shipped
+because the parser keys on the one-line `(func (export "…") (param …) (result …))` form, which the
+disassembler does not preserve (it emits `(export "…" (func $n))` separately from the typed func).
+This makes `$LIB/<Module>/` carry `{corefn, externs, foreign.wasm, foreign.wat}` for a module with a
+kept foreign; the `.wat` is the sig source, the `.wasm` the merged provider.
+
 ### e2e tests
 
 The harness's separate "registry modules + global wat layer (`ulibImports`)" path is removed. e2e
