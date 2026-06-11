@@ -3,17 +3,17 @@
 -- | present). We assert the recorded `execFile` calls rather than touching disk. (`validate`/
 -- | `check` lean on `Effect` — CBOR decode, throwing — so they fall to the differential harness;
 -- | their pure pieces, `splitPkgVer`/`majorMinor` and the interface diff, are tested elsewhere.)
-module Test.Unit.PursWasm.CLI.Ulib (spec) where
+module Test.Unit.UlibTooling.Commands (spec) where
 
 import Prelude
 
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..), fst)
 import PursWasm.CLI.Build.Paths (wasmAsBin)
-import PursWasm.CLI.Ulib (ulibInstallCmd)
+import UlibTooling.Commands (ulibInstallCmd)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
-import Test.Unit.PursWasm.CLI.Effect.Memory (emptyWorld, runMem, worldOfText)
+import Test.Unit.UlibTooling.Effect.Memory (emptyWorld, runMem, worldOfText)
 
 -- The install-script invocation the command builds from `cliRoot` + the defaults (ADR 0031): the
 -- script beside the CLI, the lib/ulib/wasm-base dirs relative to `<cli>/..`, `purs` on PATH, the

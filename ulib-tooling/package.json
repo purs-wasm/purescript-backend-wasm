@@ -1,0 +1,12 @@
+{
+  "name": "ulib-tooling",
+  "description": "Maintainer CLI for the ulib lib (install / check / compat)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "compile": "spago build -p ulib-tooling",
+    "test": "spago test -p ulib-tooling --monochrome",
+    "format": "purs-tidy format-in-place src test",
+    "check": "purs-tidy check src test"
+  }
+}

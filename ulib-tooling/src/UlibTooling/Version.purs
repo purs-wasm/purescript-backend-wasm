@@ -1,6 +1,6 @@
 -- | Version helpers shared by the ulib shadow resolution (`PursWasm.CLI.Ulib.Shadow`) and the
 -- | ulib commands (`PursWasm.CLI.Ulib`). Pure string surgery (ADR 0028).
-module PursWasm.CLI.Ulib.Version
+module UlibTooling.Version
   ( splitPkgVer
   , majorMinor
   , pkgVersionFromPath

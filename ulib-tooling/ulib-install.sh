@@ -6,7 +6,7 @@
 # version lives only in `<manifest>` (`ulib-manifest.json`); `pkgver` reads it for the install log
 # and as the "package must be ulib-covered" guard.
 #
-# Invoked by `purs-wasm ulib install` as:
+# Invoked by `ulib-tooling install` as:
 #   sh ulib-install.sh <lib> <ulib-src> <wasm-base-src> <purs> <manifest> <wasm-as> [<spago-packages-dir>]
 set -eu
 

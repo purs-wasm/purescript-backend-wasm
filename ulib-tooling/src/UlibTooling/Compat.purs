@@ -1,4 +1,4 @@
--- | `purs-wasm ulib compat` — regenerate (or `--check`) `ulib/compat.json`, the record of which
+-- | `ulib-tooling compat` — regenerate (or `--check`) `ulib/compat.json`, the record of which
 -- | package-set version the ulib shadows are pinned to, the exact version each shadow targets, and
 -- | the `purs` compiler the shipped lib is built with (ADR 0028/0029).
 -- |
@@ -9,7 +9,7 @@
 -- | Paths are cwd-relative (the command is run from the repo root, like the prototype). The pure
 -- | decision logic (`withinConstraint`/`supportedRange`/`pursGuard`/`classifyShadow`) is factored out
 -- | and unit-tested; the orchestration below is thin.
-module PursWasm.CLI.Ulib.Compat
+module UlibTooling.Compat
   ( ulibCompatCmd
   , CheckRow(..)
   , withinConstraint
@@ -43,10 +43,10 @@ import Data.Tuple (Tuple(..))
 import Foreign.Object as FO
 import PursWasm.CLI.Effect (FS, LOG, exists, info, logAndThrow, readText, writeText)
 import PursWasm.CLI.Effect.Registry (REGISTRY, supportedCompilers)
-import PursWasm.CLI.Options.Types (UlibCompatOption)
-import PursWasm.CLI.Ulib.Compat.Types (Compat, CompatCore, encodeCompat, readCompatCore)
+import UlibTooling.Options (UlibCompatOption)
+import UlibTooling.Compat.Types (Compat, CompatCore, encodeCompat, readCompatCore)
 import PursWasm.CLI.Ulib.Manifest (manifestPackages, readManifest)
-import PursWasm.CLI.Ulib.Version (compareVersion, majorMinor)
+import UlibTooling.Version (compareVersion, majorMinor)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
 
@@ -176,9 +176,9 @@ runCheck lock shadows core priorTxt = do
   compatExists <- exists compatPath
   outOfDate <-
     if not compatExists then
-      info ("  ✗ " <> compatPath <> " is missing — run `purs-wasm ulib compat`") $> true
+      info ("  ✗ " <> compatPath <> " is missing — run `ulib-tooling compat`") $> true
     else if maybe true (\t -> readCompatCore t /= core) priorTxt then
-      info ("  ✗ " <> compatPath <> " version data is out of date — run `purs-wasm ulib compat`") $> true
+      info ("  ✗ " <> compatPath <> " version data is out of date — run `ulib-tooling compat`") $> true
     else pure false
   if stale > 0 || outOfDate then
     logAndThrow

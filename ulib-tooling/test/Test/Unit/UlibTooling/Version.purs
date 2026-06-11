@@ -1,14 +1,14 @@
-module Test.Unit.PursWasm.CLI.Ulib.Version (spec) where
+module Test.Unit.UlibTooling.Version (spec) where
 
 import Prelude
 
 import Data.Maybe (Maybe(..))
-import PursWasm.CLI.Ulib.Version (compareVersion, majorMinor, pkgVersionFromPath, splitPkgVer)
+import UlibTooling.Version (compareVersion, majorMinor, pkgVersionFromPath, splitPkgVer)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
 spec :: Spec Unit
-spec = describe "PursWasm.CLI.Ulib.Version" do
+spec = describe "UlibTooling.Version" do
 
   describe "splitPkgVer" do
     it "splits on the LAST dash (package names may contain dashes)" do

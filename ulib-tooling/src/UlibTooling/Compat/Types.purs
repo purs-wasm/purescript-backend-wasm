@@ -4,7 +4,7 @@
 -- | pretty-printer whose spacing/field-order we could not pin down. Inputs (a prior compat.json)
 -- | are read leniently — a missing/garbled file yields empty data, mirroring the prototype's
 -- | `?? null` / `?? {}` fallbacks.
-module PursWasm.CLI.Ulib.Compat.Types
+module UlibTooling.Compat.Types
   ( Compat
   , CompatCore
   , encodeCompat

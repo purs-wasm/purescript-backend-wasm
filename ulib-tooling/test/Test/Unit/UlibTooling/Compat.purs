@@ -2,7 +2,7 @@
 -- | the supported-compiler intersection, the purs-pin guard, the shadow classification, and the
 -- | byte-exact compat.json serializer (which the differential test relies on for parity). The IO
 -- | orchestration is covered by the differential harness.
-module Test.Unit.PursWasm.CLI.Ulib.Compat (spec) where
+module Test.Unit.UlibTooling.Compat (spec) where
 
 import Prelude
 
@@ -14,8 +14,8 @@ import Data.String as Str
 import Data.Tuple (Tuple(..))
 import PursWasm.CLI.Effect.Registry (RegistryF(..))
 import PursWasm.CLI.Effect.Registry as Registry
-import PursWasm.CLI.Ulib.Compat (CheckRow(..), classifyShadow, pursGuard, querySupported, supportedRange, withinConstraint)
-import PursWasm.CLI.Ulib.Compat.Types (encodeCompat, readCompatCore)
+import UlibTooling.Compat (CheckRow(..), classifyShadow, pursGuard, querySupported, supportedRange, withinConstraint)
+import UlibTooling.Compat.Types (encodeCompat, readCompatCore)
 import Run (Run, extract)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual, shouldSatisfy)
@@ -37,7 +37,7 @@ committedCompat =
   \}\n"
 
 spec :: Spec Unit
-spec = describe "PursWasm.CLI.Ulib.Compat" do
+spec = describe "UlibTooling.Compat" do
 
   describe "withinConstraint" do
     it "admits everything when there is no constraint" do
