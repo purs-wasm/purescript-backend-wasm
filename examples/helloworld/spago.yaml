@@ -3,6 +3,7 @@ package:
   dependencies:
     - console
     - effect
+    - integers
     - maybe
     - prelude
     - strings

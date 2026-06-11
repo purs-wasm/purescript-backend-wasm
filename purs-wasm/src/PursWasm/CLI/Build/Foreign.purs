@@ -34,22 +34,13 @@ resolveForeign shadows input bundleDir m = do
     hasWat <- exists watSrc
     if hasWat then assemble bundleDir m watSrc
     else do
-      -- ADR 0031: a ulib module's kept foreign is the prebuilt per-module `foreign.wasm` in the lib.
+      -- ADR 0031: a ulib module's foreign is the prebuilt per-module `foreign.wasm` in the lib. The
+      -- build no longer consults the global `ulib/<M>/foreign.wat` layer (now test-only, for the e2e
+      -- harness). A foreign with no project/lib provider falls back to the JS loader.
       libWasm <- case Map.lookup m shadows of
         Just s -> exists s.foreignWasm <#> if _ then Just s.foreignWasm else Nothing
         Nothing -> pure Nothing
-      case libWasm of
-        Just fw -> pure { name: m, wasm: Just fw, assembled: false }
-        Nothing -> do
-          -- (the global ulib wat layer — now used only as the e2e harness's provider, being retired)
-          ulibWat <- joinPath [ ulibDir, m, "foreign.wat" ]
-          hasUlibWat <- exists ulibWat
-          if hasUlibWat then assemble bundleDir m ulibWat
-          else do
-            ulibWasm <- joinPath [ ulibDir, m, "foreign.wasm" ]
-            hasUlibWasm <- exists ulibWasm
-            if hasUlibWasm then pure { name: m, wasm: Just ulibWasm, assembled: false }
-            else pure { name: m, wasm: Nothing, assembled: false }
+      pure { name: m, wasm: libWasm, assembled: false }
 
 -- | Assemble a foreign `.wat`. A full `(module …)` is assembled as-is; a *fragment* (no
 -- | `(module …)`) is wrapped as `(module <ulib/_header.wat> <fragment>)` first, so it shares the

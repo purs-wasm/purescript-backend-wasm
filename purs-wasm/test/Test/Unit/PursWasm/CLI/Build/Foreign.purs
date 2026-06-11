@@ -14,7 +14,7 @@ import PursWasm.CLI.Build.Paths (wasmAsBin)
 import PursWasm.CLI.Ulib.Shadow (Shadow)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
-import Test.Unit.PursWasm.CLI.Effect.Memory (World, runMem, worldOfText)
+import Test.Unit.PursWasm.CLI.Effect.Memory (runMem, worldOfText)
 
 -- a lib entry whose `foreign.wasm` sits beside the shadow corefn (ADR 0031)
 showShadow :: Shadow
@@ -44,10 +44,10 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0
 
-  it "assembles a ulib foreign.wat *fragment* by wrapping it with the header and calling wasm-as" do
+  it "assembles a project foreign.wat *fragment* by wrapping it with the header and calling wasm-as" do
     let
       world = worldOfText
-        [ Tuple "ulib/Data.Bar/foreign.wat" "(func (export \"f\") (result i32) (i32.const 1))"
+        [ Tuple "output/Data.Bar/foreign.wat" "(func (export \"f\") (result i32) (i32.const 1))"
         , Tuple "ulib/_header.wat" "(; rt header ;)"
         ]
     let Tuple w prov = runMem world (resolveForeign Map.empty "output" "bundle" "Data.Bar")
@@ -57,12 +57,10 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
     map fst w.execs `shouldEqual` [ wasmAsBin ]
     (Array.head w.execs >>= (Array.head <<< snd)) `shouldEqual` Just "bundle/Data.Bar.combined.wat"
 
-  it "falls back to no in-wasm provider (JS loader) when nothing provides the module" do
-    let Tuple w prov = runMem emptyTextWorld (resolveForeign Map.empty "output" "bundle" "Data.Nope")
+  it "falls back to no in-wasm provider (JS loader) when nothing provides the module (ADR 0031: no global wat)" do
+    -- a global ulib/<M>/foreign.wat is NOT consulted by the build anymore — it would have provided this
+    let world = worldOfText [ Tuple "ulib/Data.Nope/foreign.wat" "(func (export \"f\") (result i32) (i32.const 1))" ]
+    let Tuple w prov = runMem world (resolveForeign Map.empty "output" "bundle" "Data.Nope")
     prov.wasm `shouldEqual` Nothing
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0
-
-  where
-  emptyTextWorld :: World
-  emptyTextWorld = worldOfText []

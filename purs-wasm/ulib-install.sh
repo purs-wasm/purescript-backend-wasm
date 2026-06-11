@@ -19,6 +19,19 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/src"
 
+# `<package>` -> `<package>-<version>` (version read from the manifest; hard error if missing).
+pkgver() {
+  v="$(node -e 'const m=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((m[process.argv[2]]||{}).version||"")' "$MANIFEST" "$1")"
+  [ -z "$v" ] && { echo "  ulib: ERROR no manifest version for package '$1'" >&2; exit 1; }
+  printf '%s-%s' "$1" "$v"
+}
+
+# Assemble a co-located foreign `.wat` *fragment* (wrapped with the shared `_header.wat`) to a wasm.
+assemble_wat() { # <src.wat> <dst.wasm>
+  { printf '(module\n'; cat "$ULIB_SRC/_header.wat" "$1"; printf '\n)\n'; } > "$TMP/asm.wat"
+  "$WASM_AS" "$TMP/asm.wat" -o "$2" --all-features
+}
+
 # 1. all resolved package-set sources (one version per package — coherent set).
 for d in "$SPAGO"/*/src; do
   [ -d "$d" ] && cp -R "$d/." "$TMP/src/"
@@ -41,23 +54,30 @@ done
 # 4. compile the whole set to corefn (+ externs, for `ulib check`).
 "$PURS" compile --codegen corefn --output "$TMP/output" "$TMP/src/**/*.purs"
 
-# 5. extract the modules into the (still versioned) lib layout; version comes from the manifest.
+# 5. extract the shadowed modules into the (still versioned) lib layout; a sibling co-located `.wat`
+#    (the module's kept foreign, e.g. Data.Show's showNumberImpl) is assembled into `foreign.wasm`,
+#    so the build provides it from the lib instead of the global ulib wat layer.
 for rel in $shadows; do
-  pkg="${rel%%/*}"                                      # e.g. prelude
-  mod="$(basename "$rel" .purs)"                        # e.g. Data.Functor
-  ver="$(node -e 'const m=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((m[process.argv[2]]||{}).version||"")' "$MANIFEST" "$pkg")"
-  if [ -z "$ver" ]; then echo "  ulib: ERROR no manifest version for package '$pkg'" >&2; exit 1; fi
-  dst="$LIB/$pkg-$ver/$mod"
+  pkg="${rel%%/*}"; mod="$(basename "$rel" .purs)"
+  dst="$LIB/$(pkgver "$pkg")/$mod"
   mkdir -p "$dst"
   cp "$TMP/output/$mod/corefn.json" "$dst/corefn.json"
   cp "$TMP/output/$mod/externs.cbor" "$dst/externs.cbor"
-  # ADR 0031: a sibling co-located `.wat` (the module's kept foreign, e.g. Data.Show's showNumberImpl)
-  # is assembled — wrapped with the shared `_header.wat` (a fragment) — into the lib `foreign.wasm`,
-  # so the build provides it from the lib instead of the global ulib wat layer.
   wat="$ULIB_SRC/$pkg/$mod.wat"
-  if [ -f "$wat" ]; then
-    { printf '(module\n'; cat "$ULIB_SRC/_header.wat" "$wat"; printf '\n)\n'; } > "$TMP/$mod.foreign.wat"
-    "$WASM_AS" "$TMP/$mod.foreign.wat" -o "$dst/foreign.wasm" --all-features
-  fi
-  echo "  ulib: installed $mod ($pkg-$ver)"
+  [ -f "$wat" ] && assemble_wat "$wat" "$dst/foreign.wasm"
+  echo "  ulib: installed $mod ($pkg)"
+done
+
+# 6. ADR 0031: wat-only ulib modules — a co-located `<package>/<Module>.wat` with NO sibling `.purs`
+#    (e.g. Data.Int, Data.Show.Generic): NOT shadowed (the build uses the registry corefn); ulib only
+#    provides their foreign from the lib so programs using them stay standalone. Emit foreign.wasm only.
+# (exclude `foreign.wat` — those are the global ulib/<Module>/ wat layer, not co-located sources)
+wats="$(cd "$ULIB_SRC" && find . -mindepth 2 -name '*.wat' ! -name 'foreign.wat' | sed 's#^\./##')"
+for rel in $wats; do
+  pkg="${rel%%/*}"; mod="$(basename "$rel" .wat)"
+  [ -f "$ULIB_SRC/$pkg/$mod.purs" ] && continue          # a shadow — already handled in step 5
+  dst="$LIB/$(pkgver "$pkg")/$mod"
+  mkdir -p "$dst"
+  assemble_wat "$ULIB_SRC/$rel" "$dst/foreign.wasm"
+  echo "  ulib: installed $mod ($pkg, foreign only)"
 done
