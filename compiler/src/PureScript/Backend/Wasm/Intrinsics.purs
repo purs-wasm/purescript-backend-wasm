@@ -31,6 +31,7 @@ data Intrinsic
   | IntSub
   | IntMul
   | IntEq -- Int -> Int -> Boolean (`i32.eq`, result boxed as an `i31` Boolean)
+  | IntLt -- Int -> Int -> Boolean (signed `i32.lt_s`, result boxed as an `i31` Boolean)
   -- | `Data.Ord`'s `ordIntImpl lt eq gt x y`: the `Ordering` (`lt`/`eq`/`gt`) of
   -- | two `Int`s. Five operands — the three `Ordering` values and the two ints —
   -- | selected by a signed `i32` comparison.
@@ -287,6 +288,9 @@ qualifiedIntrinsic = case _ of
   "Wasm.Int.sub" -> Just (Tuple IntSub 2)
   "Wasm.Int.mul" -> Just (Tuple IntMul 2)
   "Wasm.Int.eq" -> Just (Tuple IntEq 2)
+  "Wasm.Int.lt" -> Just (Tuple IntLt 2)
+  "Wasm.Int.div" -> Just (Tuple IntDiv 2)
+  "Wasm.Int.mod" -> Just (Tuple IntMod 2)
   -- `reverse`/`sliceImpl`/`indexImpl`/`unconsImpl`, `Data.Foldable.fold{l,r}Array`,
   -- `Data.String.CodeUnits.{singleton,toCharArray,fromCharArray}`, `Data.Int.fromStringAsImpl`
   -- now live in `ulib/<Module>/foreign.wat` (ADR 0012), resolved as merged foreigns.

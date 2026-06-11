@@ -33,6 +33,10 @@ genPrim ctx intr args = case intr, args of
     ea <- intArg a
     eb <- intArg b
     B.i32Eq ctx.mod ea eb >>= B.i31New ctx.mod
+  IntLt, [ a, b ] -> do
+    ea <- intArg a
+    eb <- intArg b
+    B.i32LtS ctx.mod ea eb >>= B.i31New ctx.mod
   -- Boolean -> Boolean -> Boolean: compare the i31 bits, box as an i31 Boolean.
   BoolEq, [ a, b ] -> do
     ea <- boolArg a

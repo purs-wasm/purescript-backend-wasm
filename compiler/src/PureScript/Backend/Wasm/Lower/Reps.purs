@@ -60,6 +60,7 @@ primOperandReps = case _ of
   IntDiv -> [ I32, I32 ]
   IntMod -> [ I32, I32 ]
   IntEq -> [ I32, I32 ]
+  IntLt -> [ I32, I32 ]
   IntDegree -> [ I32 ]
   IntToNum -> [ I32 ]
   FromNumberImpl -> [ Boxed, Boxed, F64 ] -- just, nothing, n (the Number is unboxed)

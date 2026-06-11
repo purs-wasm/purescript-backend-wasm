@@ -8,9 +8,22 @@ module Wasm.Int
   , sub
   , mul
   , eq
+  , lt
+  , div
+  , mod
   ) where
 
 foreign import add :: Int -> Int -> Int
 foreign import sub :: Int -> Int -> Int
 foreign import mul :: Int -> Int -> Int
 foreign import eq :: Int -> Int -> Boolean
+
+-- | Signed less-than. On wasm: the `IntLt` intrinsic (`i32.lt_s`).
+foreign import lt :: Int -> Int -> Boolean
+
+-- | Euclidean integer division / remainder (matching `Prelude`'s `Int` `EuclideanRing`:
+-- | non-negative remainder, `0` when the divisor is `0`). On wasm: the `IntDiv` / `IntMod`
+-- | intrinsics. For the non-negative operands the shadows use these on, they are ordinary
+-- | quotient / remainder.
+foreign import div :: Int -> Int -> Int
+foreign import mod :: Int -> Int -> Int
