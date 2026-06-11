@@ -346,3 +346,11 @@ fixture in the migration.
 > *refined* (manifest-driven exact-version policy + `ulib-tooling compat`). The README index reflects
 > these. Remaining follow-ups are outside this migration: the deferred user `ulib upgrade` op, `compat`
 > → `track`/`publish`, and the surfaced record host-marshalling bug.
+
+> **Update (2026-06-12):** the **record host-marshalling gap** flagged in the phase-5/7 notes is
+> **fixed** (it was tangential to the ulib migration — surfaced by the real-pipeline e2e). Root cause:
+> a foreign typed by a *type synonym* (`type Point = { … }`) kept the alias unexpanded in externs, so
+> `Externs.marshalKind` derived `MOpaque` and the loader trapped; inline record types always worked.
+> `foreignSigs` now builds a nullary-synonym table and `marshalKind` expands it. Guarded by
+> `Test.E2E.Cli.ForeignRecord`. Residual: parameterized record synonyms + the ADR-0016 source-foreign
+> path still do not expand (minor).
