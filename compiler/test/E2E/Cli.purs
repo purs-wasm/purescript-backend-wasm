@@ -8,12 +8,24 @@ module Test.E2E.Cli where
 import Prelude
 
 import Effect (Effect)
+import Test.E2E.Cli.AsPattern as AsPattern
+import Test.E2E.Cli.NestedRecordPat as NestedRecordPat
 import Test.E2E.Cli.PreludeArith as PreludeArith
+import Test.E2E.Cli.PreludeBool as PreludeBool
+import Test.E2E.Cli.PreludeEuclid as PreludeEuclid
+import Test.E2E.Cli.PreludeGuards as PreludeGuards
 import Test.E2E.Cli.Records as Records
+import Test.E2E.Cli.TailCall as TailCall
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
 main :: Effect Unit
 main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeArith.spec
+  PreludeBool.spec
+  PreludeEuclid.spec
+  PreludeGuards.spec
   Records.spec
+  AsPattern.spec
+  NestedRecordPat.spec
+  TailCall.spec
