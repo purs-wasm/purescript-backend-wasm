@@ -14,6 +14,7 @@ import Test.E2E.Cli.Eff as Eff
 import Test.E2E.Cli.EffectPrim as EffectPrim
 import Test.E2E.Cli.ExprEval as ExprEval
 import Test.E2E.Cli.ForeignImport as ForeignImport
+import Test.E2E.Cli.ForeignMarshal as ForeignMarshal
 import Test.E2E.Cli.FibAnd as FibAnd
 import Test.E2E.Cli.IntConv as IntConv
 import Test.E2E.Cli.Link as Link
@@ -95,3 +96,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   EffectPrim.spec
   Counter.spec
   ForeignImport.spec
+  ForeignMarshal.spec

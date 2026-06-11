@@ -1,0 +1,31 @@
+-- | CLI-driven e2e (ADR 0031 phase 5) of host-interop **marshalling** (ADR 0014) through the
+-- | fixture's generated loader, in BOTH directions: a `String`/`Array` export (export-side
+-- | marshalling of the arg + result) whose body calls a JS foreign of the same type (import-side
+-- | marshalling). `callJson` passes/returns JSON-able JS values, so the loader's `$Str`/`$Vals`
+-- | conversion is exercised end to end. (Migrated from the legacy `Test.E2E.FFI`'s String/Array
+-- | cases. Record marshalling is deferred — the CLI derives an opaque `Object` kind for a record
+-- | foreign rather than a labeled record, so it does not round-trip through the loader yet.)
+module Test.E2E.Cli.ForeignMarshal (spec) where
+
+import Prelude
+
+import Effect.Class (liftEffect)
+import Test.E2E.Cli.Loader (callJson, loadExports)
+import Test.Spec (Spec, before, describe, it)
+import Test.Spec.Assertions (shouldEqual)
+
+spec :: Spec Unit
+spec = do
+  describe "Foreign String marshalling (e2e/cli): $Str <-> JS string -> purs-wasm build -> run"
+    $ before (loadExports "E2E.ForeignString")
+    $ do
+        it "marshals a String arg + result both ways (greet b = uppercase \"hi b\")" \exp -> do
+          r <- liftEffect (callJson exp "greet" """["bob"]""")
+          r `shouldEqual` "\"HI BOB\""
+
+  describe "Foreign Array marshalling (e2e/cli): $Vals <-> JS array -> purs-wasm build -> run"
+    $ before (loadExports "E2E.ForeignArray")
+    $ do
+        it "marshals an Array Int arg + result both ways (twiceAll doubles each)" \exp -> do
+          r <- liftEffect (callJson exp "twiceAll" """[[1,2,3]]""")
+          r `shouldEqual` "[2,4,6]"
