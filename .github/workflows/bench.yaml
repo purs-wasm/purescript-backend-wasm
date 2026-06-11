@@ -27,7 +27,6 @@ on:
       - "binaryen/**"
       - "runtime/**"
       - "ulib/**"
-      - "build-ulib.mjs"
       - ".github/workflows/bench.yaml"
   workflow_dispatch:
 
@@ -61,17 +60,16 @@ jobs:
 
       # The bench scripts shell out to `purs-wasm/index.dev.js`, which imports the compiled
       # CLI at `output/PursWasm.CLI.Main` (the `purs-wasm` package — `spago build -p purs-wasm`
-      # also builds its `compiler` dependency) and merges `runtime/runtime.wasm` + the
-      # `ulib/*.wasm` foreigns, so build those first. Then compile the ulib *shadow* lib
-      # (ADR 0028) so the bench builds pick it up — without it, idiomatic `Data.Array.map` /
-      # `foldl` fall back to the foreign HOFs (correct, but the specialization win is
-      # lost). `ulib install` needs `.spago` populated with the shadows' dependency
-      # closure, so prime it with a `bench` build first.
-      - name: Build the compiler CLI, runtime, ulib, and shadow lib
+      # also builds its `compiler` dependency) and merges `runtime/runtime.wasm` + the ulib
+      # lib's `foreign.wasm`s, so build the runtime first. Then compile the ulib lib (ADR
+      # 0028/0031) so the bench builds pick it up — without it, idiomatic `Data.Array.map` /
+      # `foldl` fall back to the foreign HOFs (correct, but the specialization win is lost).
+      # `ulib install` needs `.spago` populated with the shadows' dependency closure, so prime
+      # it with a `bench` build first.
+      - name: Build the compiler CLI, runtime, and ulib lib
         run: |
           spago build -p purs-wasm
           pnpm -F ./compiler run build:runtime
-          pnpm -F ./compiler run build:ulib
           spago build -p bench --output bench/output
           node ./purs-wasm/index.dev.js ulib install
           # Assert the shadows still match the resolved package set (major.minor); a

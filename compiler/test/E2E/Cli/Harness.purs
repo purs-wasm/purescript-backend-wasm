@@ -1,6 +1,6 @@
 -- | Harness for the CLI-driven e2e suite (ADR 0031 phase 5): instantiate a fixture's **prebuilt
 -- | standalone wasm** (produced by `e2eCliPrebuild.mjs` running the real `purs-wasm build`) and call
--- | its `i32` exports. Unlike the legacy `Test.E2E.Wasm`, there is no in-process lowering and no
+-- | its `i32` exports. Unlike the retired legacy harness, there is no in-process lowering and no
 -- | `ulibImports` — the artifact is exactly what a user gets (runtime + ulib foreigns already merged),
 -- | instantiated with no host imports. This is the "one path" the migration converges on.
 module Test.E2E.Cli.Harness

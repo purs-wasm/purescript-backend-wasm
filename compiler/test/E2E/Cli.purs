@@ -1,8 +1,9 @@
--- | Aggregating entry point for the CLI-driven e2e suite (ADR 0031 phase 5): each suite instantiates
--- | a fixture's prebuilt standalone wasm (`e2eCliPrebuild.mjs` must run first) and asserts its
--- | behaviour through the real `purs-wasm build` pipeline. Grows as suites migrate off the legacy
--- | corefn-fixture runner (`Test.E2E.Legacy`); once it covers everything, the legacy path + the global
--- | `ulib/<M>/foreign.wat` layer are retired.
+-- | The compiler's end-to-end suite (ADR 0031 phase 5): each suite instantiates a fixture's prebuilt
+-- | standalone wasm (`e2eCliPrebuild.mjs` must run first) and asserts its behaviour through the real
+-- | `purs-wasm build` pipeline — the single path users actually run. This replaced the legacy
+-- | in-process corefn-fixture runner + the global `ulib/<M>/foreign.wat` layer, both now retired (the
+-- | one host-interop case it does not cover is record marshalling — a deferred product bug, see the
+-- | `record-host-marshal-gap` note). Record/closure: closure is covered (`ForeignMarshal`).
 module Test.E2E.Cli where
 
 import Prelude
