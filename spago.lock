@@ -96,6 +96,17 @@
           ]
         }
       },
+      "e2e-fixtures": {
+        "path": "e2e-fixtures",
+        "core": {
+          "dependencies": [
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-effect-prim": {
         "path": "examples/effect-prim",
         "core": {

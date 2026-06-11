@@ -1,7 +1,9 @@
--- | Aggregating entry point for the compiler package's end-to-end suites. Each
--- | slice exposes a `spec`; this module wires them into one runner (mirroring
--- | `Test.Unit.Compiler` for the unit suites).
-module Test.E2E.Compiler where
+-- | LEGACY e2e runner (ADR 0031 phase 5): links hand-authored `corefn.json` fixtures **in process**
+-- | via the compiler library, wiring ulib foreigns from the global `ulib/<M>/foreign.wasm` layer
+-- | (`Test.E2E.Wasm`'s `ulibImports`). Kept running for coverage while suites migrate to the
+-- | CLI-driven `Test.E2E.Cli` (real `purs-wasm build` pipeline); retired — together with the global
+-- | wat layer and `build-ulib.mjs` — once `Test.E2E.Cli` covers everything.
+module Test.E2E.Legacy where
 
 import Prelude
 
