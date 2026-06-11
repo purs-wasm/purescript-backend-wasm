@@ -3,8 +3,7 @@
 -- | marshalling of the arg + result) whose body calls a JS foreign of the same type (import-side
 -- | marshalling). `callJson` passes/returns JSON-able JS values, so the loader's `$Str`/`$Vals`
 -- | conversion is exercised end to end. (Migrated from the legacy `Test.E2E.FFI`'s String/Array
--- | cases. Record marshalling is deferred — the CLI derives an opaque `Object` kind for a record
--- | foreign rather than a labeled record, so it does not round-trip through the loader yet.)
+-- | cases; the closure case is below. Record marshalling lives in `Test.E2E.Cli.ForeignRecord`.)
 module Test.E2E.Cli.ForeignMarshal (spec) where
 
 import Prelude

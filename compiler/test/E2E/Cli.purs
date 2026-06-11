@@ -1,9 +1,9 @@
 -- | The compiler's end-to-end suite (ADR 0031 phase 5): each suite instantiates a fixture's prebuilt
 -- | standalone wasm (`e2eCliPrebuild.mjs` must run first) and asserts its behaviour through the real
 -- | `purs-wasm build` pipeline — the single path users actually run. This replaced the legacy
--- | in-process corefn-fixture runner + the global `ulib/<M>/foreign.wat` layer, both now retired (the
--- | one host-interop case it does not cover is record marshalling — a deferred product bug, see the
--- | `record-host-marshal-gap` note). Record/closure: closure is covered (`ForeignMarshal`).
+-- | in-process corefn-fixture runner + the global `ulib/<M>/foreign.wat` layer, both now retired.
+-- | Host-interop marshalling is covered end to end: scalars/String/Array/Record/closure/Boolean/
+-- | Number/nullary/Effect (`ForeignImport`/`Marshal`/`Record`/`Export`/`Effect`).
 module Test.E2E.Cli where
 
 import Prelude
@@ -18,6 +18,7 @@ import Test.E2E.Cli.ForeignEffect as ForeignEffect
 import Test.E2E.Cli.ForeignExport as ForeignExport
 import Test.E2E.Cli.ForeignImport as ForeignImport
 import Test.E2E.Cli.ForeignMarshal as ForeignMarshal
+import Test.E2E.Cli.ForeignRecord as ForeignRecord
 import Test.E2E.Cli.FibAnd as FibAnd
 import Test.E2E.Cli.IntConv as IntConv
 import Test.E2E.Cli.Link as Link
@@ -100,5 +101,6 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Counter.spec
   ForeignImport.spec
   ForeignMarshal.spec
+  ForeignRecord.spec
   ForeignExport.spec
   ForeignEffect.spec
