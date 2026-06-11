@@ -37,6 +37,14 @@ import Test.E2E.Cli.PreludeShow as PreludeShow
 import Test.E2E.Cli.RecordInstances as RecordInstances
 import Test.E2E.Cli.RecordUnsafe as RecordUnsafe
 import Test.E2E.Cli.Records as Records
+import Test.E2E.Cli.Scalars as Scalars
+import Test.E2E.Cli.DataTypes as DataTypes
+import Test.E2E.Cli.Closures as Closures
+import Test.E2E.Cli.Recursion as Recursion
+import Test.E2E.Cli.TypeClasses as TypeClasses
+import Test.E2E.Cli.Literals as Literals
+import Test.E2E.Cli.Strings as Strings
+import Test.E2E.Cli.Arrays as Arrays
 import Test.E2E.Cli.StackSafe as StackSafe
 import Test.E2E.Cli.TailCall as TailCall
 import Test.Spec.Reporter (consoleReporter)
@@ -44,6 +52,14 @@ import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
 main :: Effect Unit
 main = runSpecAndExitProcess [ consoleReporter ] do
+  Scalars.spec
+  DataTypes.spec
+  Closures.spec
+  Recursion.spec
+  TypeClasses.spec
+  Literals.spec
+  Strings.spec
+  Arrays.spec
   PreludeArith.spec
   PreludeNumber.spec
   PreludeField.spec

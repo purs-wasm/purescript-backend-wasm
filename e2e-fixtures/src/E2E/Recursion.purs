@@ -1,0 +1,73 @@
+-- | Source for `Slice2b.corefn.json` — the Slice 2 completion fixture for
+-- | partial application and top-level mutual recursion.
+-- |
+-- |   * `add3 = addN 3` is a partial application of a known 2-argument function
+-- |     (a PAP / first-class function value); `add3of n = add3 n` then over-
+-- |     applies that nullary value, exercising both the under- and over-applied
+-- |     paths.
+-- |   * `isEvenN` / `isOddN` are mutually recursive and purs emits them as a
+-- |     top-level `Rec` binding group; `even4` drives them on a fixed `Nat`.
+-- |
+-- | Recursion terminates structurally on `Nat`, so no `Int` comparison or
+-- | `Boolean` is needed. Host-callable entry points are `Int`-typed:
+-- | `add3of n == n + 3`, `even4 == 1`.
+-- |
+-- | The `.sample` extension keeps it out of the `test/**/*.purs` build glob. See
+-- | README.md for how to regenerate the `.corefn.json`.
+module E2E.Recursion where
+
+foreign import intAdd :: Int -> Int -> Int
+
+addN :: Int -> Int -> Int
+addN x y = intAdd x y
+
+add3 :: Int -> Int
+add3 = addN 3
+
+add3of :: Int -> Int
+add3of n = add3 n
+
+data Nat = Z | S Nat
+
+isEvenN :: Nat -> Int
+isEvenN n = case n of
+  Z -> 1
+  S m -> isOddN m
+
+isOddN :: Nat -> Int
+isOddN n = case n of
+  Z -> 0
+  S m -> isEvenN m
+
+even4 :: Int
+even4 = isEvenN (S (S (S (S Z))))
+
+-- local self-recursion: `go` is a single-binding `let rec` (counts the S's)
+countN :: Nat -> Int
+countN n =
+  let
+    go acc m = case m of
+      Z -> acc
+      S k -> go (intAdd acc 1) k
+  in
+    go 0 n
+
+count3 :: Int
+count3 = countN (S (S (S Z)))
+
+-- local *mutual* recursion: `ev`/`od` reference each other in one `let rec`
+-- group, so each closure captures the other (resolved by knot-tying).
+parity :: Nat -> Int
+parity n =
+  let
+    ev m = case m of
+      Z -> 1
+      S k -> od k
+    od m = case m of
+      Z -> 0
+      S k -> ev k
+  in
+    ev n
+
+parityOf5 :: Int
+parityOf5 = parity (S (S (S (S (S Z)))))
