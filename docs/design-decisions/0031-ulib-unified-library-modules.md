@@ -321,10 +321,12 @@ fixture in the migration.
 > 144 tests) is the only e2e. The **global `ulib/<M>/foreign.wat` layer and `build-ulib.mjs` are
 > removed** — nothing reads them anymore (the product moved to the lib in phase 4; `showNumber.mjs`
 > now drives the `E2E.ShowNumber` fixture through the loader). `test:e2e` = the CLI suite; `build:ulib`
-> is gone from every script (`test:bin` / `test:shownumber` / bench). One gap surfaced and is deferred:
-> **record host-marshalling** does not round-trip through the real loader (the CLI derives an opaque
+> is gone from every script (`test:bin` / `test:shownumber` / bench). One gap surfaced and is deferred
+> (~~**record host-marshalling** does not round-trip through the real loader (the CLI derives an opaque
 > `Object` kind for a record foreign, and `internStr` is exported only for record *export* sigs, not
-> *import* sigs) — the legacy harness had masked it. String / Array / closure / Boolean / Number /
+> *import* sigs) — the legacy harness had masked it.~~ **Fixed 2026-06-12 — see the Update at the end of
+> this record;** the root cause was narrower: only *type-synonym*-typed record foreigns fell to opaque).
+> String / Array / closure / Boolean / Number /
 > nullary / Effect host-FFI all work end to end. Co-located `ulib/{package}/{Module}.wat` sources, the
 > lib's `$LIB/<Module>/foreign.wat` (sig source, §6.1), and `_header.wat` are untouched.
 

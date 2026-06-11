@@ -3,6 +3,11 @@
 - Status: Accepted
 - Date: 2026-06-01
 
+> **Update (2026-06-12):** the build driver named `bin` throughout this record is **retired** —
+> reimplemented as the `purs-wasm` package (user `build`) plus a separate maintainer `ulib-tooling`
+> package (ADR 0031). The multi-module-input → single-wasm linking model decided here is unchanged;
+> read `bin` as `purs-wasm`.
+
 ## Context
 
 Until now the backend lowers a **single** CoreFn module to one wasm module — the

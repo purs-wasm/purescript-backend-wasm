@@ -56,7 +56,7 @@ cannot know `T` without the type) — fundamental, and always available in the b
 
 ### 2. Loader guards the eager CAF-call by real arity (the `C > T` fix)
 
-The generated loader (`bin/src/Main.purs` `emitLoader`) eagerly evaluates a nullary export
+The generated loader (~~`bin/src/Main.purs`~~ now `PursWasm.CLI.Build.Loader`, `emitLoader`) eagerly evaluates a nullary export
 to present a CAF as a *value* (not a thunk). It now does so **only when the real wasm arity is
 also 0** (`sig.params.length === 0 && e.length === 0`). When the source type is nullary (`T=0`)
 but the binding compiled to a function (`C > 0` — a function newtype / collapsed monad), it

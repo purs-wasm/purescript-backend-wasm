@@ -3,6 +3,10 @@
 - Status: Proposed
 - Date: 2026-06-07
 
+> **Update (2026-06-12):** the CLI that hard-codes the current standalone packaging is now
+> `purs-wasm` (the `bin` prototype was retired/reimplemented; ADR 0031). The `--platform` design
+> below is unchanged and still unimplemented — read every `bin` reference as `purs-wasm`.
+
 ## Context
 
 [ADR 0011](0011-packaging-platform-and-host-imports.md) decided that packaging is

@@ -3,6 +3,7 @@
 - Status: ~~Proposed~~ **Accepted** _(2026-06-10: promoted — implemented: the `wasm-base` package with `Wasm.*` primitives resolving to intrinsics, plus the `bin` capability check.)_
 - Date: 2026-06-08
 - Supersedes: [0012](0012-ulib-curated-package-ffi.md) (its hand-written-`.wat` mechanism and provider ladder; `ulib`'s curated-core intent carries forward in PureScript form)
+- Refined by: [0031](0031-ulib-unified-library-modules.md) (the global per-module `ulib/<Module>/foreign.wat` provider layer + `build-ulib.mjs` are retired; the `bin` CLI is repackaged as `purs-wasm` + `ulib-tooling`)
 
 > **Update (2026-06-08):** [ADR 0027](0027-specialize-after-inlining.md) (post-inline
 > specialization) has landed on `main`. It makes the `where`-worker HOF idiom specialize, so
@@ -11,6 +12,16 @@
 > written as natural PureScript (`where` workers and all) and still have their closures fused.
 > Wherever this record says WasmBase HOFs must avoid the `where`-worker idiom, read it as
 > "ADR 0027 handles it".
+
+> **Update (2026-06-12):** refined by [ADR 0031](0031-ulib-unified-library-modules.md). The
+> WasmBase intent here (ulib = PureScript over `Wasm.*` primitives) carries forward, but two
+> mechanisms this record describes as live are **retired**: (1) the global per-module
+> `ulib/<Module>/foreign.wat` provider layer and `build-ulib.mjs` — hand-written wat is now a
+> *co-located* sibling source assembled at install into the per-module lib
+> `$LIB/<Module>/{foreign.wasm,foreign.wat}`, and `_header.wat` ships inside the lib; (2) the
+> `bin` CLI and its `Wasm.*` capability check — reimplemented as the `purs-wasm` (user `build`)
+> and `ulib-tooling` (maintainer) packages. Read every `ulib/<M>/foreign.wat`, `ulib/*/foreign.wat`,
+> and `bin` reference below in that per-module-lib / `purs-wasm` form.
 
 > **Distribution decided (2026-06-08):** WasmBase ships as a **normal published spago package
 > `wasm-base`** (module namespace `Wasm.*`), *not* compiler-injected like `Prim`. A wasm-backend
