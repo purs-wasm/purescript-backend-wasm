@@ -9,6 +9,8 @@ import Prelude
 
 import Effect (Effect)
 import Test.E2E.Cli.AsPattern as AsPattern
+import Test.E2E.Cli.Eff as Eff
+import Test.E2E.Cli.EffectPrim as EffectPrim
 import Test.E2E.Cli.ExprEval as ExprEval
 import Test.E2E.Cli.FibAnd as FibAnd
 import Test.E2E.Cli.IntConv as IntConv
@@ -35,6 +37,7 @@ import Test.E2E.Cli.PreludeShow as PreludeShow
 import Test.E2E.Cli.RecordInstances as RecordInstances
 import Test.E2E.Cli.RecordUnsafe as RecordUnsafe
 import Test.E2E.Cli.Records as Records
+import Test.E2E.Cli.StackSafe as StackSafe
 import Test.E2E.Cli.TailCall as TailCall
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
@@ -69,3 +72,6 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   FibAnd.spec
   Link.spec
   TailCall.spec
+  StackSafe.spec
+  Eff.spec
+  EffectPrim.spec

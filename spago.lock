@@ -100,10 +100,12 @@
         "path": "e2e-fixtures",
         "core": {
           "dependencies": [
+            "effect",
             "integers",
             "maybe",
             "prelude",
             "record",
+            "refs",
             "unsafe-coerce"
           ]
         },
