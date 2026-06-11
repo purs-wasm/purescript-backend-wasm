@@ -1,0 +1,35 @@
+module E2E.Counter where
+
+import Prelude
+
+import Effect (Effect)
+import Effect.Unsafe (unsafePerformEffect)
+
+-- Test-only effectful primitives, backed by a mutable wasm global (resolved to the
+-- `IncrCtr`/`ReadCtr` intrinsics — the JS stubs are only so `purs` accepts the foreign
+-- imports when regenerating the fixture). They make `Effect`'s effect order and count
+-- observable, so the middle-end's purity analysis (which must not drop/reorder/duplicate
+-- an effectful `Perform`) can be verified end to end (ADR 0015).
+foreign import incrCtr :: Effect Unit
+foreign import readCtr :: Effect Int
+
+-- COUNT preservation: three runs of `incrCtr` whose results are unused. A purity-blind
+-- optimizer would drop them as dead `let`s and `readCtr` would see 0; with the guards,
+-- each call performs exactly three increments (so repeated calls read 3, 6, 9, …).
+countThree :: Int -> Int
+countThree _ = unsafePerformEffect do
+  incrCtr
+  incrCtr
+  incrCtr
+  readCtr
+
+-- ORDER preservation: interleaved reads encode the sequence in the result. On a fresh
+-- counter: incr→1, x=1, incr→2, y=2  ⇒  x*10 + y = 12. A reordered/duplicated effect
+-- would yield a different number.
+order :: Int -> Int
+order _ = unsafePerformEffect do
+  incrCtr
+  x <- readCtr
+  incrCtr
+  y <- readCtr
+  pure (x * 10 + y)
