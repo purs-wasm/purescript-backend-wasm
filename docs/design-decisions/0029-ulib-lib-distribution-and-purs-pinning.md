@@ -1,7 +1,13 @@
 # 0029. ulib lib distribution and purs-compiler pinning
 
-- Status: Accepted _(2026-06-10: the decision is adopted; the purs pin + `builtWith` link guard + `ulib-compat.mjs` two-sided compiler check are implemented — the nix packaging of the precompiled lib is the tracked next step.)_
+- Status: Accepted, **refined by [0031](0031-ulib-unified-library-modules.md)** _(2026-06-10: the decision is adopted; the purs pin + `builtWith` link guard + `ulib-compat.mjs` two-sided compiler check are implemented — the nix packaging of the precompiled lib is the tracked next step.)_
 - Date: 2026-06-09
+
+> **Refined by [0031](0031-ulib-unified-library-modules.md) (2026-06-12).** The precompiled-lib
+> distribution + purs-pin carry forward. 0031 refines the version policy: the package-set-wide check
+> becomes a **per-reached-package exact-version match against `ulib-manifest.json`** (the single source
+> of truth, copied into the lib so it is self-describing), and `ulib-compat.mjs` → `purs-wasm ulib
+> compat` → the maintainer **`ulib-tooling compat`** (regenerate / `--check` / `--dry`).
 
 > **Update (2026-06-10):** The `ulib-compat.mjs` prototype has been reimplemented as the
 > `purs-wasm ulib compat` subcommand — a PureScript port producing the same `compat.json`

@@ -338,3 +338,11 @@ fixture in the migration.
 > run `spago build -p ulib-tooling` (which also builds `purs-wasm`) + `node ulib-tooling/index.dev.js
 > install`; CI gained a `ulib-tooling` matrix leg. Deferred: the user `ulib upgrade` op, and `compat`
 > → `track`/`publish` (ADR §5) — future work, fine to do at the first post-release ulib version bump.
+
+> **Update (2026-06-12):** **migration complete (phases 1–7).** Phase 6 split the CLIs (above);
+> phase 7 promoted the cross-references — [0028](0028-ulib-library-layer-shadowing.md) is marked
+> *superseded* by this record (its in-code `shadowOrRegistry` is gone), [0012](0012-ulib-curated-package-ffi.md)
+> *further superseded* (the global wat layer is gone), and [0029](0029-ulib-lib-distribution-and-purs-pinning.md)
+> *refined* (manifest-driven exact-version policy + `ulib-tooling compat`). The README index reflects
+> these. Remaining follow-ups are outside this migration: the deferred user `ulib upgrade` op, `compat`
+> → `track`/`publish`, and the surfaced record host-marshalling bug.
