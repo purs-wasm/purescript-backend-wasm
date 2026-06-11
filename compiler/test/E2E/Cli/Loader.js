@@ -20,6 +20,9 @@ export const callI32x1 = (exp) => (name) => (a) => () => exp[name](a);
 export const callJson = (exp) => (name) => (argsJson) => () =>
   JSON.stringify(exp[name](...JSON.parse(argsJson)));
 
+// a nullary value export is exposed as the value itself (not a function), already marshalled.
+export const getJson = (exp) => (name) => () => JSON.stringify(exp[name]);
+
 export const runUnit = (exp) => (name) => () => {
   exp[name](); // an exported `Effect Unit` is a deferred thunk
 };

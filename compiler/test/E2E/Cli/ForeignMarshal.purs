@@ -10,7 +10,7 @@ module Test.E2E.Cli.ForeignMarshal (spec) where
 import Prelude
 
 import Effect.Class (liftEffect)
-import Test.E2E.Cli.Loader (callJson, loadExports)
+import Test.E2E.Cli.Loader (callI32x1, callJson, loadExports)
 import Test.Spec (Spec, before, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -29,3 +29,10 @@ spec = do
         it "marshals an Array Int arg + result both ways (twiceAll doubles each)" \exp -> do
           r <- liftEffect (callJson exp "twiceAll" """[[1,2,3]]""")
           r `shouldEqual` "[2,4,6]"
+
+  describe "Foreign closure marshalling (e2e/cli): $Clo -> JS function (wasm->JS) -> purs-wasm build -> run"
+    $ before (loadExports "E2E.ForeignClosure")
+    $ do
+        it "passes a wasm closure to a JS foreign that applies it twice (n+1+1)" \exp -> do
+          r <- liftEffect (callI32x1 exp "useClosure" 5)
+          r `shouldEqual` 7

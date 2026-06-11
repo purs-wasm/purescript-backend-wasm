@@ -10,6 +10,7 @@ module Test.E2E.Cli.Loader
   , callI32x0
   , callI32x1
   , callJson
+  , getJson
   , runUnit
   ) where
 
@@ -36,6 +37,10 @@ foreign import callI32x1 :: Exports -> String -> Int -> Effect Int
 -- | applied (the loader marshals String/Array/Record at the boundary), and the JS result is
 -- | JSON-stringified back. Covers Int/String/Array/Record uniformly (not closures).
 foreign import callJson :: Exports -> String -> String -> Effect String
+
+-- | Read a nullary value export, JSON-stringified. The loader evaluates a nullary export once and
+-- | exposes it as the value itself (`exports.x` is `42` / `"hi"`, not a function, already marshalled).
+foreign import getJson :: Exports -> String -> Effect String
 
 -- | Run an exported `Effect Unit` (the loader exposes it as a deferred thunk).
 foreign import runUnit :: Exports -> String -> Effect Unit
