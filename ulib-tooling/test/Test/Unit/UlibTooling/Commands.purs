@@ -1,12 +1,13 @@
 -- | Unit tests for `ulibInstallCmd` against the in-memory interpreter: the command's job is to
 -- | invoke `ulib-install.sh` with the right resolved paths (or skip when the lib is already
--- | present). We assert the recorded `execFile` calls rather than touching disk. (`validate`/
--- | `check` lean on `Effect` — CBOR decode, throwing — so they fall to the differential harness;
--- | their pure pieces, `splitPkgVer`/`majorMinor` and the interface diff, are tested elsewhere.)
+-- | present), and to resolve the lib path by the precedence `-L` flag > `$PURS_WASM_LIB` > default.
+-- | We assert the recorded `execFile` calls rather than touching disk. (`check` leans on `Effect` —
+-- | CBOR decode, throwing — so its pure pieces and the interface diff are tested elsewhere.)
 module Test.Unit.UlibTooling.Commands (spec) where
 
 import Prelude
 
+import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..), fst)
 import PursWasm.CLI.Build.Paths (wasmAsBin)
@@ -32,13 +33,31 @@ defaultInvoke =
     , ".spago/p"
     ]
 
+-- | The same invocation but with the lib path replaced — for the `-L` / `$PURS_WASM_LIB` cases.
+invokeWithLib :: String -> Tuple String (Array String)
+invokeWithLib lib =
+  Tuple "sh"
+    [ "cli/ulib-install.sh", lib, "cli/../ulib", "cli/../wasm-base/src", "purs", "cli/../ulib/ulib-manifest.json", wasmAsBin, ".spago/p" ]
+
 spec :: Spec Unit
-spec = describe "PursWasm.CLI.Ulib.ulibInstallCmd" do
+spec = describe "UlibTooling.Commands.ulibInstallCmd" do
 
   it "invokes ulib-install.sh with the resolved default paths when no lib is present" do
     let opt = { libPath: Nothing, purs: Nothing, force: false }
     let world = fst (runMem emptyWorld (ulibInstallCmd "cli" opt))
     world.execs `shouldEqual` [ defaultInvoke ]
+
+  it "resolves the lib path from $PURS_WASM_LIB when set and no -L is given" do
+    let opt = { libPath: Nothing, purs: Nothing, force: false }
+    let world0 = emptyWorld { env = Map.singleton "PURS_WASM_LIB" "/opt/ulib" }
+    let world = fst (runMem world0 (ulibInstallCmd "cli" opt))
+    world.execs `shouldEqual` [ invokeWithLib "/opt/ulib" ]
+
+  it "lets an explicit -L override $PURS_WASM_LIB" do
+    let opt = { libPath: Just "out/mylib", purs: Nothing, force: false }
+    let world0 = emptyWorld { env = Map.singleton "PURS_WASM_LIB" "/opt/ulib" }
+    let world = fst (runMem world0 (ulibInstallCmd "cli" opt))
+    world.execs `shouldEqual` [ invokeWithLib "out/mylib" ]
 
   it "skips (no exec) when the lib is already present and --force is not given" do
     let opt = { libPath: Nothing, purs: Nothing, force: false }

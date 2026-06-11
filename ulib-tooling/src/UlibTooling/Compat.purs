@@ -150,7 +150,7 @@ ulibCompatCmd opt = do
       let core = deriveCore lock shadows
       priorTxt <- readText compatPath
       if opt.check then runCheck lock shadows core priorTxt
-      else runRegen lock shadows core priorTxt
+      else runRegen opt.dry lock shadows core priorTxt
 
 runCheck
   :: forall r
@@ -189,25 +189,29 @@ runCheck lock shadows core priorTxt = do
   else
     info ("ulib-compat: check OK" <> (if drift > 0 then " (" <> show drift <> " patch drift — regenerate compat.json)" else "") <> ".")
 
+-- | `dry`: print only the regenerated JSON to stdout (pipeable) instead of writing the file. The
+-- | progress/status lines are then suppressed so stdout carries just the JSON.
 runRegen
   :: forall r
-   . LockView
+   . Boolean
+  -> LockView
   -> Array { pkg :: String, ver :: String }
   -> CompatCore
   -> Maybe String
   -> Run (FS + REGISTRY + LOG + EFFECT + r) Unit
-runRegen lock shadows core priorTxt = do
+runRegen dry lock shadows core priorTxt = do
+  let note msg = unless dry (info msg)
   range <- querySupported lock.setCompiler (lockVersion lock) shadows
   purs <- case range of
     Left errMsg -> case readPriorPurs priorTxt of
       Just p -> do
-        info ("ulib-compat: keeping prior purs pin " <> p.pursPin <> " (compiler-compat query skipped: " <> errMsg <> ").")
+        note ("ulib-compat: keeping prior purs pin " <> p.pursPin <> " (compiler-compat query skipped: " <> errMsg <> ").")
         pure p
       Nothing -> logAndThrow ("ulib-compat: " <> errMsg)
     Right comps -> case pursGuard pursPinConst comps of
       Left msg -> logAndThrow msg
       Right { min, max } -> do
-        info ("ulib-compat: purs pin " <> pursPinConst <> " ∈ supported [" <> min <> " .. " <> max <> "] — OK (not too old, not too new).")
+        note ("ulib-compat: purs pin " <> pursPinConst <> " ∈ supported [" <> min <> " .. " <> max <> "] — OK (not too old, not too new).")
         pure { pursPin: pursPinConst, pursMin: min, pursMax: max }
   let
     out :: Compat
@@ -218,10 +222,14 @@ runRegen lock shadows core priorTxt = do
       , pursMax: purs.pursMax
       , packages: core.packages
       }
-  writeText compatPath (encodeCompat out)
-  info ("ulib-compat: wrote " <> compatPath <> " (package-set " <> fromMaybe "null" core.packageSet <> "):")
-  for_ shadows \s ->
-    info ("  " <> s.pkg <> ": shadow " <> s.ver <> ", set " <> fromMaybe "?" (lockVersion lock s.pkg))
+  -- both paths emit the JSON with a trailing newline (`info` via `Console.log`, the file written
+  -- explicitly), so `compat --dry > compat.json` is byte-identical to a plain `compat`.
+  if dry then info (encodeCompat out)
+  else do
+    writeText compatPath (encodeCompat out <> "\n")
+    info ("ulib-compat: wrote " <> compatPath <> " (package-set " <> fromMaybe "null" core.packageSet <> "):")
+    for_ shadows \s ->
+      info ("  " <> s.pkg <> ": shadow " <> s.ver <> ", set " <> fromMaybe "?" (lockVersion lock s.pkg))
 
 -- | Reduce each shadowed package's supported-compiler set (read via the abstract `REGISTRY` effect)
 -- | to the supported range. A query failure short-circuits to `Left` — the caller then falls back

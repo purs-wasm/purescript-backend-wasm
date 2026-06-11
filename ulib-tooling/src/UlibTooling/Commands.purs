@@ -17,9 +17,10 @@ import Data.Traversable (for)
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Ulib.Interface (compatible, diffInterface, interfaceOf)
 import PursWasm.CLI.Build.Paths (wasmAsBin)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
+import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
+import PursWasm.CLI.Lib (resolveLibPath)
 import PursWasm.CLI.Ulib.Manifest (isLibModuleDir, manifestModules, readManifest, ulibManifestFile)
 import UlibTooling.Options (UlibCheckOption, UlibInstallOption)
 import Run (Run, EFFECT)
@@ -30,9 +31,9 @@ import Type.Row (type (+))
 -- | per-module kept-foreign `foreign.wasm`, ADR 0031 §2.2) via `ulib-install.sh`. Skips if the lib
 -- | already exists, unless `--force`. Versions come from `ulib-manifest.json` (no longer the source
 -- | path); compiled against the resolved package-set sources (`.spago/p`) with WasmBase overlaid.
-ulibInstallCmd :: forall r. FilePath -> UlibInstallOption -> Run (FS + PROC + LOG + r) Unit
+ulibInstallCmd :: forall r. FilePath -> UlibInstallOption -> Run (ENV + FS + PROC + LOG + r) Unit
 ulibInstallCmd cliRoot opt = do
-  libPath <- maybe (joinPath [ cliRoot, "..", "lib" ]) pure opt.libPath
+  libPath <- resolveLibPath cliRoot opt.libPath
   let purs = fromMaybe "purs" opt.purs
   ulibSrc <- joinPath [ cliRoot, "..", "ulib" ]
   manifest <- joinPath [ cliRoot, "..", "ulib", "ulib-manifest.json" ]
@@ -56,9 +57,9 @@ ulibInstallCmd cliRoot opt = do
 -- | that drops a name the registry module exports is not a drop-in — that fails the check; a
 -- | shadow that only *adds* names is reported but allowed. A module you have not compiled yet
 -- | is skipped with a note (build your project first to check it).
-ulibCheckCmd :: forall r. FilePath -> UlibCheckOption -> Run (FS + LOG + EFFECT + r) Unit
+ulibCheckCmd :: forall r. FilePath -> UlibCheckOption -> Run (ENV + FS + LOG + EFFECT + r) Unit
 ulibCheckCmd cliRoot opt = do
-  libPath <- maybe (joinPath [ cliRoot, "..", "lib" ]) pure opt.libPath
+  libPath <- resolveLibPath cliRoot opt.libPath
   input <- maybe (joinPath [ ".", "output" ]) pure opt.input
   -- absent OR present-but-empty (no module dirs) ⇒ "not installed"; `isLibModuleDir` drops the lib
   -- root's self-describing files (manifest, `_header.wat`), which are not module dirs.

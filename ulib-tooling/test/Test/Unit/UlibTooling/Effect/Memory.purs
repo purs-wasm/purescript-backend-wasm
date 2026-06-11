@@ -24,6 +24,7 @@ import Data.String (Pattern(..))
 import Data.String as Str
 import Data.Tuple (Tuple(..))
 import Dodo as Dodo
+import PursWasm.CLI.Effect.Env (ENV, Env(..), _env)
 import PursWasm.CLI.Effect.Filesystem (FS, FilesystemF(..), _fs)
 import PursWasm.CLI.Effect.Log (LOG, Log(..), _log)
 import PursWasm.CLI.Effect.Process (PROC, ProcF(..), _proc)
@@ -41,10 +42,11 @@ type World =
   { fs :: Map String FileEntry
   , execs :: Array (Tuple String (Array String))
   , logs :: Array String
+  , env :: Map String String
   }
 
 emptyWorld :: World
-emptyWorld = { fs: Map.empty, execs: [], logs: [] }
+emptyWorld = { fs: Map.empty, execs: [], logs: [], env: Map.empty }
 
 -- | A world seeded with the given text files (most fixtures need only text).
 worldOfText :: Array (Tuple String String) -> World
@@ -52,8 +54,15 @@ worldOfText files = emptyWorld { fs = Map.fromFoldable (map (map Text) files) }
 
 -- | Run a command program against the in-memory world; returns the final world (FS state, exec
 -- | calls, logs) paired with the result.
-runMem :: forall a. World -> Run (FS + PROC + LOG + STATE World + ()) a -> Tuple World a
-runMem world prog = extract (runState world (interpLog (interpProc (interpFs prog))))
+runMem :: forall a. World -> Run (ENV + FS + PROC + LOG + STATE World + ()) a -> Tuple World a
+runMem world prog = extract (runState world (interpLog (interpProc (interpFs (interpEnv prog)))))
+
+interpEnv :: forall r. Run (ENV + STATE World + r) ~> Run (STATE World + r)
+interpEnv = interpret (on _env handle send)
+  where
+  handle :: Env ~> Run (STATE World + r)
+  handle = case _ of
+    LookupEnv name k -> get <#> \w -> k (Map.lookup name w.env)
 
 interpFs :: forall r. Run (FS + STATE World + r) ~> Run (STATE World + r)
 interpFs = interpret (on _fs handle send)

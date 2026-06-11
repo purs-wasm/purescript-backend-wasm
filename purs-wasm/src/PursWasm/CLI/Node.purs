@@ -21,6 +21,9 @@ import Node.Encoding (Encoding(..))
 import Node.FS.Perms (permsAll)
 import Node.FS.Sync as Sync
 import Node.Path as Path
+import Node.Process as Process
+import PursWasm.CLI.Effect.Env (ENV, Env(..))
+import PursWasm.CLI.Effect.Env as Env
 import PursWasm.CLI.Effect.Filesystem (FS, FilesystemF(..))
 import PursWasm.CLI.Effect.Filesystem as FS
 import PursWasm.CLI.Effect.Log (LOG, LogLevel(..), LoggerConfig)
@@ -36,13 +39,19 @@ import Type.Row (type (+))
 -- | Run a CLI program (its effect row fully closed) against the synchronous Node backend, with the
 -- | global options (e.g. `--verbose`) applied to the logger. `REGISTRY` is interpreted first, into
 -- | `PROC` (it asks `spago`), so it must be peeled before `PROC` is.
-runNode :: forall a. GlobalOptions -> Run (FS + REGISTRY + PROC + LOG + EFFECT + ()) a -> Effect a
+runNode :: forall a. GlobalOptions -> Run (ENV + FS + REGISTRY + PROC + LOG + EFFECT + ()) a -> Effect a
 runNode globals m = m
+  # Env.interpret nodeEnvHandler
   # Registry.interpret Registry.spagoHandler
   # FS.interpret nodeFsHandler
   # Proc.interpret nodeChildProcessHandler
   # Log.interpret (Log.terminalHandler (defaultLoggerConfig { minLevel = if globals.verbose then Debug else Info }))
   # runBaseEffect
+
+-- | Read an environment variable from `process.env` (`Nothing` if unset).
+nodeEnvHandler :: forall r. Env ~> Run (EFFECT + r)
+nodeEnvHandler = case _ of
+  LookupEnv name k -> k <$> liftEffect (Process.lookupEnv name)
 
 -- | The default console logging config. The bin prototype logged every message via `Console.log`;
 -- | mapping its messages to `info` keeps them visible at this level (`debug` is the quieter tier).

@@ -32,9 +32,11 @@ type UlibCheckOption =
   , input :: Maybe FilePath
   }
 
--- | `compat`: regenerate (default) or, with `--check`, verify `ulib/compat.json` (ADR 0029).
+-- | `compat`: regenerate `ulib/compat.json` (default); `--check` verifies it instead; `--dry`
+-- | prints the regenerated JSON to stdout without writing the file (ADR 0029).
 type UlibCompatOption =
   { check :: Boolean
+  , dry :: Boolean
   }
 
 data Command
@@ -48,7 +50,7 @@ ulibInstallParser =
     { libPath:
         ArgParser.argument [ "-L", "--lib-path" ]
           "Where to store the compiled ulib corefn/externs.\n\
-          \Defaults to the `lib` dir beside the compiler (`<cli>/../lib`)."
+          \Defaults to $PURS_WASM_LIB, else the `lib` dir beside the binary (`<cli>/../lib`)."
           # ArgParser.optional
     , purs:
         ArgParser.argument [ "-x", "--purs" ]
@@ -65,7 +67,7 @@ ulibCheckParser =
   ArgParser.fromRecord
     { libPath:
         ArgParser.argument [ "-L", "--lib-path" ]
-          "The installed ulib to check. Defaults to `<cli>/../lib`."
+          "The installed ulib to check. Defaults to $PURS_WASM_LIB, else `<cli>/../lib`."
           # ArgParser.optional
     , input:
         ArgParser.argument [ "-I", "--input" ]
@@ -82,6 +84,11 @@ ulibCompatParser =
           "Verify (offline) that the shadows are still in sync with the pinned package set and\n\
           \that ulib/compat.json's version data is current, instead of regenerating it. A\n\
           \major.minor divergence fails; a patch-only divergence warns."
+          # ArgParser.boolean
+    , dry:
+        ArgParser.flag [ "--dry" ]
+          "Print the regenerated compat.json to stdout instead of writing the file (only the JSON,\n\
+          \so it pipes cleanly). Ignored when --check is given."
           # ArgParser.boolean
     }
 

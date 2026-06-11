@@ -66,20 +66,19 @@ jobs:
       # `foldl` fall back to the foreign HOFs (correct, but the specialization win is lost).
       # `ulib install` needs `.spago` populated with the shadows' dependency closure, so prime
       # it with a `bench` build first.
-      - name: Build the compiler CLI, runtime, and ulib lib
+      - name: Build the CLIs, runtime, and ulib lib
         run: |
-          spago build -p purs-wasm
+          # `spago build -p ulib-tooling` builds the maintainer CLI AND its `purs-wasm` dependency
+          # (the user `build` CLI), so both index.dev.js entries resolve.
+          spago build -p ulib-tooling
           pnpm -F ./compiler run build:runtime
           spago build -p bench --output bench/output
-          node ./purs-wasm/index.dev.js ulib install
-          # Assert the shadows still match the resolved package set (major.minor); a
-          # divergence means the build would silently fall back to the registry module and
-          # the benchmark would measure the un-specialized path — fail the run instead.
-          node ./purs-wasm/index.dev.js ulib validate
+          node ./ulib-tooling/index.dev.js install
           # Assert the shadows are in sync with the *pinned* package set (spago.lock) and that
-          # ulib/compat.json is up to date (ADR 0028 release record). Fails if a shadow is stale
-          # (the set bumped that package past the shadow's major.minor) or compat.json drifted.
-          node ./purs-wasm/index.dev.js ulib compat --check
+          # ulib/compat.json is up to date (ADR 0028/0029 release record). Fails if a shadow is stale
+          # (the set bumped that package past the shadow's major.minor) or compat.json drifted —
+          # without it the bench would silently measure the un-specialized registry-fallback path.
+          node ./ulib-tooling/index.dev.js compat --check
 
       # graph.sh builds all three backends + renders the 7 algorithm graphs;
       # count-state-graph.sh / count-effect-graph.sh add the State- and Effect-monad

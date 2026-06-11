@@ -32,7 +32,8 @@ import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, resolvePath, unlink, warn, writeBinary, writeText)
+import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, unlink, warn, writeBinary, writeText)
+import PursWasm.CLI.Lib (resolveLibPath)
 import PursWasm.CLI.Effect.Log (br)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
@@ -78,7 +79,7 @@ warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
         )
   _, _ -> pure unit
 
-buildCmd :: forall r. FilePath -> BuildOption -> Run (FS + PROC + LOG + EFFECT + r) Unit
+buildCmd :: forall r. FilePath -> BuildOption -> Run (ENV + FS + PROC + LOG + EFFECT + r) Unit
 buildCmd cliRoot args = do
   debug (show args)
   start <- liftEffect nowMsImpl
@@ -89,10 +90,9 @@ buildCmd cliRoot args = do
   info ""
   info "Selecting modules to pack in..."
 
-  -- ulib lib (ADR 0028) sits beside the compiler (`<cli>/../lib`); `resolvePath` normalises the
-  -- `..` to an absolute path. It is an FS-effect op (the interpreter owns `Node.Path`), so this
-  -- command logic stays platform-neutral.
-  libPath <- resolvePath [ cliRoot, ".." ] "lib"
+  -- Where the ulib lib lives (ADR 0031 §5): `$PURS_WASM_LIB` if set, else `<cliRoot>/../lib` beside
+  -- the binary. `build` has no `-L` flag, so the override is always `Nothing` here.
+  libPath <- resolveLibPath cliRoot Nothing
   shadows <- loadShadowMap libPath
   -- Each subdirectory of `input` is named by its dotted module name; sort for a deterministic
   -- build (ADR 0009).
