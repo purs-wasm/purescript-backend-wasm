@@ -14,15 +14,17 @@ import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..))
+import Data.Set (Set)
+import Data.Set as Set
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Compiler (parseModule)
 import PureScript.CoreFn (Module, ModuleName)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, debug, exists, info, joinPath, readDir, readText)
+import PursWasm.CLI.Effect (FS, FilePath, LOG, debug, exists, joinPath, readDir, readText)
 import PursWasm.CLI.Module (printModname)
-import PursWasm.CLI.Ulib.Version (majorMinor, pkgVersionFromPath, splitPkgVer)
+import PursWasm.CLI.Ulib.Version (splitPkgVer)
 import Run (Run)
 import Type.Row (type (+))
 
@@ -47,23 +49,22 @@ loadShadowMap libPath = do
             joinPath [ pkgPath, m, "corefn.json" ] <#> \corefn -> Tuple m { package: pkg, version: ver, corefn }
       pure (Map.fromFoldable (Array.concat rows))
 
--- | Use a module's ulib shadow if its target version matches (by `major.minor`) the user's
--- | resolved version; otherwise the registry module, with a warning. Never fails.
-shadowOrRegistry :: forall r. Map String Shadow -> ModuleName -> Module -> Run (FS + LOG + r) Module
-shadowOrRegistry shadows mod registryMod = case Map.lookup (printModname mod) shadows of
-  Nothing -> pure registryMod
-  Just s
-    | (majorMinor <$> pkgVersionFromPath s.package registryMod.path) /= Just (majorMinor s.version) -> do
-        info
-          ( Fmt.fmt
-              @"  ulib: {m} not shadowed ({pkg} {got} ≠ supported {want}); using registry (foreign HOF stays slow)"
-              { m: printModname mod, pkg: s.package, got: fromMaybe "?" (pkgVersionFromPath s.package registryMod.path), want: s.version }
-          )
-        pure registryMod
-    | otherwise -> readText s.corefn >>= case _ of
-        Nothing -> pure registryMod
-        Just libSrc -> case parseModule libSrc of
-          Left _ -> pure registryMod
-          Right libMod -> do
-            debug (Fmt.fmt @"ulib: shadowing {m} ({pkg} {ver})" { m: printModname mod, pkg: s.package, ver: s.version })
-            pure libMod
+-- | Use a module's ulib corefn (lib) iff it is in `shadowed` — the set the manifest-based
+-- | `Manifest.shadowSet` computed (reached ∩ covered ∩ exact-version-match, ADR 0031). Otherwise
+-- | the registry module. Never fails: a module in the set but absent from the lib, or an
+-- | unreadable/unparsable lib corefn, falls back to the registry module. The version-drift warning
+-- | is emitted once by the build (`warnUlibVersionDrift`), not here.
+shadowOrRegistry :: forall r. Set String -> Map String Shadow -> ModuleName -> Module -> Run (FS + LOG + r) Module
+shadowOrRegistry shadowed shadows mod registryMod =
+  if not (Set.member name shadowed) then pure registryMod
+  else case Map.lookup name shadows of
+    Nothing -> pure registryMod
+    Just s -> readText s.corefn >>= case _ of
+      Nothing -> pure registryMod
+      Just libSrc -> case parseModule libSrc of
+        Left _ -> pure registryMod
+        Right libMod -> do
+          debug (Fmt.fmt @"ulib: shadowing {m} ({pkg} {ver})" { m: name, pkg: s.package, ver: s.version })
+          pure libMod
+  where
+  name = printModname mod
