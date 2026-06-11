@@ -1,9 +1,0 @@
-{
-  "name": "purs-backend-wasm",
-  "version": "0.1.0",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "version": "echo 'export const version = \"v'$npm_package_version'\";' > ./src/Version.js && git add ."
-  }
-}

@@ -15,6 +15,8 @@ module PureScript.Backend.Wasm.Codegen.Imports
   , strEqHelperName
   , strCmpHelperName
   , strConcatHelperName
+  , strNewHelperName
+  , strSetByteHelperName
   , arrayConcatHelperName
   , arrayNewHelperName
   , arraySetHelperName
@@ -59,6 +61,11 @@ importRuntime ctx = do
   imp strEqHelperName "strEq" [ B.eqref, B.eqref ] B.i32
   imp strCmpHelperName "strCmp" [ B.eqref, B.eqref ] B.i32
   imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
+  -- `Wasm.String` byte primitives (WasmBase, ADR 0030): `strNew n` allocates a zeroed byte
+  -- string; `strSetByte` writes a byte in place and returns nothing (the intrinsic threads the
+  -- string back, `Codegen.Prim`). `byteAt`/`byteLength` inline (`array.get`/`array.len`).
+  imp strNewHelperName "strNew" [ B.i32 ] B.eqref
+  imp strSetByteHelperName "strSetByte" [ B.eqref, B.i32, B.i32 ] B.none
   imp arrayConcatHelperName "arrayConcat" [ B.eqref, B.eqref ] B.eqref
   -- `Wasm.Array` build primitives (WasmBase, ADR 0026): `arrayNew n` allocates; `arraySet`
   -- writes in place and returns nothing (the intrinsic threads the array back, `Codegen.Prim`).
@@ -119,6 +126,13 @@ strCmpHelperName = "$rt.strCmp"
 -- | The shared string concatenation helper.
 strConcatHelperName :: String
 strConcatHelperName = "$rt.strConcat"
+
+-- | `Wasm.String` byte builders (ADR 0030): allocate a zeroed `$Str` / write a byte in place.
+strNewHelperName :: String
+strNewHelperName = "$rt.strNew"
+
+strSetByteHelperName :: String
+strSetByteHelperName = "$rt.strSetByte"
 
 -- | The shared array concatenation helper.
 arrayConcatHelperName :: String

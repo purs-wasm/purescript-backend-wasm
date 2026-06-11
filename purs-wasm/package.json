@@ -1,0 +1,14 @@
+{
+  "name": "purs-wasm",
+  "version": "0.1.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "compile": "spago build -p purs-wasm",
+    "test:unit": "spago test -p purs-wasm --monochrome",
+    "test": "npm run test:unit",
+    "format": "purs-tidy format-in-place src test",
+    "check": "purs-tidy check src test",
+    "version": "echo 'export const version = \"v'$npm_package_version'\";' > ./src/PursWasm/CLI/Version.js && git add ."
+  }
+}

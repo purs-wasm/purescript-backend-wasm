@@ -1,6 +1,6 @@
 # 0012. A `ulib` directory for curated-package wasm FFI
 
-- Status: ~~Proposed~~ ~~**Accepted**~~ **Superseded by [0026](0026-wasmbase-primitive-layer.md)** _(2026-06-07: promoted — implemented (`Ulib.parseUlibSigs` + `ulib/` + the provider ladder). Per-module migration into `ulib` is ongoing.)_
+- Status: ~~Proposed~~ ~~**Accepted**~~ **Superseded by [0026](0026-wasmbase-primitive-layer.md) & [0031](0031-ulib-unified-library-modules.md)** _(2026-06-07: promoted — implemented (`Ulib.parseUlibSigs` + `ulib/` + the provider ladder). Per-module migration into `ulib` is ongoing.)_
 - Date: 2026-06-02
 
 > **Superseded by [0026](0026-wasmbase-primitive-layer.md) (2026-06-08).** WasmBase moves the
@@ -9,6 +9,13 @@
 > (hand-written `.wat` → WasmBase-based PureScript), and the provider ladder changes (a
 > per-module `.wat` is no longer sought in `ulib`; raw wat survives only inside WasmBase).
 > The curated-core *intent* of this record carries forward; its wat-FFI *mechanism* does not.
+
+> **Further superseded by [0031](0031-ulib-unified-library-modules.md) (2026-06-12).** 0031 retires
+> the **global `ulib/<M>/foreign.wat` provider layer** entirely: a ulib module is now one PureScript
+> module + an optional *co-located* sibling `{Module}.wat`, assembled at install into the lib's
+> `$LIB/<Module>/foreign.wasm` (provider) + `foreign.wat` (the build's sig source). `parseUlibSigs`
+> survives, but reads the lib, not `ulib/<M>/`; nothing consults the global layer anymore (it and
+> `build-ulib.mjs` are deleted).
 
 ## Context
 

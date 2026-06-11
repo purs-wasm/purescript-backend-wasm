@@ -5,10 +5,11 @@ module PureScript.Backend.Wasm.Lower.IR where
 
 import Prelude
 
+import Data.Argonaut.Core (Json)
+import Data.Argonaut.Core as J
 import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe)
 import Data.Show.Generic (genericShow)
-import Data.String (joinWith)
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
@@ -313,48 +314,45 @@ marshalRep = case _ of
   MEffect k -> marshalRep k -- the performed result's rep (the boundary value is the result)
   MOpaque -> Boxed
 
--- | A JSON encoding of a `MarshalKind` for the JS marshalling glue (ADR 0014): the
--- | leaves are the strings `"i"`/`"f"`/`"b"`/`"s"`/`"o"`; an array is `{"a":<kind>}`;
--- | a record is `{"r":{<field>:<kind>,…}}`; a function is `{"fn":[<param>,<result>]}`.
--- | The glue dispatches on `typeof`/`.a`/`.r`/`.fn` and marshals recursively.
-encodeMarshalKind :: MarshalKind -> String
-encodeMarshalKind = case _ of
-  MI32 -> "\"i\""
-  MF64 -> "\"f\""
-  MBool -> "\"b\""
-  MStr -> "\"s\""
-  MArray k -> "{\"a\":" <> encodeMarshalKind k <> "}"
-  MRecord fields -> "{\"r\":{" <> joinWith "," (map field fields) <> "}}"
-  MFunc p r -> "{\"fn\":[" <> encodeMarshalKind p <> "," <> encodeMarshalKind r <> "]}"
-  MEffect k -> "{\"eff\":" <> encodeMarshalKind k <> "}"
-  MOpaque -> "\"o\""
+-- | A JSON encoding of a `MarshalKind` for the JS marshalling glue (ADR 0014): the leaves are the
+-- | strings `"i"`/`"f"`/`"b"`/`"s"`/`"o"`; an array is `{"a":<kind>}`; a record is
+-- | `{"r":{<field>:<kind>,…}}`; a function is `{"fn":[<param>,<result>]}`; an effect is
+-- | `{"eff":<kind>}`. The glue dispatches on `typeof`/`.a`/`.r`/`.fn`/`.eff` and marshals
+-- | recursively. Built as a structured `Json` value (argonaut handles the quoting/escaping), not a
+-- | hand-concatenated string.
+marshalKindJson :: MarshalKind -> Json
+marshalKindJson = case _ of
+  MI32 -> J.fromString "i"
+  MF64 -> J.fromString "f"
+  MBool -> J.fromString "b"
+  MStr -> J.fromString "s"
+  MOpaque -> J.fromString "o"
+  MArray k -> tagged "a" (marshalKindJson k)
+  MRecord fields -> tagged "r" (jsonObject (map (\(Tuple n k) -> Tuple n (marshalKindJson k)) fields))
+  MFunc p r -> tagged "fn" (J.fromArray [ marshalKindJson p, marshalKindJson r ])
+  MEffect k -> tagged "eff" (marshalKindJson k)
   where
-  field (Tuple name k) = "\"" <> name <> "\":" <> encodeMarshalKind k
+  tagged key v = jsonObject [ Tuple key v ]
 
--- | The FFI marshal manifest as a JSON object literal (valid JS), keyed by import
--- | name `Module.base`, each entry `{"params":[<kind>…],"result":<kind>}` (ADR
--- | 0014). The production loader bakes it; the harness JSON.parses it. The glue
--- | looks up `manifest[module + "." + name]` per host import.
+-- | A foreign/export signature as a JSON object: `{"params":[<kind>…],"result":<kind>}`.
+sigJson :: ForeignImport -> Json
+sigJson s = jsonObject
+  [ Tuple "params" (J.fromArray (map marshalKindJson s.params))
+  , Tuple "result" (marshalKindJson s.result)
+  ]
+
+jsonObject :: Array (Tuple String Json) -> Json
+jsonObject = J.fromObject <<< Object.fromFoldable
+
+-- | The FFI marshal manifest as a JSON object string, keyed by import name `Module.base`, each
+-- | entry `{"params":[<kind>…],"result":<kind>}` (ADR 0014). The production loader bakes it; the
+-- | harness `JSON.parse`s it. The glue looks up `manifest[module + "." + name]` per host import.
 foreignManifestJson :: Array ForeignImport -> String
-foreignManifestJson sigs = "{" <> joinWith "," (map entry sigs) <> "}"
-  where
-  entry s =
-    "\"" <> s.moduleName <> "." <> s.base <> "\":{\"params\":["
-      <> joinWith "," (map encodeMarshalKind s.params)
-      <> "],\"result\":"
-      <> encodeMarshalKind s.result
-      <> "}"
+foreignManifestJson sigs =
+  J.stringify (jsonObject (map (\s -> Tuple (s.moduleName <> "." <> s.base) (sigJson s)) sigs))
 
--- | The export marshal manifest as a JSON object literal (valid JS), keyed by each
--- | export's **external name** (the name `inst.exports.<name>` is reached by), each
--- | entry `{"params":[<kind>…],"result":<kind>}` (ADR 0014). The loader/harness use
--- | it to marshal a JS caller's arguments into wasm and the result back out.
+-- | The export marshal manifest as a JSON object string, keyed by each export's **external name**
+-- | (the name `inst.exports.<name>` is reached by), each entry `{"params":[…],"result":<kind>}`
+-- | (ADR 0014). The loader/harness use it to marshal a JS caller's args into wasm and back out.
 exportManifestJson :: Object ForeignImport -> String
-exportManifestJson sigs = "{" <> joinWith "," (map entry (Object.toUnfoldable sigs)) <> "}"
-  where
-  entry (Tuple name s) =
-    "\"" <> name <> "\":{\"params\":["
-      <> joinWith "," (map encodeMarshalKind s.params)
-      <> "],\"result\":"
-      <> encodeMarshalKind s.result
-      <> "}"
+exportManifestJson sigs = J.stringify (J.fromObject (map sigJson sigs))

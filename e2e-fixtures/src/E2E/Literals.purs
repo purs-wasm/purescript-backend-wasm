@@ -1,0 +1,33 @@
+module E2E.Literals where
+
+foreign import eqI :: Int -> Int -> Boolean
+foreign import intToNum :: Int -> Number
+foreign import numToInt :: Number -> Int
+
+-- Int literal patterns
+classify :: Int -> Int
+classify n = case n of
+  0 -> 100
+  7 -> 700
+  _ -> 999
+
+-- Char literal patterns (Char shares Int's representation)
+classifyChar :: Char -> Int
+classifyChar c = case c of
+  'a' -> 1
+  'z' -> 26
+  _ -> 0
+
+-- Boolean (i31) produced internally, matched by `if`
+isZero :: Int -> Int
+isZero n = if eqI n 0 then 10 else 20
+
+-- Number boxing/unboxing round trip
+roundNum :: Int -> Int
+roundNum n = numToInt (intToNum n)
+
+-- Number literal pattern (f64.eq)
+numIsZero :: Int -> Int
+numIsZero n = case intToNum n of
+  0.0 -> 1
+  _ -> 0

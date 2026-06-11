@@ -1,0 +1,13 @@
+package:
+  name: e2e-fixtures
+  # Real PureScript fixtures for the CLI-driven e2e suite (ADR 0031 phase 5): each module is built by
+  # the actual `purs-wasm build` pipeline into a standalone wasm, then instantiated and asserted by
+  # `Test.E2E.Cli`. Migrated incrementally from the legacy corefn-fixture suite (`Test.E2E.Legacy`).
+  dependencies:
+    - effect
+    - integers
+    - maybe
+    - prelude
+    - record
+    - refs
+    - unsafe-coerce

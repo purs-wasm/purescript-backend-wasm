@@ -1,7 +1,15 @@
 # 0028. ulib as a compiler-bundled library layer: lib-first shadowing of registry modules
 
-- Status: ~~Proposed~~ **Accepted** _(2026-06-10: promoted — implemented: ulib shadows (Data.Functor/Foldable/Array) + lib-first resolution + `ulib install`/`validate`/`check`.)_
+- Status: ~~Proposed~~ ~~**Accepted**~~ **Superseded by [0031](0031-ulib-unified-library-modules.md)** _(2026-06-10: promoted — implemented: ulib shadows (Data.Functor/Foldable/Array) + lib-first resolution + `ulib install`/`validate`/`check`.)_
 - Date: 2026-06-09
+
+> **Superseded by [0031](0031-ulib-unified-library-modules.md) (2026-06-12).** The lib-first
+> *intent* (ulib shadows the registry module, WasmBase underneath) carries forward, but the in-code
+> `shadowOrRegistry` per-module `major.minor` version match is replaced by 0031's **last-wins
+> artifact merge** driven by `ulib-manifest.json` (an *exact*-version `shadowSet` / `resolveModuleSet`
+> decides provenance, not branching in the compiler). `validate` is retired (the build-time check
+> covers it); the maintainer `install`/`check`/`compat` ops moved to the separate `ulib-tooling` CLI,
+> so the user `purs-wasm` binary carries only `build`.
 
 ## Context
 
@@ -152,6 +160,14 @@ specialize. It is a distinct layer from wasm-base (ADR 0026): wasm-base = the pr
 > set is bumped, `--check` flags exactly which shadow dirs (`ulib/shadow/<pkg>-<ver>/`) need
 > updating. (Distinct from `ulib validate`, which compares the installed lib against the *user's*
 > workspace; this compares the shadows against the *project's pinned set*.)
+
+> **Update (2026-06-10): `ulib-compat.mjs` is now the `purs-wasm ulib compat` subcommand.** The
+> prototype script has been reimplemented in PureScript as `purs-wasm ulib compat` (same generate /
+> `--check` modes; the regenerated `compat.json` is byte-for-byte identical, verified by a
+> differential test against the script). Read both `ulib-compat.mjs` mentions in the 2026-06-09
+> update above as that subcommand. The old `.mjs` stays in-tree only until the `bin` CLI is retired.
+> (Detail — the registry compiler-compat query behind the regenerate path is abstracted as a
+> `REGISTRY` effect — lives in ADR 0029, which this layer's compat-map extends.)
 
 ## Consequences
 

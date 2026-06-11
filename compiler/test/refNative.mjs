@@ -1,4 +1,4 @@
-// Bin-integration regression test (ADR 0017): the native `Effect.Ref` cell ops
+// CLI-integration regression test (ADR 0017): the native `Effect.Ref` cell ops
 // (`new`/`write`/`modify`/`read`) are wasm-native (a `$Ref` struct + runtime helpers),
 // so a `Ref` program builds with NO host import for `Effect.Ref` and runs entirely in
 // wasm. `Examples.EffRef.Core.compute` threads a Ref through `new 10 → write 5 → modify
@@ -18,16 +18,16 @@ const fail = (msg) => {
 
 const compiled = mkdtempSync(join(tmpdir(), "refcore-out-"));
 execFileSync("spago", ["build", "-p", "examples-effect-ref", "--output", compiled], { cwd: repo, stdio: "inherit" });
-execFileSync("spago", ["build", "-p", "bin"], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 
 const bundle = mkdtempSync(join(tmpdir(), "refcore-bundle-"));
 execFileSync(
   "node",
-  ["bin/index.dev.js", "build", "-e", "Examples.EffRef.Core", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.dev.js", "build", "-e", "Examples.EffRef.Core", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 
-const m = await import(pathToFileURL(join(bundle, "Examples.EffRef.Core", "index.mjs")).href);
+const m = await import(pathToFileURL(join(bundle, "index.mjs")).href);
 if (typeof m.exports.compute !== "function")
   fail(`expected exported compute to be an Effect thunk (function), got ${typeof m.exports.compute}`);
 const got = m.exports.compute();

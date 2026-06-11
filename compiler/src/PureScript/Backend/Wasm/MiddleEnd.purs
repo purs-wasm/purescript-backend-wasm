@@ -58,7 +58,7 @@ optimizeProgram dictElim eff arities modules = (runOpt dictElim eff arities Noth
 
 -- | Like `optimizeProgram`, but also returns a human-readable trace of the named module's
 -- | MIR — a snapshot after specialization and one after it is optimized (simplify →
--- | impurify → simplify) — for inspecting the optimizer (`bin --trace-mir`, cf.
+-- | impurify → simplify) — for inspecting the optimizer (`purs-wasm --dump-mir`, cf.
 -- | purs-backend-es `--trace-rewrites`). The trace is empty unless a target module is given.
 optimizeProgramTrace :: Boolean -> Set String -> Map String Int -> String -> Array Module -> Array String
 optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff arities (Just target) modules).trace

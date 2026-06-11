@@ -4,12 +4,12 @@
 // impurification (ADR 0015) + the simplifier collapse those cyclic dicts to a
 // constant-stack tail loop with no residual closure/dispatch, the way the hand-rolled
 // State monad collapses? Compares the same PureScript source across three backends:
-//   * wasm     : our GC backend (output-wasm/CountEffect/index.wasm, optimized)
+//   * wasm     : our GC backend (output-wasm-count-effect/index.wasm, optimized)
 //   * js-naive : purs's stock JS backend (output, dictionary-passing + () => thunks)
 //   * js-es    : purs-backend-es (output-js-es, the optimized JS people ship)
 //
 //   build:  spago build -p bench --output bench/output
-//           node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e CountEffect
+//           node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-count-effect -e CountEffect
 //           purs-backend-es build --corefn-dir ./bench/output --output-dir ./bench/output-js-es --int-tags
 //   run:    node bench/count-effect.mjs
 //
@@ -19,7 +19,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm/CountEffect/index.wasm", import.meta.url)));
+const wasmBytes = readFileSync(fileURLToPath(new URL("./output-wasm-count-effect/index.wasm", import.meta.url)));
 const wasmModule = await WebAssembly.compile(wasmBytes);
 const freshWasm = async () => (await WebAssembly.instantiate(wasmModule, {})).exports.countTo;
 const naive = (await import("./output/CountEffect/index.js")).countTo;

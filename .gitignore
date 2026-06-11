@@ -22,3 +22,10 @@
 /bench/output-wasm-noopt
 /ulib/**/*.wasm
 lib/
+
+# CLI-driven e2e build artifacts (ADR 0031 phase 5)
+compiler/test/e2e-build/
+compiler/test/e2e-fixtures-out/
+
+#
+_draft

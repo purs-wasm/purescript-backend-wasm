@@ -75,8 +75,10 @@ below; inlining happens there, which is why the inline set must be acyclic (see
 (`Optimize/Semantics.purs`, ADR 0020) and the original rule-based fixpoint
 (`Optimize/Simplify.purs`). They perform the **same** reductions — described next.
 
-`node dump-mir.mjs <Fixture>` (after `spago build -p compiler`) prints a fixture's MIR
-through the pretty-printer — the way to watch a pass rewrite the tree.
+`purs-wasm build -I <output> -e <Entry> --dump-mir <Module>` writes that module's MIR after
+every optimizer sub-stage to `<output>/<Module>.mir.txt` — the way to watch a pass rewrite the
+tree (it sees the real reachable closure, unlike the retired `dump-mir.mjs`/`dump-opt.mjs` scripts,
+which only linked the fixtures you named).
 
 ## The reduction kernel: local reductions
 
@@ -380,3 +382,17 @@ once each — and prints a real `console.log "Hello, World!"` through the whole 
   do-block works. (`Effect.Ref`, `forE`/`whileE`/`untilE`/`foreachE`, `EffectFnN` and
   `unsafePerformEffect` are now provided wasm-natively — ADR 0017 / 0018 — not gaps; `ST`
   shares `Effect.Ref`'s representation and is the remaining follow-up.)
+- **`Free` / `Run` interpreter performance.** Programs over the `Free` monad or
+  `purescript-run`'s `Run` (extensible effects) **compile and run correctly**, but are currently
+  slow on wasm. A `Run`-over-`State` counter (`bench/count-run.mjs`) measures ~1.65–1.70× the time
+  of `purs-backend-es` — i.e. ~685× a hand-rolled `State` monad, which by contrast collapses to a
+  tail loop and *beats* `purs-backend-es` at ~0.73×. The dominant cost is the `Free`/`VariantF`
+  machinery's per-step allocation (boxed variant cells, bind closures), allocation-heavy in a way
+  wasm-GC handles less efficiently than V8, which the optimizer does not yet specialize away. A
+  smaller, secondary contributor: `purescript-run`'s interpreter loops are *point-free* recursive
+  bindings (`loop = resume f pure`); the backend requires a recursive binding to be a syntactic
+  function, so it **eta-expands** them to `loop = \x -> resume f pure x` (`Lower.lowerRecBind`,
+  sound by the eta law for a binding of positive residual arity) — correct, but it recomputes the
+  `resume f pure` closure per call instead of sharing it once. Planned post-v0.1: specialize/inline
+  the `Run`/`Free` interpreter to remove the per-step allocation (the dominant cost); recovering the
+  eta sharing-loss (a recursive-value knot-tying lowering) is a minor follow-up.

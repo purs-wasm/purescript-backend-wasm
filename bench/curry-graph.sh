@@ -16,8 +16,9 @@ purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es 
 ( cd bench/output && find . -name foreign.js ) | while read -r f; do
   f="${f#./}"; mkdir -p "bench/output-js-es/$(dirname "$f")"; cp "bench/output/$f" "bench/output-js-es/$f"
 done
-# 3. our wasm backend (BenchCurry entry)
-node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e BenchCurry
+# 3. our wasm backend, in its OWN output dir (see count-state-graph.sh: the shared `output-wasm` is
+# `Bench.Main`'s, and the comparison-tables CI step re-runs the .mjs without rebuilding)
+node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-curry -e BenchCurry
 
 cd "$here"
 node curry.mjs

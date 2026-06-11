@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
-const wasmPath = fileURLToPath(new URL("./output-wasm/Bench.Main/index.wasm", import.meta.url));
+const wasmPath = fileURLToPath(new URL("./output-wasm/index.wasm", import.meta.url));
 const bytes = readFileSync(wasmPath);
 
 // A fresh instance (and so a fresh wasm-GC managed heap) per measurement, so the

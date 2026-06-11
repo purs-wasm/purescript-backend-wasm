@@ -1,40 +1,35 @@
-// Thorough oracle test for `$rt.showNumber` (Data.Show's showNumberImpl).
+// Thorough oracle test for the ulib `Data.Show` shadow's `showNumberImpl` (Dragon4 f64 formatter).
 //
-// We cannot eyeball the WAT, so this drives the runtime directly from JS: pass an
-// f64 to `showNumber` (wasm f64 params accept JS numbers), read the rendered $Str
-// back via the strLen/strByteAt bridge, and compare against the exact reference —
-// JS's own `String(n)` plus the same `.0` rule the foreign uses. Covers hand-picked
-// edge cases plus a large sweep of random bit patterns. Exits non-zero on mismatch.
-import { readFileSync } from "node:fs";
+// Drives it through the REAL pipeline (ADR 0031 phase 5): builds the `E2E.ShowNumber` fixture
+// (`showNum :: Number -> String = show`) with `purs-wasm build`, loads the generated `index.mjs`, and
+// calls the marshalled `showNum` export — which returns a JS string directly. Compares against the
+// exact reference (JS `String(n)` plus the `.0` rule the foreign uses) over hand-picked edge cases
+// and a large random sweep. Exits non-zero on mismatch. (Replaces the retired global-wat path that
+// instantiated `ulib/Data.Show/foreign.wasm` against a separate runtime instance.)
+import { execFileSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-// resolve relative to this file so it works whatever the cwd is. `showNumberImpl` now
-// lives in the curated `ulib/Data.Show` module (ADR 0012); instantiate it against the
-// runtime (which still provides the `$Str` read primitives) and call its export.
-const runtimePath = new URL("../../runtime/runtime.wasm", import.meta.url);
-const showPath = new URL("../../ulib/Data.Show/foreign.wasm", import.meta.url);
-const rt = new WebAssembly.Instance(
-  new WebAssembly.Module(readFileSync(runtimePath)),
-  {},
-).exports;
-const show = new WebAssembly.Instance(
-  new WebAssembly.Module(readFileSync(showPath)),
-  { rt },
-).exports;
+const repo = fileURLToPath(new URL("../../", import.meta.url));
+const run = (cmd, args) => execFileSync(cmd, args, { cwd: repo, stdio: "inherit" });
+
+run("spago", ["build", "-p", "ulib-tooling"]);
+run("node", ["ulib-tooling/index.dev.js", "install"]);
+const compiled = mkdtempSync(join(tmpdir(), "shownum-out-"));
+run("spago", ["build", "-p", "e2e-fixtures", "--output", compiled]);
+const bundle = mkdtempSync(join(tmpdir(), "shownum-bundle-"));
+run("node", ["purs-wasm/index.dev.js", "build", "-e", "E2E.ShowNumber", "-I", compiled, "-O", bundle]);
+
+const m = await import(pathToFileURL(join(bundle, "index.mjs")).href);
+const wasmShow = (n) => m.exports.showNum(n);
 
 // The reference: exactly what Prelude's `showNumberImpl` computes.
 //   var str = n.toString(); return isNaN(str + ".0") ? str : str + ".0";
 function oracle(n) {
   const str = String(n);
   return isNaN(str + ".0") ? str : str + ".0";
-}
-
-const dec = new TextDecoder();
-function wasmShow(n) {
-  const s = show.showNumberImpl(n);
-  const len = rt.strLen(s);
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = rt.strByteAt(s, i);
-  return dec.decode(bytes);
 }
 
 let pass = 0;
@@ -91,6 +86,9 @@ for (let i = 0; i < 30000; i++) {
   const exp = (rand32() % 60) - 30;
   check(mant * Math.pow(10, exp));
 }
+
+rmSync(compiled, { recursive: true, force: true });
+rmSync(bundle, { recursive: true, force: true });
 
 console.log(`showNumber: ${pass} passed, ${fail} failed (of ${pass + fail})`);
 if (fail > 0) {

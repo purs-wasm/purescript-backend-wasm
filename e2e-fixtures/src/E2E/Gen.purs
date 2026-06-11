@@ -1,0 +1,29 @@
+module E2E.Gen where
+
+import Prelude
+import Data.Generic.Rep (class Generic)
+import Data.Eq.Generic (genericEq)
+
+data T = A | B Int | C Int Int
+
+derive instance Generic T _
+instance Eq T where
+  eq = genericEq
+
+eqAA :: Int
+eqAA = if A == A then 1 else 0
+
+eqAB :: Int
+eqAB = if A == B 1 then 1 else 0
+
+eqBB :: Int
+eqBB = if B 5 == B 5 then 1 else 0
+
+eqBBneq :: Int
+eqBBneq = if B 5 == B 6 then 1 else 0
+
+eqCC :: Int
+eqCC = if C 1 2 == C 1 2 then 1 else 0
+
+eqCCneq :: Int
+eqCCneq = if C 1 2 == C 1 9 then 1 else 0

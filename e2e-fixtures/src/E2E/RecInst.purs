@@ -1,0 +1,25 @@
+module E2E.RecInst where
+
+import Prelude
+
+type Point = { x :: Int, y :: Int }
+
+p1 :: Point
+p1 = { x: 1, y: 2 }
+
+p2 :: Point
+p2 = { x: 1, y: 2 }
+
+p3 :: Point
+p3 = { x: 1, y: 9 }
+
+-- record `==` (Data.Eq's EqRecord: unsafeGet each field, compare)
+eqYes :: Int
+eqYes = if p1 == p2 then 1 else 0
+
+eqNo :: Int
+eqNo = if p1 == p3 then 1 else 0
+
+-- record `show` (Data.Show's record instance: reflectSymbol label + unsafeGet)
+showP :: Int
+showP = if show p1 == "{ x: 1, y: 2 }" then 1 else 0

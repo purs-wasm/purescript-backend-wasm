@@ -456,7 +456,38 @@ lowerRecBind env (Tuple rb slot) = case rb.expr of
     | Just { head: param, tail: rest } <- Array.uncons params -> do
         { codeName, captures } <- liftLambda Nothing env param (reAbs rest recBody)
         pure (RecBind slot codeName captures)
-  _ -> throw (UnsupportedExpr "a recursive let binding must be a function")
+  -- A point-free recursive *function* (e.g. purescript-run's `loop = resume f pure`): not a
+  -- syntactic lambda, but a known callable applied below its arity, so it is in fact a function.
+  -- Eta-expand it to a saturated lambda (`\x -> e x`) — sound by the eta law, since it has positive
+  -- residual arity — and lower through the normal Abs path above. Genuine recursive *values*
+  -- (residual arity 0, e.g. a self-referential `Tuple`/`data`) do not match and fall through to the
+  -- error; a cyclic top-level value is instead handled by CAF globalization (ADR 0006, `FibAnd`).
+  _
+    | Just residual <- recBindResidualArity env rb.expr
+    , residual >= 1 ->
+        lowerRecBind env (Tuple (rb { expr = etaExpand rb.expr residual }) slot)
+  _ -> throw (UnsupportedExpr ("a recursive let binding must be a function: " <> rb.ident))
+
+-- | The residual arity of a non-lambda binding RHS: a known callable (function / constructor /
+-- | intrinsic / foreign) applied to fewer arguments than its arity still denotes a function, of
+-- | the leftover arity. `Nothing` when the head's arity is unknown — then we cannot prove it is a
+-- | function, so the caller keeps the conservative "must be a function" error.
+recBindResidualArity :: Env -> M.Expr -> Maybe Int
+recBindResidualArity env = case _ of
+  v@(M.Var _) -> headArity env v
+  M.App h args -> (_ - Array.length args) <$> headArity env h
+  _ -> Nothing
+
+-- | The declared arity of an application head, resolved the same way `lowerApp` dispatches a call:
+-- | a constructor, a top-level/specialized function, an intrinsic, or a foreign import.
+headArity :: Env -> M.Expr -> Maybe Int
+headArity env = case _ of
+  M.Var q@(Qualified (Just _) ident) ->
+    (_.arity <$> Object.lookup (qualifiedKeyOf q) env.ctors)
+      <|> Object.lookup (qualifiedKeyOf q) env.knownFuncs
+      <|> (snd <$> (qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident))
+      <|> ((Array.length <<< _.params) <$> Object.lookup (qualifiedKeyOf q) env.foreignSigs)
+  _ -> Nothing
 
 -- | Compile a `case` into a `Switch` on the scrutinee's tag, finishing each branch
 -- | with `finish` (so the same compiler serves a tail-position `case` — `finish =

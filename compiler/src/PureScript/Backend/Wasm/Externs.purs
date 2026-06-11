@@ -67,10 +67,25 @@ type ForeignSig =
 foreignSigs :: Array ExternsFile -> Object ForeignSig
 foreignSigs externs = Object.fromFoldable (externs >>= declsOf)
   where
+  -- A `type Foo = { … }` alias is stored unexpanded in the externs, so a foreign typed `Foo -> …`
+  -- would otherwise marshal as `MOpaque`. Resolve nullary synonyms first so record/array/etc. aliases
+  -- reach their real `marshalKind`.
+  syns = synonymTable externs
   declsOf (ExternsFile _ (ModuleName mn) _ _ _ _ decls _) = Array.mapMaybe (valueOf mn) decls
   valueOf mn = case _ of
     EDValue (Ident ident) ty ->
-      Just (Tuple (mn <> "." <> ident) { moduleName: mn, base: ident, params: foreignParams ty, result: foreignResult ty })
+      Just (Tuple (mn <> "." <> ident) { moduleName: mn, base: ident, params: foreignParams syns ty, result: foreignResult syns ty })
+    _ -> Nothing
+
+-- | Nullary type synonyms across every externs file, keyed by qualified name (`Module.Name`) →
+-- | body. Parameterized synonyms are skipped (kept `MOpaque`); the common `type Point = { … }` is
+-- | nullary. `marshalKind` expands these so a foreign typed by an alias marshals by the real type.
+synonymTable :: Array ExternsFile -> Map String T.SourceType
+synonymTable externs = Map.fromFoldable (externs >>= synsOf)
+  where
+  synsOf (ExternsFile _ (ModuleName mn) _ _ _ _ decls _) = Array.mapMaybe (synOf mn) decls
+  synOf mn = case _ of
+    EDTypeSynonym (ProperName name) [] body -> Just (Tuple (mn <> "." <> name) body)
     _ -> Nothing
 
 -- | The qualified names (`Module.ident`) of foreign signatures whose *running* performs a
@@ -106,21 +121,21 @@ effectfulForeignAritiesFromExterns = effectfulForeignAritiesFromSigs <<< foreign
 -- | quantifiers are transparent (a foreign may be polymorphic, e.g. `forall a. a ->
 -- | a`); each function arrow contributes its argument's kind. (Constraints need no
 -- | handling: purs rejects them on `foreign import`s.)
-foreignParams :: forall a. T.Type a -> Array MarshalKind
-foreignParams = case _ of
-  T.ForAll _ _ _ _ t _ -> foreignParams t
+foreignParams :: forall a. Map String T.SourceType -> T.Type a -> Array MarshalKind
+foreignParams syns = case _ of
+  T.ForAll _ _ _ _ t _ -> foreignParams syns t
   T.TypeApp _ (T.TypeApp _ (T.TypeConstructor _ fn) arg) rest
-    | isFunction fn -> Array.cons (marshalKind arg) (foreignParams rest)
+    | isFunction fn -> Array.cons (marshalKind syns arg) (foreignParams syns rest)
   _ -> []
 
 -- | The marshal kind of a foreign's result — the type left after the `forall`
 -- | quantifiers and argument arrows.
-foreignResult :: forall a. T.Type a -> MarshalKind
-foreignResult = case _ of
-  T.ForAll _ _ _ _ t _ -> foreignResult t
+foreignResult :: forall a. Map String T.SourceType -> T.Type a -> MarshalKind
+foreignResult syns = case _ of
+  T.ForAll _ _ _ _ t _ -> foreignResult syns t
   T.TypeApp _ (T.TypeApp _ (T.TypeConstructor _ fn) _) rest
-    | isFunction fn -> foreignResult rest
-  t -> marshalKind t
+    | isFunction fn -> foreignResult syns rest
+  t -> marshalKind syns t
 
 -- | The FFI marshal kind of a concrete type at the boundary: scalars cross as a JS
 -- | `number` (`MI32`/`MF64`), `Boolean` to/from a JS `boolean` (`MBool`), `String`
@@ -128,32 +143,44 @@ foreignResult = case _ of
 -- | on the element), `Record` to/from a JS object (`MRecord`), a function `a -> b`
 -- | to/from a JS function (`MFunc`, recursing on both sides), everything else opaque
 -- | (`MOpaque`).
-marshalKind :: forall a. T.Type a -> MarshalKind
-marshalKind = case _ of
+marshalKind :: forall a. Map String T.SourceType -> T.Type a -> MarshalKind
+marshalKind syns = case _ of
   T.TypeApp _ (T.TypeApp _ (T.TypeConstructor _ fn) arg) rest
-    | isFunction fn -> MFunc (marshalKind arg) (marshalKind rest)
+    | isFunction fn -> MFunc (marshalKind syns arg) (marshalKind syns rest)
   T.TypeApp _ (T.TypeConstructor _ ctor) arg
-    | named "Array" ctor -> MArray (marshalKind arg)
-    | named "Record" ctor -> MRecord (rowFields arg)
+    | named "Array" ctor -> MArray (marshalKind syns arg)
+    | named "Record" ctor -> MRecord (rowFields syns arg)
     -- `Effect a`: an effectful foreign — the JS glue runs its thunk and marshals the
     -- inner result `a` (ADR 0015). (`EffectFnN` is future work.)
-    | named "Effect" ctor -> MEffect (marshalKind arg)
-  T.TypeConstructor _ (Qualified _ (ProperName n))
+    | named "Effect" ctor -> MEffect (marshalKind syns arg)
+  T.TypeConstructor _ q@(Qualified _ (ProperName n))
     | n == "Int" || n == "Char" -> MI32
     | n == "Number" -> MF64
     | n == "Boolean" -> MBool
     | n == "String" -> MStr
+    -- a nullary type synonym (`type Point = { … }`) is stored unexpanded; resolve it and recurse so
+    -- aliases marshal by their real type rather than falling to `MOpaque`.
+    | otherwise -> case synKey q >>= flip Map.lookup syns of
+        Just body -> marshalKind syns body
+        Nothing -> MOpaque
   _ -> MOpaque
 
 named :: String -> Qualified ProperName -> Boolean
 named n = case _ of
   Qualified _ (ProperName m) -> m == n
 
+-- | The qualified-name key (`Module.Name`) of a module-qualified type constructor, for synonym
+-- | lookup; `Nothing` for an unqualified/local constructor (not a cross-module synonym reference).
+synKey :: Qualified ProperName -> Maybe String
+synKey = case _ of
+  Qualified (ByModuleName (ModuleName mn)) (ProperName n) -> Just (mn <> "." <> n)
+  _ -> Nothing
+
 -- | The fields of a record's row type `( l :: T, … )`, encoded as nested `RCons`
 -- | terminated by `REmpty` (an open row's tail var is ignored).
-rowFields :: forall a. T.Type a -> Array (Tuple String MarshalKind)
-rowFields = case _ of
-  T.RCons _ (T.Label pss) ty rest -> Array.cons (Tuple (toString pss) (marshalKind ty)) (rowFields rest)
+rowFields :: forall a. Map String T.SourceType -> T.Type a -> Array (Tuple String MarshalKind)
+rowFields syns = case _ of
+  T.RCons _ (T.Label pss) ty rest -> Array.cons (Tuple (toString pss) (marshalKind syns ty)) (rowFields syns rest)
   _ -> []
 
 -- | The argument types of a curried function type, in order. A constructor's

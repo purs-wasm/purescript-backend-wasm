@@ -17,7 +17,7 @@ import Data.Array as Array
 import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayConcatHelperName, arrayNewHelperName, arraySetHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, untilEHelperName, whileEHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, arrayConcatHelperName, arrayNewHelperName, arraySetHelperName, counterGlobalName, forEHelperName, foreachEHelperName, intDegreeHelperName, intDivHelperName, intModHelperName, internStrName, projHelperName, recDeleteHelperName, recHasHelperName, recSetHelperName, refModifyHelperName, refNewHelperName, refNewWithSelfHelperName, refReadHelperName, refWriteHelperName, strCmpHelperName, strConcatHelperName, strEqHelperName, strNewHelperName, strSetByteHelperName, untilEHelperName, whileEHelperName)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx)
 import PureScript.Backend.Wasm.Codegen.Value (boxInt, genAtom, genAtomAs, strBytes, unboxBoolExpr)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), Rep(..))
@@ -33,6 +33,10 @@ genPrim ctx intr args = case intr, args of
     ea <- intArg a
     eb <- intArg b
     B.i32Eq ctx.mod ea eb >>= B.i31New ctx.mod
+  IntLt, [ a, b ] -> do
+    ea <- intArg a
+    eb <- intArg b
+    B.i32LtS ctx.mod ea eb >>= B.i31New ctx.mod
   -- Boolean -> Boolean -> Boolean: compare the i31 bits, box as an i31 Boolean.
   BoolEq, [ a, b ] -> do
     ea <- boolArg a
@@ -99,6 +103,27 @@ genPrim ctx intr args = case intr, args of
     ea <- genAtomAs ctx Boxed a
     eb <- genAtomAs ctx Boxed b
     B.call ctx.mod strEqHelperName [ ea, eb ] B.i32 >>= B.i31New ctx.mod
+  -- `Wasm.String.byteAt s i`: read the i-th UTF-8 byte (0-255), inlined like `StrLen` (no helper).
+  StrByteAt, [ a, i ] -> do
+    bytes <- strBytes ctx a
+    idx <- intArg i
+    B.arrayGet ctx.mod bytes idx B.i32 false
+  -- `Wasm.Char.toCodePoint` / `fromCodePoint`: identity on the i32 code point (ADR 0030).
+  CharCodeId, [ x ] -> intArg x
+  -- `Wasm.String.unsafeNew n`: allocate a zeroed `$Str` of `n` bytes.
+  StrNew, [ n ] -> do
+    len <- intArg n
+    B.call ctx.mod strNewHelperName [ len ] B.eqref
+  -- `Wasm.String.unsafeSetByte s i b`: write byte `b` at `i` (mutating in place), then return `s`,
+  -- so a builder loop threads the string through (keeping the write live and ordered) — mirrors
+  -- `ArraySet`. The string operand is a local atom, so re-reading it is just a `local.get`.
+  StrSetByte, [ s, i, b ] -> do
+    str <- genAtomAs ctx Boxed s
+    idx <- intArg i
+    byte <- intArg b
+    setE <- B.call ctx.mod strSetByteHelperName [ str, idx, byte ] B.none
+    strAgain <- genAtomAs ctx Boxed s
+    B.block ctx.mod [ setE, strAgain ] B.eqref
   -- Array a -> Int: the element count
   ArrayLength, [ a ] -> do
     arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refVals

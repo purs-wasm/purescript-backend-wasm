@@ -26,15 +26,15 @@ const CASES = [
 
 const compiled = mkdtempSync(join(tmpdir(), "effprim-out-"));
 execFileSync("spago", ["build", "-p", "examples-effect-prim", "--output", compiled], { cwd: repo, stdio: "inherit" });
-execFileSync("spago", ["build", "-p", "bin"], { cwd: repo, stdio: "inherit" });
+execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 const bundle = mkdtempSync(join(tmpdir(), "effprim-bundle-"));
 execFileSync(
   "node",
-  ["bin/index.dev.js", "build", "-e", "Examples.EffPrim.Main", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.dev.js", "build", "-e", "Examples.EffPrim.Main", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 
-const m = await import(pathToFileURL(join(bundle, "Examples.EffPrim.Main", "index.mjs")).href);
+const m = await import(pathToFileURL(join(bundle, "index.mjs")).href);
 
 let failures = 0;
 for (const [name, expected, isEffect] of CASES) {

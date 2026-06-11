@@ -12,34 +12,9 @@
             "lists",
             "partial",
             "prelude",
+            "run",
+            "tuples",
             "wasm-base"
-          ]
-        },
-        "test": {
-          "dependencies": []
-        }
-      },
-      "bin": {
-        "path": "bin",
-        "core": {
-          "dependencies": [
-            "aff",
-            "argparse-basic",
-            "arrays",
-            "compiler",
-            "console",
-            "effect",
-            "either",
-            "exceptions",
-            "fmt",
-            "foldable-traversable",
-            "lists",
-            "node-fs",
-            "node-path",
-            "node-process",
-            "prelude",
-            "strings",
-            "unsafe-coerce"
           ]
         },
         "test": {
@@ -121,6 +96,23 @@
           ]
         }
       },
+      "e2e-fixtures": {
+        "path": "e2e-fixtures",
+        "core": {
+          "dependencies": [
+            "effect",
+            "integers",
+            "maybe",
+            "prelude",
+            "record",
+            "refs",
+            "unsafe-coerce"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-effect-prim": {
         "path": "examples/effect-prim",
         "core": {
@@ -168,7 +160,10 @@
           "dependencies": [
             "console",
             "effect",
-            "prelude"
+            "integers",
+            "maybe",
+            "prelude",
+            "strings"
           ]
         },
         "test": {
@@ -196,6 +191,21 @@
           "dependencies": []
         }
       },
+      "examples-run": {
+        "path": "examples/run",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "fmt",
+            "prelude",
+            "run"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-snapshots": {
         "path": "examples/snapshots",
         "core": {
@@ -215,6 +225,100 @@
         },
         "test": {
           "dependencies": []
+        }
+      },
+      "purs-wasm": {
+        "path": "purs-wasm",
+        "core": {
+          "dependencies": [
+            "aff",
+            "ansi",
+            "argonaut-codecs",
+            "argonaut-core",
+            "argparse-basic",
+            "arraybuffer-types",
+            "arrays",
+            "compiler",
+            "console",
+            "dodo-printer",
+            "effect",
+            "either",
+            "exceptions",
+            "fmt",
+            "foldable-traversable",
+            "foreign",
+            "foreign-object",
+            "lists",
+            "maybe",
+            "node-buffer",
+            "node-fs",
+            "node-path",
+            "node-process",
+            "ordered-collections",
+            "prelude",
+            "run",
+            "strings",
+            "transformers",
+            "typelevel-prelude",
+            "unsafe-coerce"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "arrays",
+            "console",
+            "effect",
+            "either",
+            "maybe",
+            "ordered-collections",
+            "prelude",
+            "spec",
+            "spec-node",
+            "strings",
+            "tuples"
+          ]
+        }
+      },
+      "ulib-tooling": {
+        "path": "ulib-tooling",
+        "core": {
+          "dependencies": [
+            "aff",
+            "ansi",
+            "argonaut-codecs",
+            "argonaut-core",
+            "argparse-basic",
+            "arrays",
+            "compiler",
+            "console",
+            "dodo-printer",
+            "effect",
+            "either",
+            "exceptions",
+            "fmt",
+            "foldable-traversable",
+            "foreign-object",
+            "lists",
+            "maybe",
+            "node-fs",
+            "node-path",
+            "node-process",
+            "ordered-collections",
+            "prelude",
+            "purs-wasm",
+            "run",
+            "strings",
+            "transformers"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "console",
+            "effect",
+            "either",
+            "spec",
+            "spec-node"
+          ]
         }
       },
       "wasm-base": {
@@ -1110,6 +1214,25 @@
         "type-equality"
       ]
     },
+    "dodo-printer": {
+      "type": "registry",
+      "version": "2.2.3",
+      "integrity": "sha256-z6LZV9tXQPBZvHqzUYyCYGB7zHq6u7TOgV6Pr0wiobs=",
+      "dependencies": [
+        "ansi",
+        "either",
+        "foldable-traversable",
+        "integers",
+        "lists",
+        "maybe",
+        "newtype",
+        "partial",
+        "prelude",
+        "safe-coerce",
+        "strings",
+        "tuples"
+      ]
+    },
     "effect": {
       "type": "registry",
       "version": "4.0.0",
@@ -1840,6 +1963,28 @@
         "prelude"
       ]
     },
+    "run": {
+      "type": "registry",
+      "version": "5.0.0",
+      "integrity": "sha256-zGCyG7IamjYWypKMXTP9PFis2ShnoZJKZiu3SbXMc+M=",
+      "dependencies": [
+        "aff",
+        "control",
+        "effect",
+        "either",
+        "free",
+        "maybe",
+        "newtype",
+        "partial",
+        "prelude",
+        "tailrec",
+        "tuples",
+        "type-equality",
+        "typelevel-prelude",
+        "unsafe-coerce",
+        "variant"
+      ]
+    },
     "safe-coerce": {
       "type": "registry",
       "version": "2.0.0",
@@ -2028,6 +2173,22 @@
       "version": "6.0.0",
       "integrity": "sha256-0L1QsaY20OILjfU5TV72d3U/tSjhmL9hJ32WMp857Lk=",
       "dependencies": []
+    },
+    "variant": {
+      "type": "registry",
+      "version": "8.0.0",
+      "integrity": "sha256-Ydrgl8liWEwYQOWW76PdZtg3vxKpoKgsnmFyTLgZkoU=",
+      "dependencies": [
+        "control",
+        "enums",
+        "foldable-traversable",
+        "lists",
+        "maybe",
+        "partial",
+        "prelude",
+        "type-equality",
+        "unsafe-coerce"
+      ]
     }
   }
 }

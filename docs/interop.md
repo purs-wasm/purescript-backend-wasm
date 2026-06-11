@@ -157,7 +157,7 @@ An `Effect a` **export** (e.g. `main :: Effect Unit`) is exposed to JS as a **th
 runs when you call it:
 
 ```javascript
-import { exports } from "./output-wasm/Examples.Effect.Main/index.mjs";
+import { exports } from "./output-wasm/index.mjs";
 exports.main();   // runs the effect now (prints), returns its result
 ```
 
@@ -196,7 +196,7 @@ The entry module's top-level values are exported. The loader exposes them alread
 **marshalled**, so a JS caller passes and receives ordinary JS values:
 
 ```javascript
-import { exports } from "./output-wasm/Example/index.mjs";
+import { exports } from "./output-wasm/index.mjs";
 
 exports.greet("world");      // String -> String   → a JS string
 exports.sumArr([1, 2, 3]);   // Array Int -> Int    → 6

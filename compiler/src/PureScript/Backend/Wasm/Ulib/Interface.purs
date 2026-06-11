@@ -1,5 +1,5 @@
 -- | The public *interface* of a module, distilled from its externs' export list, plus a
--- | diff over two such interfaces. This is what `purs-wasm ulib check` (ADR 0028) uses to
+-- | diff over two such interfaces. This is what `ulib-tooling check` (ADR 0028) uses to
 -- | tell whether a ulib shadow is a drop-in for the registry module it shadows: a shadow is
 -- | compatible iff it exports at least every public name the registry module does (it may
 -- | export *more* — that is harmless to a consumer expecting the registry surface).

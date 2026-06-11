@@ -59,7 +59,7 @@ language and are kept out of version control.)
 | 0009 | [Build and linking model: multi-module input, single-wasm output](0009-build-and-linking-model.md) | Accepted |
 | 0010 | [The shared runtime as a separate, hand-written wasm module](0010-runtime-as-a-separate-wasm-module.md) | Accepted |
 | 0011 | [Packaging, platform targets, and host imports](0011-packaging-platform-and-host-imports.md) | Accepted |
-| 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Superseded by 0026 |
+| 0012 | [A `ulib` directory for curated-package wasm FFI](0012-ulib-curated-package-ffi.md) | Superseded by 0026, 0031 |
 | 0013 | [Unboxing `Int` and `Number`](0013-int-number-unboxing.md) | Accepted |
 | 0014 | [User FFI: a foreign-provider ladder and the JS marshalling boundary](0014-user-ffi-resolution-and-marshalling.md) | Accepted |
 | 0015 | [Effect reflection: collapsing function-represented monads to straight-line code](0015-effect-native-support.md) | Accepted |
@@ -75,8 +75,10 @@ language and are kept out of version control.)
 | 0025 | [Multi-platform packaging (`--platform`) and the fallback-JS toggle](0025-multi-platform-packaging.md) | Proposed |
 | 0026 | [WasmBase: a stable primitive layer between `Prim` and `Prelude`](0026-wasmbase-primitive-layer.md) | Accepted |
 | 0027 | [Specialize after inlining: the `where`-worker / forwarder idiom](0027-specialize-after-inlining.md) | Accepted |
-| 0028 | [ulib as a compiler-bundled library layer: lib-first shadowing of registry modules](0028-ulib-library-layer-shadowing.md) | Accepted |
-| 0029 | [ulib lib distribution and purs-compiler pinning](0029-ulib-lib-distribution-and-purs-pinning.md) | Accepted |
+| 0028 | [ulib as a compiler-bundled library layer: lib-first shadowing of registry modules](0028-ulib-library-layer-shadowing.md) | Superseded by 0031 |
+| 0029 | [ulib lib distribution and purs-compiler pinning](0029-ulib-lib-distribution-and-purs-pinning.md) | Accepted (refined by 0031) |
+| 0030 | [`Data.String` over UTF-8: code-point semantics, byte access via `Wasm.String`](0030-data-string-over-utf8.md) | Proposed |
+| 0031 | [ulib as a single library-module layer: last-wins artifact merge, retiring the shadow/wat duality](0031-ulib-unified-library-modules.md) | Accepted |
 
 ## Scope
 

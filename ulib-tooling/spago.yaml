@@ -1,0 +1,41 @@
+package:
+  name: ulib-tooling
+  # Maintainer CLI for the ulib lib (ADR 0031 §5): `install` (compile the ulib sources into the lib),
+  # `check` (externs interface compatibility), and `compat` (regenerate/verify ulib/compat.json). It
+  # depends on the `purs-wasm` package for the shared infra (effect layer, manifest, externs), so the
+  # maintainer machinery never ships in the lean user `purs-wasm build` binary.
+  dependencies:
+    - purs-wasm
+    - aff
+    - ansi
+    - argonaut-codecs
+    - argonaut-core
+    - argparse-basic
+    - arrays
+    - compiler
+    - console
+    - dodo-printer
+    - effect
+    - either
+    - exceptions
+    - fmt
+    - foldable-traversable
+    - foreign-object
+    - lists
+    - maybe
+    - node-fs
+    - node-path
+    - node-process
+    - ordered-collections
+    - prelude
+    - run
+    - strings
+    - transformers
+  test:
+    main: Test.Unit.UlibTooling
+    dependencies:
+      - spec
+      - spec-node
+      - console
+      - effect
+      - either

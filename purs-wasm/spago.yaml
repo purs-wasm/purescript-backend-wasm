@@ -1,0 +1,52 @@
+package:
+  name: purs-wasm
+  # The real CLI implementation (ADR-tracked re-architecture of the `bin` prototype). Modules
+  # live under `PursWasm.CLI.*`; `bin` is kept untouched as a differential-test oracle until
+  # this package reaches output parity (see plans / ADR). Deps mirror `bin` plus `run` (the IO
+  # boundary is modelled as extensible effects) and argonaut (the `ulib compat` subcommand parses
+  # spago.lock / registry-info JSON). `Node.Cbor` + the externs decoder come via `compiler`.
+  dependencies:
+    - aff
+    - ansi
+    - argonaut-codecs
+    - argonaut-core
+    - argparse-basic
+    - arraybuffer-types
+    - arrays
+    - compiler
+    - console
+    - dodo-printer
+    - effect
+    - either
+    - exceptions
+    - fmt
+    - foldable-traversable
+    - foreign
+    - foreign-object
+    - lists
+    - maybe
+    - node-buffer
+    - node-fs
+    - node-path
+    - node-process
+    - ordered-collections
+    - prelude
+    - run
+    - strings
+    - transformers
+    - typelevel-prelude
+    - unsafe-coerce
+  test:
+    main: Test.Unit.PursWasm
+    dependencies:
+      - spec
+      - spec-node
+      - arrays
+      - console
+      - effect
+      - either
+      - maybe
+      - ordered-collections
+      - prelude
+      - tuples
+      - strings

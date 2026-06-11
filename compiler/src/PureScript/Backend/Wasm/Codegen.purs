@@ -149,6 +149,13 @@ kindHasRecord = case _ of
   MFunc p r -> kindHasRecord p || kindHasRecord r
   _ -> false
 
+-- | Whether a marshalled result is an `Effect a` — its compiled function carries an extra
+-- | perform-unit param the type signature does not name (ADR 0018).
+isEffectKind :: MarshalKind -> Boolean
+isEffectKind = case _ of
+  MEffect _ -> true
+  _ -> false
+
 -- | Every constructor field-rep signature constructed or projected in the program,
 -- | so a `$Data_<sig>` struct type is generated for exactly those.
 dataSignatures :: Program -> Array (Array Rep)
@@ -242,12 +249,17 @@ addCafGlobals :: Ctx -> Map FuncName Rep -> Effect Unit
 addCafGlobals ctx globals = traverse_ addOne (Map.toUnfoldable globals :: Array (Tuple FuncName Rep))
   where
   addOne (Tuple name rep) = do
-    initE <- defaultConst rep
+    initE <- defaultConst ctx rep
     B.addGlobal ctx.mod (cafGlobalName name) (repType ctx rep) true initE
-  defaultConst = case _ of
-    I32 -> B.i32Const ctx.mod 0
-    F64 -> B.f64Const ctx.mod 0.0
-    _ -> B.i32Const ctx.mod 0 >>= \z -> B.structNew ctx.mod ctx.rt.intHt [ z ]
+
+-- | A throwaway value of the given rep (`0` / `0.0` / a boxed `0`, a GC const expression like a
+-- | nullary constructor). Used to initialise a mutable CAF global (overwritten at instantiation)
+-- | and to fill an `Effect` export's dropped perform-unit param.
+defaultConst :: Ctx -> Rep -> Effect B.Expression
+defaultConst ctx = case _ of
+  I32 -> B.i32Const ctx.mod 0
+  F64 -> B.f64Const ctx.mod 0.0
+  _ -> B.i32Const ctx.mod 0 >>= \z -> B.structNew ctx.mod ctx.rt.intHt [ z ]
 
 -- | Synthesize the init function that computes each CAF once, in dependency order,
 -- | storing it in its global, and register it as the module `start` so it runs at
@@ -357,21 +369,35 @@ addExportWrapper ctx exportSigs fn = case fn.export of
   Just external -> do
     let
       compiledArity = Array.length fn.params
-      -- accept the FFI sig when it has at least the compiled arity; a *greater* type
-      -- arity is a point-free binding, eta-expanded at the boundary below
+      -- Accept the FFI sig when it covers the compiled arity. Two ways the two can differ:
+      -- a *greater* type arity is a point-free binding (eta-expanded at the boundary below);
+      -- a *smaller* type arity by exactly one is an `Effect`-returning function, whose compiled
+      -- form carries the extra `Effect` perform-unit param (ADR 0018). Either way the sig still
+      -- describes how the marshalled params cross, so use it rather than the i32 fallback.
       mSig = case Object.lookup external exportSigs of
-        Just s | Array.length s.params >= compiledArity -> Just s
+        Just s
+          | Array.length s.params >= compiledArity
+              || (isEffectKind s.result && Array.length s.params + 1 >= compiledArity) -> Just s
         _ -> Nothing
       -- with a known FFI kind, expose its `marshalRep`; without one (no externs), fall
       -- back to the historical `i32` ABI (the internal rep is often `Boxed`, so the
-      -- wrapper boxes/unboxes a plain `Int` at the boundary — ADR 0014)
+      -- wrapper boxes/unboxes a plain `Int` at the boundary — ADR 0014). The export exposes the
+      -- sig's params only — an `Effect`'s trailing perform-unit is hidden, synthesised below.
       extParams = maybe (I32 <$ fn.params) (\s -> marshalRep <$> s.params) mSig
       extResult = maybe I32 (\s -> marshalRep s.result) mSig
       extArity = Array.length extParams
-    -- the leading `compiledArity` external params drive the direct call
-    args <- traverse
+      -- params shared by the export and the compiled fn: a point-free binding exposes MORE (the
+      -- extras apply to the returned closure below), an `Effect`-returning function FEWER (its
+      -- compiled form's trailing perform-unit param is synthesised here, not taken from the host).
+      directCount = min compiledArity extArity
+    -- the leading external params drive the direct call (each coerced external → internal rep)
+    leadingArgs <- traverse
       (\(Tuple i (Tuple extRep intRep)) -> B.localGet ctx.mod i (repType ctx extRep) >>= coerce ctx extRep intRep)
-      (Array.mapWithIndex Tuple (Array.zip (Array.take compiledArity extParams) fn.params))
+      (Array.mapWithIndex Tuple (Array.zip (Array.take directCount extParams) (Array.take directCount fn.params)))
+    -- compiled params the export does not expose are `Effect` perform-units (ADR 0018); the value
+    -- is dropped in codegen, so a throwaway default of the param's rep suffices.
+    performUnits <- traverse (defaultConst ctx) (Array.drop directCount fn.params)
+    let args = leadingArgs <> performUnits
     -- a globalized CAF export reads its precomputed global (ADR 0006); otherwise call
     result <- case Map.lookup fn.name ctx.cafGlobals of
       Just rep | compiledArity == 0 -> readCaf ctx fn.name rep

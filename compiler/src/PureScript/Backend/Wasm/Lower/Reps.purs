@@ -24,6 +24,8 @@ primRep = case _ of
   IntDegree -> I32
   NumToInt -> I32
   StrLen -> I32
+  StrByteAt -> I32 -- a UTF-8 byte (0-255), as an Int
+  CharCodeId -> I32 -- Char/Int share the i32 code-point rep; the conversion is the identity
   ArrayLength -> I32
   TopInt -> I32
   BottomInt -> I32
@@ -58,6 +60,7 @@ primOperandReps = case _ of
   IntDiv -> [ I32, I32 ]
   IntMod -> [ I32, I32 ]
   IntEq -> [ I32, I32 ]
+  IntLt -> [ I32, I32 ]
   IntDegree -> [ I32 ]
   IntToNum -> [ I32 ]
   FromNumberImpl -> [ Boxed, Boxed, F64 ] -- just, nothing, n (the Number is unboxed)
@@ -72,6 +75,12 @@ primOperandReps = case _ of
   -- Wasm.Array build primitives: lengths / indices are unboxed i32, arrays / values boxed
   ArrayNew -> [ I32 ]
   ArraySet -> [ Boxed, I32, Boxed ]
+  -- Wasm.String byte primitives: the string is boxed ($Str eqref), indices / bytes are i32
+  StrByteAt -> [ Boxed, I32 ]
+  StrNew -> [ I32 ]
+  StrSetByte -> [ Boxed, I32, I32 ]
+  -- Wasm.Char identity: the operand (Char or Int) is the i32 code point
+  CharCodeId -> [ I32 ]
   -- unsafeCompareImpl lt eq gt x y: the selected values are boxed, the operands typed
   OrdInt -> [ Boxed, Boxed, Boxed, I32, I32 ]
   OrdNumber -> [ Boxed, Boxed, Boxed, F64, F64 ]

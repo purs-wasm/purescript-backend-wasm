@@ -64,20 +64,21 @@ withCompiledModule
   -> Array ExternsFile
   -> Object ForeignSig
   -> Effect (Either String a)
-withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots (optimizeProgram opts.optimizeMir (Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')) (effectfulForeignAritiesFromSigs foreignSigs') reachable) of
-  Left err -> pure (Left ("linking failed: " <> show err))
-  Right program -> do
-    mod <- buildModule program
-    when opts.optimize (B.optimize mod)
-    ok <- B.validate mod
-    if not ok then do
-      wat <- B.emitText mod
-      B.dispose mod
-      pure (Left ("emitted module failed validation:\n" <> wat))
-    else do
-      result <- emit mod
-      B.dispose mod
-      pure (Right result)
+withCompiledModule opts emit roots modules externs foreignSigs' =
+  case lowered of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right program -> do
+      mod <- buildModule program
+      when opts.optimize (B.optimize mod)
+      ok <- B.validate mod
+      if not ok then do
+        wat <- B.emitText mod
+        B.dispose mod
+        pure (Left ("emitted module failed validation:\n" <> wat))
+      else do
+        result <- emit mod
+        B.dispose mod
+        pure (Right result)
   where
   -- Prune to the modules transitively imported by the entry roots BEFORE optimizing — the
   -- input dir holds the whole dependency build (often hundreds of modules), but optimizing
@@ -87,6 +88,12 @@ withCompiledModule opts emit roots modules externs foreignSigs' = case lowerModu
   -- every CoreFn-declared foreign name (qualified); lets lowering fall back to an
   -- all-opaque host import when a foreign has no reconstructed signature (ADR 0016)
   foreignNames = Set.fromFoldable (reachable >>= \m -> map (\base -> joinWith "." m.name <> "." <> base) m.foreignNames)
+  -- the effectful-foreign set/arities (intrinsics ∪ those declared by the sigs) that the
+  -- optimizer must preserve `Perform`s for; the same pair `mirTrace` uses (ADR 0015).
+  effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
+  effArities = effectfulForeignAritiesFromSigs foreignSigs'
+  optimized = optimizeProgram opts.optimizeMir effSet effArities reachable
+  lowered = lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimized
 
 -- | The modules transitively reachable from `roots` through CoreFn imports (a fixpoint over
 -- | each kept module's import list). Used to drop unreached dependency modules before the
@@ -118,7 +125,7 @@ compileModulesText :: CompileOptions -> Array ModuleName -> Array Module -> Arra
 compileModulesText opts = withCompiledModule opts B.emitText
 
 -- | Trace the named module's middle IR (MIR) — its form after specialization and after it
--- | is optimized (simplify → impurify → simplify) — the `--trace-mir` companion to the
+-- | is optimized (simplify → impurify → simplify) — the `--dump-mir` companion to the
 -- | normal build, using the *same* effectful-foreign set/arities so the trace matches the
 -- | real pipeline. `target` is a dotted module name (e.g. `Examples.EffRef.Main`).
 mirTrace :: CompileOptions -> Array Module -> Object ForeignSig -> String -> String

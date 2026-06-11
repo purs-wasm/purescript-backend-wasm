@@ -11,8 +11,11 @@ cd "$here/.."
 spago build -p bench --output bench/output
 # 2. the optimized JS backend (js-es)
 purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es --int-tags
-# 3. our wasm backend (CountState entry; the loader marshals its String result)
-node ./bin/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e CountState
+# 3. our wasm backend. Its OWN output dir (not the shared `output-wasm`, which graph.sh fills with
+# `Bench.Main`): every bench builds a different entry, and the comparison-tables CI step re-runs the
+# .mjs without rebuilding — a shared dir would leave whichever bench built last, so count-state.mjs
+# would read the wrong wasm (no `countTo` export → "wasmCheck is not a function").
+node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-count-state -e CountState
 
 cd "$here"
 node count-state.mjs

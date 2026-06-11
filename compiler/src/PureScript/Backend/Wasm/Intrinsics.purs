@@ -31,6 +31,7 @@ data Intrinsic
   | IntSub
   | IntMul
   | IntEq -- Int -> Int -> Boolean (`i32.eq`, result boxed as an `i31` Boolean)
+  | IntLt -- Int -> Int -> Boolean (signed `i32.lt_s`, result boxed as an `i31` Boolean)
   -- | `Data.Ord`'s `ordIntImpl lt eq gt x y`: the `Ordering` (`lt`/`eq`/`gt`) of
   -- | two `Int`s. Five operands — the three `Ordering` values and the two ints —
   -- | selected by a signed `i32` comparison.
@@ -60,6 +61,20 @@ data Intrinsic
   | StrLen -- String -> Int (UTF-8 byte length, `array.len`)
   | StrConcat -- String -> String -> String (allocate + copy both byte arrays)
   | StrEq -- String -> String -> Boolean (length then byte-by-byte compare)
+  -- | `Wasm.String` (WasmBase, ADR 0026/0030) first-order **byte-level** `$Str` primitives, so the
+  -- | `Data.String.*` code-point operations can be written in PureScript over them (UTF-8
+  -- | decode/encode in PureScript) and thus run standalone on wasm — the Rust `.as_bytes()` analog.
+  -- | `StrByteAt s i` reads the `i`-th UTF-8 byte (0-255); `StrNew n` allocates a length-`n`
+  -- | zeroed byte string; `StrSetByte s i b` writes byte `b` at `i` (mutating in place) and
+  -- | **returns `s`**, threaded through the builder loop exactly as `ArraySet` (keeping the write
+  -- | live and ordered without an effect).
+  | StrByteAt -- String -> Int -> Int (`array.get` on the `$Bytes`)
+  | StrNew -- Int -> String (zeroed `$Str` of `n` bytes)
+  | StrSetByte -- String -> Int -> Int -> String (writes the byte, returns the string)
+  -- | `Wasm.Char` (WasmBase, ADR 0026/0030): `Char` ↔ code-point `Int`. A `Char` is already an
+  -- | `i32` code point in this backend (ADR 0030: `Char` = Unicode code point, not a UTF-16 unit),
+  -- | so both directions are the **identity** on the `i32` — the operand *is* the result.
+  | CharCodeId -- Char -> Int / Int -> Char (identity on the i32 code point)
   | ArrayLength -- Array a -> Int (`array.len`)
   | ArrayIndex -- Array a -> Int -> a (`array.get`; the element is already an `eqref`)
   | ArrayConcat -- Array a -> Array a -> Array a (`Data.Semigroup` `<>`: allocate + copy both)
@@ -258,12 +273,24 @@ qualifiedIntrinsic = case _ of
   "Wasm.Array.unsafeIndex" -> Just (Tuple ArrayIndex 2)
   "Wasm.Array.unsafeNew" -> Just (Tuple ArrayNew 1)
   "Wasm.Array.unsafeSet" -> Just (Tuple ArraySet 3)
+  -- `Wasm.String` (WasmBase, ADR 0030): first-order byte-level `$Str` primitives the
+  -- `Data.String.*` code-point ops build on. `byteLength` reuses `StrLen`.
+  "Wasm.String.byteLength" -> Just (Tuple StrLen 1)
+  "Wasm.String.byteAt" -> Just (Tuple StrByteAt 2)
+  "Wasm.String.unsafeNew" -> Just (Tuple StrNew 1)
+  "Wasm.String.unsafeSetByte" -> Just (Tuple StrSetByte 3)
+  -- `Wasm.Char` (WasmBase, ADR 0030): `Char` ↔ code-point `Int`, both the identity on the i32.
+  "Wasm.Char.toCodePoint" -> Just (Tuple CharCodeId 1)
+  "Wasm.Char.fromCodePoint" -> Just (Tuple CharCodeId 1)
   -- `Wasm.Int` (WasmBase): first-order `Int` ops, so ulib shadows of low-level prelude
   -- modules (e.g. `Data.Functor`) need no `Prelude` for their loop arithmetic (ADR 0028).
   "Wasm.Int.add" -> Just (Tuple IntAdd 2)
   "Wasm.Int.sub" -> Just (Tuple IntSub 2)
   "Wasm.Int.mul" -> Just (Tuple IntMul 2)
   "Wasm.Int.eq" -> Just (Tuple IntEq 2)
+  "Wasm.Int.lt" -> Just (Tuple IntLt 2)
+  "Wasm.Int.div" -> Just (Tuple IntDiv 2)
+  "Wasm.Int.mod" -> Just (Tuple IntMod 2)
   -- `reverse`/`sliceImpl`/`indexImpl`/`unconsImpl`, `Data.Foldable.fold{l,r}Array`,
   -- `Data.String.CodeUnits.{singleton,toCharArray,fromCharArray}`, `Data.Int.fromStringAsImpl`
   -- now live in `ulib/<Module>/foreign.wat` (ADR 0012), resolved as merged foreigns.
