@@ -1,5 +1,6 @@
 module PursWasm.CLI.Options
   ( parse
+  , withGlobals
   ) where
 
 import Prelude
@@ -8,7 +9,7 @@ import ArgParse.Basic (ArgParser)
 import ArgParse.Basic as ArgParser
 import Data.Either (Either(..))
 import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Options.Types (BuildOption, Command(..), GlobalOptions, Platform(..), UlibCheckOption, UlibCompatOption, UlibInstallOption, UlibValidateOption)
+import PursWasm.CLI.Options.Types (BuildOption, Command(..), GlobalOptions, Platform(..))
 import PursWasm.CLI.Version as Version
 
 -- | Read the `--platform` value, rejecting anything outside the three targets.
@@ -32,8 +33,9 @@ globalOptionsParser =
 
 -- | Pair a command's own parser with the shared global options. ArgParse confines flags to the
 -- | subcommand they follow, so the globals must live inside each leaf — but the flag definition
--- | stays in `globalOptionsParser` alone.
-withGlobals :: ArgParser Command -> ArgParser (Tuple GlobalOptions Command)
+-- | stays in `globalOptionsParser` alone. Polymorphic in the command type so the maintainer CLI
+-- | (`ulib-tooling`) reuses it for its own `Command`.
+withGlobals :: forall c. ArgParser c -> ArgParser (Tuple GlobalOptions c)
 withGlobals command = Tuple <$> globalOptionsParser <*> command
 
 buildOptionsParser :: ArgParser BuildOption
@@ -90,87 +92,12 @@ buildOptionsParser =
           # ArgParser.optional
     }
 
-ulibInstallParser :: ArgParser UlibInstallOption
-ulibInstallParser =
-  ArgParser.fromRecord
-    { libPath:
-        ArgParser.argument [ "-L", "--lib-path" ]
-          "Where to store the compiled ulib corefn/externs.\n\
-          \Defaults to the `lib` dir beside the compiler (`<cli>/../lib`)."
-          # ArgParser.optional
-    , purs:
-        ArgParser.argument [ "-x", "--purs" ]
-          "Path to the `purs` executable used to compile the shadows. Defaults to `purs` on PATH."
-          # ArgParser.optional
-    , force:
-        ArgParser.flag [ "-f", "--force" ]
-          "Rebuild even if the lib is already present."
-          # ArgParser.boolean
-    }
-
-ulibValidateParser :: ArgParser UlibValidateOption
-ulibValidateParser =
-  ArgParser.fromRecord
-    { libPath:
-        ArgParser.argument [ "-L", "--lib-path" ]
-          "The installed ulib to validate. Defaults to `<cli>/../lib`."
-          # ArgParser.optional
-    , spago:
-        ArgParser.argument [ "-S", "--spago" ]
-          "The resolved package-set sources to compare against (one dir per package,\n\
-          \`<package>-<version>`). Defaults to `.spago/p`."
-          # ArgParser.optional
-    }
-
-ulibCheckParser :: ArgParser UlibCheckOption
-ulibCheckParser =
-  ArgParser.fromRecord
-    { libPath:
-        ArgParser.argument [ "-L", "--lib-path" ]
-          "The installed ulib to check. Defaults to `<cli>/../lib`."
-          # ArgParser.optional
-    , input:
-        ArgParser.argument [ "-I", "--input" ]
-          "The directory of *your* compiled artifacts (per-module `externs.cbor`) to compare\n\
-          \the shadows' interface against — i.e. your spago build output. Defaults to `output`."
-          # ArgParser.optional
-    }
-
-ulibCompatParser :: ArgParser UlibCompatOption
-ulibCompatParser =
-  ArgParser.fromRecord
-    { check:
-        ArgParser.flag [ "--check" ]
-          "Verify (offline) that the shadows are still in sync with the pinned package set and\n\
-          \that ulib/compat.json's version data is current, instead of regenerating it. A\n\
-          \major.minor divergence fails; a patch-only divergence warns."
-          # ArgParser.boolean
-    }
-
 commandParser :: ArgParser (Tuple GlobalOptions Command)
 commandParser =
   ArgParser.choose "command"
     [ ArgParser.command [ "build" ]
         "Build a wasm module from a PureScript project's compiler artifacts"
         (withGlobals (Build <$> buildOptionsParser) <* ArgParser.flagHelp)
-    , ArgParser.command [ "ulib" ]
-        "Manage the ulib shadow library (ADR 0028)"
-        do
-          ArgParser.choose "ulib command"
-            [ ArgParser.command [ "install" ]
-                "Compile the ulib shadows into the lib (corefn + externs)"
-                (withGlobals (UlibInstall <$> ulibInstallParser) <* ArgParser.flagHelp)
-            , ArgParser.command [ "validate" ]
-                "Check each installed shadow's version matches your resolved package set"
-                (withGlobals (UlibValidate <$> ulibValidateParser) <* ArgParser.flagHelp)
-            , ArgParser.command [ "check" ]
-                "Compare each shadow's public interface against your compiled module (externs)"
-                (withGlobals (UlibCheck <$> ulibCheckParser) <* ArgParser.flagHelp)
-            , ArgParser.command [ "compat" ]
-                "Regenerate (or --check) ulib/compat.json: the package-set/version/purs pins (ADR 0029)"
-                (withGlobals (UlibCompat <$> ulibCompatParser) <* ArgParser.flagHelp)
-            ]
-            <* ArgParser.flagHelp
     ]
     <* ArgParser.flagHelp
     <* ArgParser.flagInfo [ "--version", "-v" ] "Show version" Version.versionString

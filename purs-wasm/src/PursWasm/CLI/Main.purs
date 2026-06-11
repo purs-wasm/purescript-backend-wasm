@@ -21,8 +21,6 @@ import PursWasm.CLI.Build (buildCmd)
 import PursWasm.CLI.Node (runNode)
 import PursWasm.CLI.Options (parse)
 import PursWasm.CLI.Options.Types (Command(..))
-import PursWasm.CLI.Ulib (ulibCheckCmd, ulibInstallCmd, ulibValidateCmd)
-import PursWasm.CLI.Ulib.Compat (ulibCompatCmd)
 
 -- `cliRoot` is the entry's directory (passed by
 -- `index.dev.js`), used to locate `<cliRoot>/../lib`
@@ -34,7 +32,3 @@ main cliRoot = do
     Left err -> Console.error (ArgParser.printArgError err)
     Right (Tuple globals cmd) -> runNode globals $ case cmd of
       Build args -> buildCmd cliRoot args
-      UlibInstall args -> ulibInstallCmd cliRoot args
-      UlibValidate args -> ulibValidateCmd cliRoot args
-      UlibCheck args -> ulibCheckCmd cliRoot args
-      UlibCompat args -> ulibCompatCmd args
