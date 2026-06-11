@@ -1,10 +1,5 @@
 package:
   name: purs-wasm
-  # The real CLI implementation (ADR-tracked re-architecture of the `bin` prototype). Modules
-  # live under `PursWasm.CLI.*`; `bin` is kept untouched as a differential-test oracle until
-  # this package reaches output parity (see plans / ADR). Deps mirror `bin` plus `run` (the IO
-  # boundary is modelled as extensible effects) and argonaut (the `ulib compat` subcommand parses
-  # spago.lock / registry-info JSON). `Node.Cbor` + the externs decoder come via `compiler`.
   dependencies:
     - aff
     - ansi

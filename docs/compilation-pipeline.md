@@ -117,7 +117,7 @@ emitted as a binary (or disassembled to WAT with `--text`).
 
 The generated module imports the **shared runtime** (`$rt.*` helpers and the value
 types, hand-written in `runtime/runtime.wat`; ADR 0010). To produce something runnable
-the CLI (`bin`, `Main.purs`):
+the CLI (`purs-wasm`, `PursWasm.CLI.Main`):
 
 - merges `runtime.wasm` into the app with `wasm-merge` (and merges any `foreign.wasm` /
   `foreign.wat` providers — ADR 0014 rung 2), resolving the imports into one wasm;
@@ -135,4 +135,4 @@ the CLI (`bin`, `Main.purs`):
 | 4. lower | `Lower` (`lowerModules`), incl. `Lower.Unbox` (representation analysis) |
 | 5. codegen | `Codegen` (`buildModule`), `Codegen.RuntimeTypes` |
 | pipeline glue | `Compiler` (`parseModule` / `compileModules`) |
-| 6. link + runtime (stopgap) | `bin/src/Main.purs`, `runtime/runtime.wat` |
+| 6. link + runtime (stopgap) | `purs-wasm/src/PursWasm/CLI/{Main,Build}.purs`, `runtime/runtime.wat` |

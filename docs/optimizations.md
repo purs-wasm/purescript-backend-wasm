@@ -75,8 +75,8 @@ below; inlining happens there, which is why the inline set must be acyclic (see
 (`Optimize/Semantics.purs`, ADR 0020) and the original rule-based fixpoint
 (`Optimize/Simplify.purs`). They perform the **same** reductions — described next.
 
-`purs-wasm build -I <output> -e <Entry> --dump-mir <Module>` writes that module's MIR after
-every optimizer sub-stage to `<output>/<Module>.mir.txt` — the way to watch a pass rewrite the
+`purs-wasm build -I <corefn> -O <out> -e <Entry> --dump-mir <Module>` writes that module's MIR
+after every optimizer sub-stage to `<out>/<Module>.mir.txt` — the way to watch a pass rewrite the
 tree (it sees the real reachable closure, unlike the retired `dump-mir.mjs`/`dump-opt.mjs` scripts,
 which only linked the fixtures you named).
 
@@ -343,7 +343,7 @@ countTo n s = case s == n of
 ```
 
 The collapsed wasm runs in constant stack with no allocation; the e2e
-`Test.E2E.StackSafe` runs it for a million iterations as a regression guard (a missing
+`Test.E2E.Cli.StackSafe` runs it for a million iterations as a regression guard (a missing
 optimization would overflow, which a value-only test could not detect).
 
 ## Worked example: the Effect monad
@@ -362,7 +362,7 @@ countTo n = unsafePerformEffect (go 0)
 thunk floats out of the loop's `case` and merges into the worker; and TCE closes it —
 giving the same allocation-free, constant-stack loop as `State`. The cyclic-dict overhead
 vanishes: `mapEff`/`applyEff` reduce to plain `intAdd`. A *genuinely* effectful do-block
-instead keeps its runs: the e2e `Test.E2E.HostEff` performs two host effects and checks
+instead keeps its runs: the e2e `Test.E2E.Cli.ForeignEffect` performs two host effects and checks
 they ran in order, exactly
 once each — and prints a real `console.log "Hello, World!"` through the whole pipeline.
 

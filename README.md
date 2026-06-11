@@ -85,7 +85,7 @@ Please refer to the [docs/optimizations.md](./docs/optimizations.md) for detaile
 
 Toward a **v0.1** release:
 
-- [ ] Real `bin` implementation — production linker (streaming, dependency-ordered codegen; ADR 0009 / 0021)
+- [ ] Streaming / demand-driven production linker (dependency-ordered codegen; ADR 0009 / 0021) — the `purs-wasm` CLI links eagerly today
 - [ ] Publish to npm
 - [ ] One-stop CLI for tryout (via Nix)
 

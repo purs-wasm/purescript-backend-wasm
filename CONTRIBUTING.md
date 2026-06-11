@@ -61,7 +61,7 @@ On top of that, the PR author owns these judgment calls (see the PR template):
   the relevant ADR(s). The docs are kept faithful to the code; **the implementation is the
   source of truth**, not the prose.
 - **Tests** — added or updated for the change. A **bug fix carries a regression guard in
-  the routinely-run lane** (unit / e2e), not only in a slow `test:bin` script — a regression
+  the routinely-run lane** (unit / e2e), not only in a slow or non-routine lane — a regression
   that only a slow lane catches is a regression that rides on red unnoticed.
 - **ADR** — a design change has an ADR (added or updated, with its `Status` set). ADRs are
   point-in-time records: correct them in place with a struck-through (`~~…~~`) original plus
