@@ -26,46 +26,22 @@ module Data.String.Common
 
 import Prelude
 
+import Data.String.Internal.Utf8 (byteIndexOf, decodeAt, sliceBytes)
 import Data.String.Pattern (Pattern(..), Replacement(..))
 import Wasm.Array as WA
 import Wasm.String as WS
 
 -------------------------------------------------------------------------------
--- UTF-8 byte helpers (private)
+-- UTF-8 byte helpers (private). The codec proper (`decodeAt` / `sliceBytes` / `byteIndexOf`) is
+-- shared via `Data.String.Internal.Utf8` (ADR 0031 §6); only `blit` — used directly across this
+-- module's `replace` / `joinWith` builders, not just by `sliceBytes` — stays local.
 -------------------------------------------------------------------------------
-
--- | Decode the code point at byte offset `o` (`< byteLength`), returning it and the next offset.
-decodeAt :: String -> Int -> { cp :: Int, next :: Int }
-decodeAt s o =
-  let
-    b0 = WS.byteAt s o
-    cont k = WS.byteAt s (o + k) `mod` 64
-  in
-    if b0 < 0x80 then { cp: b0, next: o + 1 }
-    else if b0 < 0xE0 then { cp: (b0 `mod` 32) * 64 + cont 1, next: o + 2 }
-    else if b0 < 0xF0 then { cp: (b0 `mod` 16) * 4096 + cont 1 * 64 + cont 2, next: o + 3 }
-    else { cp: (b0 `mod` 8) * 262144 + cont 1 * 4096 + cont 2 * 64 + cont 3, next: o + 4 }
 
 -- | Copy `src` bytes `[from, to)` into `dst` starting at `off`, returning the threaded `dst`.
 blit :: String -> Int -> Int -> String -> Int -> String
 blit src from to dst off = go from off dst
   where
   go i o d = if i >= to then d else go (i + 1) (o + 1) (WS.unsafeSetByte d o (WS.byteAt src i))
-
--- | Copy the bytes `[from, to)` of `s` into a fresh string (empty if `to <= from`).
-sliceBytes :: String -> Int -> Int -> String
-sliceBytes s from to =
-  if to <= from then WS.unsafeNew 0
-  else blit s from to (WS.unsafeNew (to - from)) 0
-
--- | The first byte offset `>= from` at which `needle` occurs in `hay`, or `-1`.
-byteIndexOf :: String -> String -> Int -> Int
-byteIndexOf hay needle from = go from
-  where
-  hn = WS.byteLength hay
-  nn = WS.byteLength needle
-  matchAt i j = if j >= nn then true else if WS.byteAt hay (i + j) == WS.byteAt needle j then matchAt i (j + 1) else false
-  go i = if i + nn > hn then -1 else if matchAt i 0 then i else go (i + 1)
 
 -- | The ECMAScript `String.prototype.trim` whitespace set (`WhiteSpace` + `LineTerminator`).
 isWhitespace :: Int -> Boolean

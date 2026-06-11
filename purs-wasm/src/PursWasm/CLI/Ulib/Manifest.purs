@@ -19,6 +19,9 @@ module PursWasm.CLI.Ulib.Manifest
   , reachedMismatches
   , shadowSet
   , manifestPackages
+  , manifestModules
+  , ResolvedModules
+  , resolveModuleSet
   ) where
 
 import Prelude
@@ -30,14 +33,16 @@ import Data.Array as Array
 import Data.Either (hush)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as FO
+import PureScript.CoreFn (ModuleName)
 import PursWasm.CLI.Effect (FS, FilePath, readText)
+import PursWasm.CLI.Module (reachableClosure)
 import Run (Run)
 import Type.Row (type (+))
 
@@ -128,3 +133,49 @@ shadowSet manifest lock reached =
 -- | (legacy, pre-0031) `ulib compat` derived from the `ulib/shadow/<pkg>-<ver>` directory names.
 manifestPackages :: Manifest -> Array { pkg :: String, ver :: String }
 manifestPackages = map (\(Tuple pkg entry) -> { pkg, ver: entry.version }) <<< Map.toUnfoldable
+
+-- | Every registry module the manifest covers (across all packages). A lib module *outside* this set
+-- | is a ulib internal helper (ADR 0031 §6) with no registry counterpart.
+manifestModules :: Manifest -> Set String
+manifestModules = Set.fromFoldable <<< Array.concatMap _.modules <<< Array.fromFoldable <<< Map.values
+
+-- ─────────────────────────── module-set resolution (ADR 0031 §6) ───────────────────────────
+
+-- | The resolved build module set + the per-module source decision (ADR 0031 §6). `reachable` is the
+-- | final transitive closure; `libSourced` are the modules whose **corefn** must come from the lib (a
+-- | shadowed registry module *or* an injected internal helper). A foreign-only ulib module (e.g.
+-- | `Data.Int`) can be in `libSourced` yet have no lib corefn — the caller falls back to the registry
+-- | corefn in that case.
+type ResolvedModules = { reachable :: Set String, libSourced :: Set String }
+
+-- | Resolve the module set via the **plan → recompute → materialize** fixpoint (ADR 0031 §6). Pure:
+-- | the FS reads (user + lib corefn import lists) are hoisted out by the caller. `userMods` is the set
+-- | of modules the user compiled; `userImports` / `libImports` are each module's import list from the
+-- | user output / the lib (only lib modules with a corefn appear in `libImports`). Starting from the
+-- | empty plan, each round recomputes the closure under the current source decision (lib import lists
+-- | for `libSourced` modules, so a shadow's private helper becomes reachable), then re-derives the
+-- | plan: `libSourced = shadowed ∪ internal`, where `internal` is a reached module the lib provides
+-- | but the user did not (i.e. not a registry module). "reached" only grows and the version match is
+-- | static, so the plan is **monotone** and converges (typically a round or two — one per level of
+-- | internal nesting, rarely more than one).
+resolveModuleSet
+  :: Array ModuleName
+  -> Set String
+  -> Map String (Array String)
+  -> Map String (Array String)
+  -> Maybe Manifest
+  -> Maybe LockView
+  -> ResolvedModules
+resolveModuleSet roots userMods userImports libImports mManifest mLock = go Set.empty
+  where
+  allNames = Set.toUnfoldable (Set.fromFoldable (Map.keys userImports) <> Set.fromFoldable (Map.keys libImports)) :: Array String
+  shadowedOf reached = fromMaybe Set.empty (shadowSet <$> mManifest <*> mLock <*> pure reached)
+  -- a reached module the lib provides (has a corefn) but the user does not compile → inject it.
+  internalOf reached = Set.filter (\n -> not (Set.member n userMods) && Map.member n libImports) reached
+  importsOf libSourced n = fromMaybe [] (Map.lookup n (if Set.member n libSourced then libImports else userImports))
+  go libSourced =
+    let
+      reachable = reachableClosure roots (Map.fromFoldable (allNames <#> \n -> Tuple n (importsOf libSourced n)))
+      libSourced' = Set.union (shadowedOf reachable) (internalOf reachable)
+    in
+      if libSourced' == libSourced then { reachable, libSourced } else go libSourced'

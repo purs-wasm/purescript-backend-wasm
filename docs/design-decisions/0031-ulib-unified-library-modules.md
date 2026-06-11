@@ -49,11 +49,21 @@ in-code logic. Five sub-decisions:
 ADR 0029:
 
 ```
-$LIB/Data.Show/
-  ├─ corefn.json     # the ulib corefn (showNumberImpl aside, everything is Wasm.* PS)
-  ├─ externs.cbor    # interface-compatible with the registry module
-  └─ foreign.wasm    # the sibling .wat, assembled (only showNumberImpl)
+$LIB/
+  ├─ ulib-manifest.json   # copied in at install — makes the lib self-describing (see Update below)
+  └─ Data.Show/
+     ├─ corefn.json       # the ulib corefn (showNumberImpl aside, everything is Wasm.* PS)
+     ├─ externs.cbor      # interface-compatible with the registry module
+     └─ foreign.wasm      # the sibling .wat, assembled (only showNumberImpl)
 ```
+
+> **Update (2026-06-11):** `ulib install` also copies `ulib-manifest.json` into the **lib root**
+> (`$LIB/ulib-manifest.json`). The precompiled lib is then **self-describing**: the build's version
+> check / `shadowSet` (§4) and `ulib validate` read versions from the lib itself, needing no ulib
+> *source* tree. This matters for the `ulib upgrade` user flow (a user may have only `$PURS_WASM_LIB`
+> set, having pulled a prebuilt lib from upstream). `ulib install` reads the *source* manifest as its
+> authoring input; every *consumer* reads `$LIB/ulib-manifest.json`. Lib scanners (`loadShadowMap`,
+> `ulib check`/`validate`) filter the manifest file out, since it sits beside the module dirs.
 
 ### 3. Resolution = last-wins artifact merge (retires `shadowOrRegistry`)
 
@@ -132,6 +142,46 @@ users.
 check (§4) is part of the user CLI's `build`. The old in-`purs-wasm` `validate` / `compat` subcommands
 and the scattered `*.mjs` maintainer scripts are retired.
 
+### 6. Internal helper modules — plan, recompute, materialize
+
+A ulib module may want a **private helper module** that is not a registry module — e.g. the UTF-8
+codec (`decodeAt` / `sliceBytes` / `byteIndexOf`) shared by `Data.String.CodeUnits` and
+`Data.String.Common`, factored into `Data.String.Internal.Utf8`. This breaks the naive "substitute a
+registry module in place" model: after `Data.String.CodeUnits` is taken from the lib, its corefn
+references `Data.String.Internal.Utf8`, but that module is in neither the user's reachable closure
+(the user never imports it) nor the registry — a **dangling reference** at codegen.
+
+(Note the contrast: a shadow importing another *registry* module — `Data.String.CodePoints` →
+`Data.String.CodeUnits` — already works, because both are in the user's closure and both get
+resolved. Only a non-registry helper is missing. And `Wasm.*` is fine because it is **intrinsics, not
+modules** — no corefn to link.)
+
+The fix is to let the lib **inject** such modules into the build, via a three-step resolution that
+keeps the cheap import-list domain separate from the expensive materialization (mirroring the
+existing reachability-prune-then-decode two-phase shape):
+
+1. **Dependency graph** — read import lists from the user's `output/` (cheap, raw corefn).
+2. **Shadowing plan** — pure decision per module: `lib` (reached ∩ covered ∩ version-matched, §4) or
+   `user`. Still only import lists, no full parse.
+3. **Recompute the graph under the plan** — re-walk imports, but for a `lib`-planned module use the
+   **lib** corefn's import list. An import that is absent from the user's `output/` yet present in the
+   lib is an **internal module** (`B'`): add it, always sourced from the lib, and walk *its* lib
+   imports too. Iterate to a fixpoint.
+4. **Materialize** — once, on the converged set: load each module's corefn + externs from its planned
+   source (lib or user). Internal modules are read wholly from the lib.
+
+The plan and the graph are strictly **mutually dependent** (a lib corefn may pull in a registry
+module the user's version did not, which may itself be covered → shadowed). But "reached" only grows
+and the version match is static per package, so a module's source, once decided, never flips — the
+fixpoint is **monotone and terminates**. The version policy (§4) applies only to registry
+**packages**; an internal module rides in transitively because a shadowed module imports it, with no
+version of its own.
+
+This is exactly the in-code form of §3's file merge ("copy the lib modules into `_build` — overwrites
+*and* additions — then recompute reachability"), so building it now is a step **toward** the final
+architecture, not scope outside it. Naming convention: internal modules live under an `*.Internal.*`
+namespace so they never collide with a registry module name.
+
 ### e2e tests
 
 The harness's separate "registry modules + global wat layer (`ulibImports`)" path is removed. e2e
@@ -184,8 +234,10 @@ flowchart TD
 - standalone capability, closure specialization (ADR 0027), and registry interface compatibility are
   unchanged.
 - `ulib check` keeps its value (interface guard) and runs at install.
-- the duplicated UTF-8 codec across `CodeUnits` / `Common` / `Show` is consolidated into a
-  shared internal (non-exported) module during the migration.
+- ~~the duplicated UTF-8 codec across `CodeUnits` / `Common` / `Show` is consolidated into a
+  shared internal (non-exported) module during the migration.~~ *(refined — see §6 and the
+  2026-06-11 Update below: `Show` is out of scope; the codec shared by `CodeUnits` / `Common` moves
+  to an injected `*.Internal.*` module.)*
 
 **Confidence basis**
 
@@ -226,3 +278,13 @@ fixture in the migration.
 > now reads: build the `_build` last-wins merge + switch codegen to read it + delete
 > `shadowOrRegistry` / `loadShadowMap` / global-wat resolution, with the suite proving equivalence,
 > and add the forced graceful-fallback per-module-mix e2e fixture.
+
+> **Update (2026-06-11):** added **§6 (internal helper modules)**. Consolidating the UTF-8 codec
+> revealed that a shadow cannot depend on a non-registry helper without the lib **injecting** it into
+> the build (else a dangling corefn reference). The resolution is the plan → recompute → materialize
+> fixpoint of §6 — which is also the in-code form of §3's file merge, so it is forward progress, not
+> new scope. This **corrects** the "Preserved / changed" codec bullet: `Show` is **out of scope** (it
+> sits in the `prelude` layer and must encode via `Wasm.Int` to dodge the `Data.Ord`/EuclideanRing
+> import cycle, so it cannot share a `strings`-layer module); only `Data.String.{CodeUnits,Common}`
+> share the codec, via an injected `Data.String.Internal.Utf8`. Sequencing: the injection machinery
+> (§6) lands first as its own step, then the codec extraction rides on it.

@@ -36,10 +36,10 @@ import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, fi
 import PursWasm.CLI.Effect.Log (br)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
-import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
+import PursWasm.CLI.Module (entryRoot, printModname)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
-import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, shadowSet, ulibManifestFile)
-import PursWasm.CLI.Ulib.Shadow (loadShadowMap, shadowOrRegistry)
+import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, resolveModuleSet, ulibManifestFile)
+import PursWasm.CLI.Ulib.Shadow (loadShadowMap)
 import PursWasm.CLI.Version as Version
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
@@ -101,38 +101,64 @@ buildCmd cliRoot args = do
   -- `Prim` and the other built-in pseudo-modules have an output dir but no `corefn.json` (compiler
   -- intrinsics); skip any module whose CoreFn artifact is absent rather than failing the build.
   allMods <- Array.filterA (\mod -> joinPath [ args.input, printModname mod, "corefn.json" ] >>= exists) named
+  let allModNames = Set.fromFoldable (map printModname allMods)
   let roots = map entryRoot (Array.fromFoldable args.entryModules)
-  -- File-level reachability pruning (before the expensive full decode): read each module's imports
-  -- cheaply, then keep only the modules transitively reachable from the entry roots.
-  importPairs <- for allMods \mod -> do
-    source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
-    pure (Tuple (printModname mod) (corefnImportsImpl source))
-  let reachable = reachableClosure roots (Map.fromFoldable importPairs)
-  let mods = Array.filter (\mod -> Set.member (printModname mod) reachable) allMods
-  info (Log.green $ Fmt.fmt @"✓ {count} of {total} module(s) are selected." { count: Array.length mods, total: Array.length allMods }) *> br
   -- ADR 0031: read the ulib manifest + spago.lock once. `shadowSet` (manifest + lock, exact match)
-  -- now DRIVES resolution — a module is taken from the lib (shadowed) iff it is in this set; the
-  -- legacy `major.minor`-from-path decision is gone. `warnUlibVersionDrift` still surfaces a reached
-  -- package whose resolved version differs from the manifest. The manifest is read from the lib
-  -- itself (`$LIB/ulib-manifest.json`, copied in at install) so the precompiled lib is self-
-  -- describing — the build needs no ulib source tree (matters for the `ulib upgrade` user flow).
+  -- DRIVES resolution. The manifest is read from the lib itself (`$LIB/ulib-manifest.json`, copied in
+  -- at install) so the precompiled lib is self-describing — the build needs no ulib source tree
+  -- (matters for the `ulib upgrade` user flow).
   mManifest <- readManifest =<< joinPath [ libPath, ulibManifestFile ]
   mLock <- map parseLock <$> readText "spago.lock"
-  warnUlibVersionDrift mManifest mLock reachable
-  let shadowed = fromMaybe Set.empty (shadowSet <$> mManifest <*> mLock <*> pure reachable)
-  modules <- for mods \mod -> do
+  -- File-level reachability (before the expensive full decode): read each module's import list
+  -- cheaply, from the user output (registry) and — for every lib module that has a corefn — from the
+  -- lib. `resolveModuleSet` then runs the plan→recompute→materialize fixpoint (ADR 0031 §6): a
+  -- shadow's private helper module (absent from the user closure) is *injected* from the lib.
+  userImports <- map Map.fromFoldable $ for allMods \mod -> do
     source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
-    case parseModule source of
-      Left err -> logAndThrow (printModname mod <> ": " <> err)
-      Right m -> shadowOrRegistry shadowed shadows mod m
+    pure (Tuple (printModname mod) (corefnImportsImpl source))
+  libImports <- map (Map.fromFoldable <<< Array.catMaybes) $ for (Map.toUnfoldable shadows) \(Tuple name sh) ->
+    map (\src -> Tuple name (corefnImportsImpl src)) <$> readText sh.corefn
+  let { reachable, libSourced } = resolveModuleSet roots allModNames userImports libImports mManifest mLock
+  warnUlibVersionDrift mManifest mLock reachable
+  -- Keep only modules with an actual corefn source: a user module, or a real lib module. The closure
+  -- also reaches intrinsic / pseudo modules (`Wasm.*`, `Prim*`) the lib corefns import — those have no
+  -- corefn anywhere (resolved at codegen), so drop them, exactly as the old `allMods` filter did.
+  let resolvable n = Set.member n allModNames || Map.member n libImports
+  let modNames = Array.sort (Array.filter resolvable (Set.toUnfoldable reachable))
+  let injected = Array.filter (\n -> not (Set.member n allModNames)) modNames
+  info
+    ( Log.green $ Fmt.fmt @"✓ {count} of {total} module(s) are selected{extra}."
+        { count: Array.length modNames - Array.length injected
+        , total: Array.length allMods
+        , extra: if Array.null injected then "" else Fmt.fmt @" (+{k} ulib internal)" { k: Array.length injected }
+        }
+    ) *> br
+  -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
+  -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
+  -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
+  modules <- map Array.catMaybes $ for modNames \name -> do
+    mLibSrc <-
+      if Set.member name libSourced then maybe (pure Nothing) readText (Map.lookup name shadows <#> _.corefn)
+      else pure Nothing
+    mSrc <- case mLibSrc of
+      Just s -> pure (Just s)
+      Nothing -> readText =<< joinPath [ args.input, name, "corefn.json" ]
+    case mSrc of
+      Nothing -> pure Nothing
+      Just src -> case parseModule src of
+        Left err -> logAndThrow (name <> ": " <> err)
+        Right m -> pure (Just m)
   -- Fail early on a `wasm-base` incompatible with this backend (ADR 0026) / CoreFn from an
   -- unsupported purs (ADR 0029).
   either logAndThrow pure (checkWasmBaseCompat modules)
   either logAndThrow pure (checkCorefnVersions modules)
   -- Each module's `externs.cbor` carries the top-level type info CoreFn erased (front B); a module
-  -- without readable/decodable externs is simply skipped — its constructors fall back to boxed.
-  externs <- Array.catMaybes <$> for mods \mod ->
-    readExterns =<< joinPath [ args.input, printModname mod, "externs.cbor" ]
+  -- without readable/decodable externs is simply skipped — its constructors fall back to boxed. A
+  -- registry module's externs come from the user output (interface-compatible with the shadow, per
+  -- `ulib check`); an injected internal module's externs come from the lib (the user has none).
+  externs <- map Array.catMaybes $ for modNames \name ->
+    if Set.member name allModNames then readExterns =<< joinPath [ args.input, name, "externs.cbor" ]
+    else readExterns =<< joinPath [ libPath, name, "externs.cbor" ]
   allSigs <- buildForeignSigs args.input externs modules
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
   -- One bundle per build, written flat under `--output` (no per-module subdir): the build emits a

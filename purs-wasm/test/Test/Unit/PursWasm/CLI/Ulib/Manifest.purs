@@ -6,7 +6,8 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches, shadowSet)
+import PursWasm.CLI.Module (entryRoot)
+import PursWasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches, resolveModuleSet, shadowSet)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -80,3 +81,58 @@ spec = describe "PursWasm.CLI.Ulib.Manifest" do
       shadowSet fixture drifted (Set.fromFoldable [ "Data.Show", "Data.Array" ]) `shouldEqual` Set.fromFoldable [ "Data.Array" ]
     it "is empty when nothing is reached" do
       shadowSet fixture lock Set.empty `shouldEqual` (Set.empty :: Set.Set String)
+
+  describe "resolveModuleSet (ADR 0031 §6)" do
+    let
+      -- strings 6.0.1 covers the registry module CodeUnits; the lib's CodeUnits corefn imports the
+      -- non-registry internal helper `Internal.Utf8`.
+      strManifest = Map.fromFoldable [ Tuple "strings" { version: "6.0.1", modules: [ "Data.String.CodeUnits" ] } ]
+      matchLock = parseLock """{ "packages": { "strings": { "version": "6.0.1" } } }"""
+      roots = [ entryRoot "Main" ]
+      userMods = Set.fromFoldable [ "Main", "Data.String.CodeUnits" ]
+      userImports = Map.fromFoldable
+        [ Tuple "Main" [ "Data.String.CodeUnits" ]
+        , Tuple "Data.String.CodeUnits" [] -- registry CodeUnits does NOT import the internal helper
+        ]
+      libImports = Map.fromFoldable
+        [ Tuple "Data.String.CodeUnits" [ "Data.String.Internal.Utf8" ] -- the lib corefn does
+        , Tuple "Data.String.Internal.Utf8" []
+        ]
+
+    it "no manifest → nothing lib-sourced; reachable is the registry closure" do
+      let r = resolveModuleSet roots userMods userImports libImports Nothing Nothing
+      r.libSourced `shouldEqual` (Set.empty :: Set.Set String)
+      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.String.CodeUnits" ]
+
+    it "shadowed + version match → injects the private helper reached only via the lib corefn" do
+      let r = resolveModuleSet roots userMods userImports libImports (Just strManifest) (Just matchLock)
+      -- CodeUnits is shadowed; Internal.Utf8 is injected (not a user module, reached via lib imports)
+      r.libSourced `shouldEqual` Set.fromFoldable [ "Data.String.CodeUnits", "Data.String.Internal.Utf8" ]
+      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.String.CodeUnits", "Data.String.Internal.Utf8" ]
+
+    it "version mismatch → not shadowed, so the internal helper is never reached" do
+      let drift = parseLock """{ "packages": { "strings": { "version": "6.0.99" } } }"""
+      let r = resolveModuleSet roots userMods userImports libImports (Just strManifest) (Just drift)
+      r.libSourced `shouldEqual` (Set.empty :: Set.Set String)
+      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.String.CodeUnits" ]
+
+    it "an internal helper whose importer is unreached is not pulled in" do
+      -- Main imports nothing → CodeUnits (hence Internal.Utf8) stays out of the closure
+      let r = resolveModuleSet roots userMods (Map.fromFoldable [ Tuple "Main" [] ]) libImports (Just strManifest) (Just matchLock)
+      r.libSourced `shouldEqual` (Set.empty :: Set.Set String)
+      r.reachable `shouldEqual` Set.fromFoldable [ "Main" ]
+
+    it "a foreign-only covered module (no lib corefn) is lib-sourced via shadowing, not injection" do
+      -- integers covers Data.Int but the lib has no corefn for it (foreign-only) → absent from libImports
+      let intManifest = Map.fromFoldable [ Tuple "integers" { version: "6.0.0", modules: [ "Data.Int" ] } ]
+      let intLock = parseLock """{ "packages": { "integers": { "version": "6.0.0" } } }"""
+      let
+        r = resolveModuleSet [ entryRoot "Main" ] (Set.fromFoldable [ "Main", "Data.Int" ])
+          (Map.fromFoldable [ Tuple "Main" [ "Data.Int" ], Tuple "Data.Int" [] ])
+          Map.empty
+          (Just intManifest)
+          (Just intLock)
+      -- Data.Int is in libSourced (covered + reached + matched), so the caller will *try* the lib
+      -- corefn and fall back to the registry one; nothing is injected.
+      r.libSourced `shouldEqual` Set.fromFoldable [ "Data.Int" ]
+      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.Int" ]

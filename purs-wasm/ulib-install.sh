@@ -40,10 +40,13 @@ cp -R "$WASM_BASE/." "$TMP/src/"
 # 3. overlay shadows: replace the registry module with the ulib one, and drop its `.js` foreign
 #    (the ulib module has none — it is PureScript over WasmBase + a kept foreign provided by wat).
 #    Sources are `<package>/<Module>.purs` (dotted); overlay at the registry module's nested path.
+#    A ulib-internal helper (ADR 0031 §6, e.g. `Data.String.Internal.Utf8`) has no registry module,
+#    so its nested dir may not exist yet — `mkdir -p` before copying.
 shadows="$(cd "$ULIB_SRC" && find . -mindepth 2 -name '*.purs' | sed 's#^\./##')"
 for rel in $shadows; do
   mod="$(basename "$rel" .purs)"                       # e.g. Data.Functor
   modrel="$(printf '%s' "$mod" | tr . /).purs"         # e.g. Data/Functor.purs
+  mkdir -p "$(dirname "$TMP/src/$modrel")"
   cp "$ULIB_SRC/$rel" "$TMP/src/$modrel"
   rm -f "$TMP/src/${modrel%.purs}.js"
 done

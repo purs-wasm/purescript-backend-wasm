@@ -14,6 +14,7 @@ import Prelude
 import Data.Array as Array
 import Data.Foldable (for_)
 import Data.Map as Map
+import Data.Set as Set
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String as Str
 import Data.Traversable (for)
@@ -25,7 +26,7 @@ import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, execFile, info, joinPath, l
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Options.Types (UlibCheckOption, UlibInstallOption, UlibValidateOption)
-import PursWasm.CLI.Ulib.Manifest (manifestPackages, readManifest, ulibManifestFile)
+import PursWasm.CLI.Ulib.Manifest (manifestModules, manifestPackages, readManifest, ulibManifestFile)
 import PursWasm.CLI.Ulib.Version (majorMinor, splitPkgVer)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
@@ -118,31 +119,38 @@ ulibCheckCmd cliRoot opt = do
   -- absent OR present-but-empty (no module dirs) ⇒ "not installed" (see `ulibValidateCmd`); the
   -- self-describing `ulib-manifest.json` at the lib root is not a module dir, so exclude it.
   libMods <- Array.filter (_ /= ulibManifestFile) <<< fromMaybe [] <$> readDir libPath
+  -- the manifest's covered modules are the registry shadows; a lib module outside it is a ulib
+  -- *internal* helper (ADR 0031 §6) with no registry counterpart — there is no interface to check.
+  covered <- maybe Set.empty manifestModules <$> (readManifest =<< joinPath [ libPath, ulibManifestFile ])
   if Array.null libMods then info (Log.toLog "No lib installed (run `" <> Log.strong (Log.blue "ulib install") <> Log.toLog "`.)")
   else do
-    breaks <- map Array.catMaybes $ for libMods \mod -> do
-      libExt <- readExterns =<< joinPath [ libPath, mod, "externs.cbor" ]
-      usrExt <- readExterns =<< joinPath [ input, mod, "externs.cbor" ]
-      case libExt, usrExt of
-        -- a wat-only ulib module (e.g. Data.Int) has a `foreign.wasm` but no externs — not a
-        -- shadow, so there is no interface to check; the `Nothing` lib externs skips it below.
-        _, Nothing -> do
-          info (Fmt.fmt @"  - {m}: not compiled in your workspace; skipped" { m: mod })
-          pure Nothing
-        Nothing, _ -> do
-          info (Fmt.fmt @"  - {m}: no shadow externs (foreign-only or unreadable); skipped" { m: mod })
-          pure Nothing
-        Just le, Just ue -> do
-          let d = diffInterface (interfaceOf ue) (interfaceOf le)
-          if compatible d then do
-            info $ Log.cyan
-              ( Fmt.fmt @"  ✓ {m}: interface OK{extra}"
-                  { m: mod, extra: if Array.null d.extra then "" else " (+" <> show (Array.length d.extra) <> " extra)" }
-              )
+    breaks <- map Array.catMaybes $ for libMods \mod ->
+      if not (Set.member mod covered) then do
+        info (Fmt.fmt @"  - {m}: ulib internal helper (no registry interface); skipped" { m: mod })
+        pure Nothing
+      else do
+        libExt <- readExterns =<< joinPath [ libPath, mod, "externs.cbor" ]
+        usrExt <- readExterns =<< joinPath [ input, mod, "externs.cbor" ]
+        case libExt, usrExt of
+          -- a wat-only ulib module (e.g. Data.Int) has a `foreign.wasm` but no externs — not a
+          -- shadow, so there is no interface to check; the `Nothing` lib externs skips it below.
+          _, Nothing -> do
+            info (Fmt.fmt @"  - {m}: not compiled in your workspace; skipped" { m: mod })
             pure Nothing
-          else do
-            info $ Log.red (Fmt.fmt @"  ✗ {m}: missing {names}" { m: mod, names: Str.joinWith ", " d.missing })
-            pure (Just mod)
+          Nothing, _ -> do
+            info (Fmt.fmt @"  - {m}: no shadow externs (foreign-only or unreadable); skipped" { m: mod })
+            pure Nothing
+          Just le, Just ue -> do
+            let d = diffInterface (interfaceOf ue) (interfaceOf le)
+            if compatible d then do
+              info $ Log.cyan
+                ( Fmt.fmt @"  ✓ {m}: interface OK{extra}"
+                    { m: mod, extra: if Array.null d.extra then "" else " (+" <> show (Array.length d.extra) <> " extra)" }
+                )
+              pure Nothing
+            else do
+              info $ Log.red (Fmt.fmt @"  ✗ {m}: missing {names}" { m: mod, names: Str.joinWith ", " d.missing })
+              pure (Just mod)
     if Array.null breaks then info (Log.strong $ Log.green "✓ check OK.")
     else logAndThrow
       ( Fmt.fmt
