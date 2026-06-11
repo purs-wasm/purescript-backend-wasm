@@ -4,7 +4,7 @@
   "scripts": {
     "build:ps": "cd .. && spago build -p bench --output bench/output",
     "build:wasm": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main",
-    "build:wasm:base": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main --no-opt",
+    "build:wasm:base": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main",
     "build": "npm run build:ps && npm run build:wasm",
     "base": "npm run build:ps && npm run build:wasm:base && node run.mjs",
     "snapshot": "./snapshot.sh",
