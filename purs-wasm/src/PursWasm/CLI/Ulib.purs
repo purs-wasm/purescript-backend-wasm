@@ -28,15 +28,17 @@ import PursWasm.CLI.Ulib.Version (majorMinor, splitPkgVer)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
 
--- | `purs-wasm ulib install` (ADR 0028): compile the ulib shadows (`<cli>/../ulib/shadow/`)
--- | into the lib (corefn + externs) via `ulib-install.sh`. Skips if the lib already exists,
--- | unless `--force`. The shadow set is the dir structure (`<pkg>-<ver>/<Module path>.purs`),
--- | compiled against the resolved package-set sources (`.spago/p`) with WasmBase overlaid.
+-- | `purs-wasm ulib install` (ADR 0028/0031): compile the ulib modules (`<cli>/../ulib/<package>/
+-- | <Module>.purs`, ADR 0031 §2.1) into the lib (corefn + externs) via `ulib-install.sh`. Skips if
+-- | the lib already exists, unless `--force`. Versions come from `ulib-manifest.json` (no longer the
+-- | source path); compiled against the resolved package-set sources (`.spago/p`) with WasmBase
+-- | overlaid. The lib OUTPUT layout is still versioned (phase 3 relocates SOURCES only).
 ulibInstallCmd :: forall r. FilePath -> UlibInstallOption -> Run (FS + PROC + LOG + r) Unit
 ulibInstallCmd cliRoot opt = do
   libPath <- maybe (joinPath [ cliRoot, "..", "lib" ]) pure opt.libPath
   let purs = fromMaybe "purs" opt.purs
-  shadowRoot <- joinPath [ cliRoot, "..", "ulib", "shadow" ]
+  ulibSrc <- joinPath [ cliRoot, "..", "ulib" ]
+  manifest <- joinPath [ cliRoot, "..", "ulib", "ulib-manifest.json" ]
   wasmBaseSrc <- joinPath [ cliRoot, "..", "wasm-base", "src" ]
   script <- joinPath [ cliRoot, "ulib-install.sh" ]
   spagoP <- joinPath [ ".spago", "p" ]
@@ -48,7 +50,7 @@ ulibInstallCmd cliRoot opt = do
   else do
     when opt.force (execFile "rm" [ "-rf", libPath ])
     info $ Log.green "✓ Compiling shadows..."
-    execFile "sh" [ script, libPath, shadowRoot, wasmBaseSrc, purs, spagoP ]
+    execFile "sh" [ script, libPath, ulibSrc, wasmBaseSrc, purs, manifest, spagoP ]
     Log.br *> info (Log.strong $ Log.green "✓ ulib successfully installed!")
 
 -- | `purs-wasm ulib validate` (ADR 0028): for each installed shadow, check that the package

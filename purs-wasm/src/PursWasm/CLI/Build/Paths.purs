@@ -1,6 +1,6 @@
 -- | Fixed, **cwd-relative** paths the build shells out to / reads from. The CLI is run from the
 -- | repo root (every bench script / harness `cd`s there first), so these resolve against the cwd —
--- | distinct from the `cliRoot`-relative `lib`/`ulib/shadow` paths the ulib commands use.
+-- | distinct from the `cliRoot`-relative `lib`/`ulib` paths the ulib commands use.
 module PursWasm.CLI.Build.Paths
   ( runtimeWasm
   , loaderGlue

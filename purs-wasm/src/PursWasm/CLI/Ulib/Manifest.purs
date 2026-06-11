@@ -17,6 +17,7 @@ module PursWasm.CLI.Ulib.Manifest
   , Mismatch
   , reachedMismatches
   , shadowSet
+  , manifestPackages
   ) where
 
 import Prelude
@@ -115,3 +116,8 @@ shadowSet manifest lock reached =
   covered (Tuple pkg entry) =
     if lockVersion lock pkg == Just entry.version then Array.filter (\m -> Set.member m reached) entry.modules
     else []
+
+-- | The packages the manifest covers, each with its supported version — the `{pkg, ver}` shape the
+-- | (legacy, pre-0031) `ulib compat` derived from the `ulib/shadow/<pkg>-<ver>` directory names.
+manifestPackages :: Manifest -> Array { pkg :: String, ver :: String }
+manifestPackages = map (\(Tuple pkg entry) -> { pkg, ver: entry.version }) <<< Map.toUnfoldable

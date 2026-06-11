@@ -2,8 +2,8 @@
 -- | package-set version the ulib shadows are pinned to, the exact version each shadow targets, and
 -- | the `purs` compiler the shipped lib is built with (ADR 0028/0029).
 -- |
--- | `spago.lock` is the authoritative version source; the shadow set is the `ulib/shadow/<pkg>-<ver>`
--- | directory structure; the purs pin is cross-checked (regenerate only, online best-effort) against
+-- | `spago.lock` is the authoritative version source; the shadow set + versions come from
+-- | `ulib-manifest.json` (ADR 0031); the purs pin is cross-checked (regenerate only, online best-effort) against
 -- | the registry's per-version `compilers` lists via `spago registry info <pkg> --json`.
 -- |
 -- | Paths are cwd-relative (the command is run from the repo root, like the prototype). The pure
@@ -41,11 +41,12 @@ import Data.String.Regex.Unsafe (unsafeRegex)
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Foreign.Object as FO
-import PursWasm.CLI.Effect (FS, LOG, exists, info, logAndThrow, readDir, readText, writeText)
+import PursWasm.CLI.Effect (FS, LOG, exists, info, logAndThrow, readText, writeText)
 import PursWasm.CLI.Effect.Registry (REGISTRY, supportedCompilers)
 import PursWasm.CLI.Options.Types (UlibCompatOption)
 import PursWasm.CLI.Ulib.Compat.Types (Compat, CompatCore, encodeCompat, readCompatCore)
-import PursWasm.CLI.Ulib.Version (compareVersion, majorMinor, splitPkgVer)
+import PursWasm.CLI.Ulib.Manifest (manifestPackages, readManifest)
+import PursWasm.CLI.Ulib.Version (compareVersion, majorMinor)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
 
@@ -53,8 +54,10 @@ import Type.Row (type (+))
 lockPath :: String
 lockPath = "spago.lock"
 
-shadowRoot :: String
-shadowRoot = "ulib/shadow"
+-- | ADR 0031: the shadow set + versions now come from `ulib-manifest.json` (the curated source of
+-- | truth), not the `ulib/shadow/<pkg>-<ver>` directory names (which moved to `ulib/<package>/`).
+manifestPath :: String
+manifestPath = "ulib/ulib-manifest.json"
 
 compatPath :: String
 compatPath = "ulib/compat.json"
@@ -143,7 +146,7 @@ ulibCompatCmd opt = do
     Nothing -> logAndThrow ("ulib-compat: " <> lockPath <> " not found (run a spago build first).")
     Just lockTxt -> do
       let lock = parseLock lockTxt
-      shadows <- map (maybe [] (map splitPkgVer)) (readDir shadowRoot)
+      shadows <- map (maybe [] manifestPackages) (readManifest manifestPath)
       let core = deriveCore lock shadows
       priorTxt <- readText compatPath
       if opt.check then runCheck lock shadows core priorTxt

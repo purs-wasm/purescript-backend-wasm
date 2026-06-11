@@ -14,17 +14,19 @@ import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 import Test.Unit.PursWasm.CLI.Effect.Memory (emptyWorld, runMem, worldOfText)
 
--- The install-script invocation the command builds from `cliRoot` + the defaults: the script
--- beside the CLI, the lib/shadow/wasm-base dirs relative to `<cli>/..`, `purs` on PATH, and the
--- `.spago/p` package-set sources. (The in-memory `joinPath` keeps `..` and drops `.`/empty.)
+-- The install-script invocation the command builds from `cliRoot` + the defaults (ADR 0031): the
+-- script beside the CLI, the lib/ulib/wasm-base dirs relative to `<cli>/..`, `purs` on PATH, the
+-- `ulib-manifest.json` (the version source), and the `.spago/p` package-set sources. (The in-memory
+-- `joinPath` keeps `..` and drops `.`/empty.)
 defaultInvoke :: Tuple String (Array String)
 defaultInvoke =
   Tuple "sh"
     [ "cli/ulib-install.sh"
     , "cli/../lib"
-    , "cli/../ulib/shadow"
+    , "cli/../ulib"
     , "cli/../wasm-base/src"
     , "purs"
+    , "cli/../ulib/ulib-manifest.json"
     , ".spago/p"
     ]
 
@@ -59,9 +61,10 @@ spec = describe "PursWasm.CLI.Ulib.ulibInstallCmd" do
       [ Tuple "sh"
           [ "cli/ulib-install.sh"
           , "out/mylib"
-          , "cli/../ulib/shadow"
+          , "cli/../ulib"
           , "cli/../wasm-base/src"
           , "/usr/bin/purs"
+          , "cli/../ulib/ulib-manifest.json"
           , ".spago/p"
           ]
       ]
