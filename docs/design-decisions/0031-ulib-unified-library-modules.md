@@ -210,3 +210,19 @@ fixture in the migration.
    `ulib upgrade`, and retire the in-`purs-wasm` `validate` / `compat` subcommands + the scattered
    `*.mjs` scripts. Consolidate the UTF-8 codec; tidy WasmBase.
 7. Promote this record's status notes and integrate the supersession into ADRs 0012 / 0028 / 0029.
+
+> **Update (2026-06-11):** phases 1 & 2 implemented. Phase 2 was **refined** to avoid building a
+> throwaway parallel pipeline: rather than running the `_build`-overwrite merge + codegen *alongside*
+> `shadowOrRegistry` (which would mean a second codegen per build, or a full input copy, purely for a
+> diff), the new resolution is captured as a pure function `Ulib.Manifest.shadowSet` (reached ∩
+> covered ∩ **exact** version match) and **diffed against the legacy `shadowOrRegistry` decision at
+> debug level** (`Build.debugResolutionDiff`) — a migration regression guard that surfaces where the
+> legacy `major.minor` match and the new exact match disagree (e.g. a patch bump). It is dormant
+> in-repo (the sets agree). The **actual `_build` merge pipeline + the codegen switch** and the
+> **per-module-mix coverage** therefore move into **phase 4 (the switch)**, where the existing test
+> suite is the byte-equivalence check and the mix to test becomes the new *graceful → JS* fallback
+> (mixes of shadow + registry modules are already exercised pervasively by every example build, so
+> forcing one *in-repo* added little; it is meaningful once the merge drives the build). So phase 4
+> now reads: build the `_build` last-wins merge + switch codegen to read it + delete
+> `shadowOrRegistry` / `loadShadowMap` / global-wat resolution, with the suite proving equivalence,
+> and add the forced graceful-fallback per-module-mix e2e fixture.

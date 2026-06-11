@@ -38,8 +38,9 @@ import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
-import PursWasm.CLI.Ulib.Manifest (parseLock, reachedMismatches, readManifest)
+import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, shadowSet)
 import PursWasm.CLI.Ulib.Shadow (loadShadowMap, shadowOrRegistry)
+import PursWasm.CLI.Ulib.Version (majorMinor, pkgVersionFromPath)
 import PursWasm.CLI.Version as Version
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
@@ -63,25 +64,40 @@ humanSize b
   | otherwise = toStringWith (fixed 1) (toNumber b / 1048576.0) <> " MB"
 
 -- | ADR 0031 (migration phase 1): warn — never fail — when a *reached* ulib package's resolved
--- | version (`spago.lock`, cwd-relative) differs from the version `ulib-manifest.json` supports.
--- | An absent manifest / spago.lock makes it a no-op. This is the new manifest-based rail laid
--- | beside the existing `Ulib.Shadow.shadowOrRegistry`; it changes no behaviour yet.
-warnUlibVersionDrift :: forall r. FilePath -> Set.Set String -> Run (FS + LOG + r) Unit
-warnUlibVersionDrift cliRoot reachable = do
-  manifestPath <- resolvePath [ cliRoot, "..", "ulib" ] "ulib-manifest.json"
-  mManifest <- readManifest manifestPath
-  mLock <- map parseLock <$> readText "spago.lock"
-  case mManifest, mLock of
-    Just manifest, Just lock ->
-      for_ (reachedMismatches manifest lock reachable) \mm ->
-        warn
-          ( Log.yellow
-              ( Fmt.fmt
-                  @"⚠ ulib: {pkg} is {got}, but ulib supports {want} — those modules fall back to the registry foreign (run `ulib upgrade`, or align the package-set)"
-                  { pkg: mm.package, got: fromMaybe "?" mm.got, want: mm.want }
-              )
-          )
-    _, _ -> pure unit
+-- | version (`spago.lock`) differs from the version `ulib-manifest.json` supports. Absent
+-- | manifest/lock → no-op. The new manifest-based rail beside `shadowOrRegistry`; changes nothing.
+warnUlibVersionDrift :: forall r. Maybe Manifest -> Maybe LockView -> Set.Set String -> Run (LOG + r) Unit
+warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
+  Just manifest, Just lock ->
+    for_ (reachedMismatches manifest lock reachable) \mm ->
+      warn
+        ( Log.yellow
+            ( Fmt.fmt
+                @"⚠ ulib: {pkg} is {got}, but ulib supports {want} — those modules fall back to the registry foreign (run `ulib upgrade`, or align the package-set)"
+                { pkg: mm.package, got: fromMaybe "?" mm.got, want: mm.want }
+            )
+        )
+  _, _ -> pure unit
+
+-- | ADR 0031 (migration phase 2): the new manifest+lock resolution (`shadowSet`) is computed
+-- | *alongside* the legacy `shadowOrRegistry` and the two are diffed. They agree wherever the
+-- | resolved versions equal the manifest (the in-repo case); a divergence — e.g. the legacy
+-- | `major.minor` match accepting a patch the new *exact* match rejects — is logged at debug. This
+-- | drives no behaviour; it is a migration regression guard until the merge pipeline takes over.
+debugResolutionDiff :: forall r. Maybe Manifest -> Maybe LockView -> Set.Set String -> Set.Set String -> Run (LOG + r) Unit
+debugResolutionDiff mManifest mLock reachable oldShadowed = case mManifest, mLock of
+  Just manifest, Just lock ->
+    let
+      newShadowed = shadowSet manifest lock reachable
+    in
+      when (oldShadowed /= newShadowed)
+        ( debug
+            ( Fmt.fmt
+                @"[ADR0031 migration] resolution diff — legacy shadows {old}, manifest {new}"
+                { old: show (Set.toUnfoldable oldShadowed :: Array String), new: show (Set.toUnfoldable newShadowed :: Array String) }
+            )
+        )
+  _, _ -> pure unit
 
 buildCmd :: forall r. FilePath -> BuildOption -> Run (FS + PROC + LOG + EFFECT + r) Unit
 buildCmd cliRoot args = do
@@ -115,16 +131,30 @@ buildCmd cliRoot args = do
   let reachable = reachableClosure roots (Map.fromFoldable importPairs)
   let mods = Array.filter (\mod -> Set.member (printModname mod) reachable) allMods
   info (Log.green $ Fmt.fmt @"✓ {count} of {total} module(s) are selected." { count: Array.length mods, total: Array.length allMods }) *> br
-  -- ADR 0031 (migration phase 1, warn-only): the manifest-based version check, laid beside the
-  -- existing `shadowOrRegistry` *without changing behaviour*. For each reached ulib package whose
-  -- resolved version (`spago.lock`) differs from the version `ulib-manifest.json` supports, warn —
-  -- never fail. An absent manifest / spago.lock skips the check.
-  warnUlibVersionDrift cliRoot reachable
-  modules <- for mods \mod -> do
+  -- ADR 0031 (migration phases 1-2): read the ulib manifest + spago.lock once; the version-drift
+  -- warn (phase 1) and the resolution-equivalence diff (phase 2) are both warn/debug-only and drive
+  -- no behaviour. The legacy `shadowOrRegistry` still resolves each module below.
+  mManifest <- readManifest =<< resolvePath [ cliRoot, "..", "ulib" ] "ulib-manifest.json"
+  mLock <- map parseLock <$> readText "spago.lock"
+  warnUlibVersionDrift mManifest mLock reachable
+  resolved <- for mods \mod -> do
     source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
     case parseModule source of
       Left err -> logAndThrow (printModname mod <> ": " <> err)
-      Right m -> shadowOrRegistry shadows mod m
+      Right m -> do
+        decoded <- shadowOrRegistry shadows mod m
+        pure { name: printModname mod, registryPath: m.path, decoded }
+  let modules = map _.decoded resolved
+  -- The legacy shadow set (what `shadowOrRegistry` actually shadowed: a covered module whose source
+  -- path's `major.minor` matches its shadow target), diffed against the manifest's `shadowSet`.
+  let
+    oldShadowed = Set.fromFoldable $ Array.mapMaybe
+      ( \r -> case Map.lookup r.name shadows of
+          Just s | (majorMinor <$> pkgVersionFromPath s.package r.registryPath) == Just (majorMinor s.version) -> Just r.name
+          _ -> Nothing
+      )
+      resolved
+  debugResolutionDiff mManifest mLock reachable oldShadowed
   -- Fail early on a `wasm-base` incompatible with this backend (ADR 0026) / CoreFn from an
   -- unsupported purs (ADR 0029).
   either logAndThrow pure (checkWasmBaseCompat modules)

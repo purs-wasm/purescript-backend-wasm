@@ -16,6 +16,7 @@ module PursWasm.CLI.Ulib.Manifest
   , lockVersion
   , Mismatch
   , reachedMismatches
+  , shadowSet
   ) where
 
 import Prelude
@@ -102,3 +103,15 @@ reachedMismatches manifest lock reached =
     in
       if Array.any (\m -> Set.member m reached) entry.modules && got /= Just entry.version then Just { package, want: entry.version, got }
       else Nothing
+
+-- | The set of modules that resolve to the ulib (lib) corefn under the new policy (ADR 0031): a
+-- | covered module is used iff it is reachable AND its package's resolved version (`spago.lock`)
+-- | **exactly** equals the manifest version. This is the resolution the last-wins merge will drive;
+-- | in migration phase 2 it is computed only to diff against the legacy `shadowOrRegistry`.
+shadowSet :: Manifest -> LockView -> Set String -> Set String
+shadowSet manifest lock reached =
+  Set.fromFoldable (Array.concatMap covered (Map.toUnfoldable manifest))
+  where
+  covered (Tuple pkg entry) =
+    if lockVersion lock pkg == Just entry.version then Array.filter (\m -> Set.member m reached) entry.modules
+    else []

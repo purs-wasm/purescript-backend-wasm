@@ -6,7 +6,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches)
+import PursWasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches, shadowSet)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -66,3 +66,17 @@ spec = describe "PursWasm.CLI.Ulib.Manifest" do
     it "is empty when every reached package matches" do
       let matching = parseLock """{ "packages": { "prelude": { "version": "6.0.2" }, "arrays": { "version": "7.3.0" } } }"""
       reachedMismatches fixture matching (Set.fromFoldable [ "Data.Show", "Data.Array" ]) `shouldEqual` []
+
+  describe "shadowSet" do
+    let
+      lock = parseLock """{ "packages": { "prelude": { "version": "6.0.2" }, "arrays": { "version": "7.3.0" } } }"""
+    it "includes a covered module that is reached and version-matched" do
+      shadowSet fixture lock (Set.fromFoldable [ "Data.Show", "Data.Array" ])
+        `shouldEqual` Set.fromFoldable [ "Data.Show", "Data.Array" ]
+    it "includes only the reached modules of a matched package" do
+      shadowSet fixture lock (Set.fromFoldable [ "Data.Show" ]) `shouldEqual` Set.fromFoldable [ "Data.Show" ]
+    it "excludes a package whose version differs, even when reached (exact match)" do
+      let drifted = parseLock """{ "packages": { "prelude": { "version": "6.0.99" }, "arrays": { "version": "7.3.0" } } }"""
+      shadowSet fixture drifted (Set.fromFoldable [ "Data.Show", "Data.Array" ]) `shouldEqual` Set.fromFoldable [ "Data.Array" ]
+    it "is empty when nothing is reached" do
+      shadowSet fixture lock Set.empty `shouldEqual` (Set.empty :: Set.Set String)
