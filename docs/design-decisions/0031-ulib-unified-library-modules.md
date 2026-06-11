@@ -314,3 +314,27 @@ fixture in the migration.
 > everything, the legacy runner, the global `ulib/<M>/foreign.wat` layer, and `build-ulib.mjs` retire
 > together — collapsing "three paths" to one. Host-FFI suites (`FFI`/`HostEff`/…) need import wiring in
 > the new harness and migrate in a later batch.
+
+> **Update (2026-06-11):** **phase 5 complete — "three paths → one."** The legacy in-process
+> corefn-fixture e2e runner (`Test.E2E.Legacy` + the `Test.E2E.Wasm` harness with `ulibImports`) and
+> all its suites are deleted; `Test.E2E.Cli` (real `purs-wasm build` over the `e2e-fixtures` package,
+> 144 tests) is the only e2e. The **global `ulib/<M>/foreign.wat` layer and `build-ulib.mjs` are
+> removed** — nothing reads them anymore (the product moved to the lib in phase 4; `showNumber.mjs`
+> now drives the `E2E.ShowNumber` fixture through the loader). `test:e2e` = the CLI suite; `build:ulib`
+> is gone from every script (`test:bin` / `test:shownumber` / bench). One gap surfaced and is deferred:
+> **record host-marshalling** does not round-trip through the real loader (the CLI derives an opaque
+> `Object` kind for a record foreign, and `internStr` is exported only for record *export* sigs, not
+> *import* sigs) — the legacy harness had masked it. String / Array / closure / Boolean / Number /
+> nullary / Effect host-FFI all work end to end. Co-located `ulib/{package}/{Module}.wat` sources, the
+> lib's `$LIB/<Module>/foreign.wat` (sig source, §6.1), and `_header.wat` are untouched.
+
+> **Update (2026-06-11):** **phase 6 done — the CLIs are split.** The user binary `purs-wasm` now
+> exposes only `build`; the maintainer ops moved to a new one-level package **`ulib-tooling`**
+> (`install` / `check` / `compat`) with its own `Main` / `Options` / `index.dev.js` / `ulib-install.sh`,
+> depending on `purs-wasm` for the shared infra (effect layer, `Ulib.Manifest`, `Ulib.Shadow`,
+> `Externs`, `Build.Paths`) so the maintainer machinery never ships in the lean user binary. `Ulib`
+> (→ `UlibTooling.Commands`), `Ulib.Compat`, `Ulib.Compat.Types`, `Ulib.Version` moved out;
+> `validate` was **retired** (the build-time check, §4, covers it). Call sites that build the lib now
+> run `spago build -p ulib-tooling` (which also builds `purs-wasm`) + `node ulib-tooling/index.dev.js
+> install`; CI gained a `ulib-tooling` matrix leg. Deferred: the user `ulib upgrade` op, and `compat`
+> → `track`/`publish` (ADR §5) — future work, fine to do at the first post-release ulib version bump.
