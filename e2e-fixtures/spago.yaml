@@ -4,5 +4,8 @@ package:
   # the actual `purs-wasm build` pipeline into a standalone wasm, then instantiated and asserted by
   # `Test.E2E.Cli`. Migrated incrementally from the legacy corefn-fixture suite (`Test.E2E.Legacy`).
   dependencies:
+    - integers
     - maybe
     - prelude
+    - record
+    - unsafe-coerce

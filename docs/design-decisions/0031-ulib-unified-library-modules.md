@@ -302,3 +302,15 @@ fixture in the migration.
 > import cycle, so it cannot share a `strings`-layer module); only `Data.String.{CodeUnits,Common}`
 > share the codec, via an injected `Data.String.Internal.Utf8`. Sequencing: the injection machinery
 > (§6) lands first as its own step, then the codec extraction rides on it.
+
+> **Update (2026-06-11):** phases 1–4 done; the product no longer reads the ulib source tree (sigs +
+> `_header.wat` ship in the lib). **Phase 5 started (e2e → real pipeline)**, executed incrementally:
+> the legacy in-process corefn-fixture runner (`Test.E2E.Wasm` + `ulibImports`, ~45 suites) is
+> **renamed `Test.E2E.Legacy` and kept running** for coverage, while a new **CLI-driven** runner
+> (`Test.E2E.Cli`) instantiates each fixture's *prebuilt standalone wasm* — `e2eCliPrebuild.mjs` runs
+> the real `purs-wasm build` over a new `e2e-fixtures` package, so there is no separate link path and
+> no `ulibImports` (instantiated with `{}`). `test:e2e` = `legacy && cli`. Suites migrate batch by
+> batch (real `.purs` fixtures, reusing the legacy `.purs.sample` sources); once `Test.E2E.Cli` covers
+> everything, the legacy runner, the global `ulib/<M>/foreign.wat` layer, and `build-ulib.mjs` retire
+> together — collapsing "three paths" to one. Host-FFI suites (`FFI`/`HostEff`/…) need import wiring in
+> the new harness and migrate in a later batch.

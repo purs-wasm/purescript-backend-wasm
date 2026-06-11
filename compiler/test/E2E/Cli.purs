@@ -9,11 +9,21 @@ import Prelude
 
 import Effect (Effect)
 import Test.E2E.Cli.AsPattern as AsPattern
+import Test.E2E.Cli.FibAnd as FibAnd
+import Test.E2E.Cli.IntConv as IntConv
 import Test.E2E.Cli.NestedRecordPat as NestedRecordPat
 import Test.E2E.Cli.PreludeArith as PreludeArith
 import Test.E2E.Cli.PreludeBool as PreludeBool
+import Test.E2E.Cli.PreludeBounded as PreludeBounded
+import Test.E2E.Cli.PreludeCompare as PreludeCompare
+import Test.E2E.Cli.PreludeEqOrd as PreludeEqOrd
+import Test.E2E.Cli.PreludeErased as PreludeErased
 import Test.E2E.Cli.PreludeEuclid as PreludeEuclid
+import Test.E2E.Cli.PreludeFnInstance as PreludeFnInstance
+import Test.E2E.Cli.PreludeFunctor as PreludeFunctor
 import Test.E2E.Cli.PreludeGuards as PreludeGuards
+import Test.E2E.Cli.RecordInstances as RecordInstances
+import Test.E2E.Cli.RecordUnsafe as RecordUnsafe
 import Test.E2E.Cli.Records as Records
 import Test.E2E.Cli.TailCall as TailCall
 import Test.Spec.Reporter (consoleReporter)
@@ -23,9 +33,19 @@ main :: Effect Unit
 main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeArith.spec
   PreludeBool.spec
+  PreludeCompare.spec
+  PreludeEqOrd.spec
   PreludeEuclid.spec
+  PreludeBounded.spec
+  PreludeErased.spec
+  PreludeFnInstance.spec
+  PreludeFunctor.spec
   PreludeGuards.spec
   Records.spec
+  RecordInstances.spec
+  RecordUnsafe.spec
   AsPattern.spec
   NestedRecordPat.spec
+  IntConv.spec
+  FibAnd.spec
   TailCall.spec
