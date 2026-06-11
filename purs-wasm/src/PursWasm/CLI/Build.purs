@@ -32,12 +32,13 @@ import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, resolvePath, unlink, writeBinary, writeText)
+import PursWasm.CLI.Effect (FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, resolvePath, unlink, warn, writeBinary, writeText)
 import PursWasm.CLI.Effect.Log (br)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
+import PursWasm.CLI.Ulib.Manifest (parseLock, reachedMismatches, readManifest)
 import PursWasm.CLI.Ulib.Shadow (loadShadowMap, shadowOrRegistry)
 import PursWasm.CLI.Version as Version
 import Run (Run, EFFECT, liftEffect)
@@ -60,6 +61,27 @@ humanSize b
   | b < 1024 = show b <> " B"
   | b < 1048576 = toStringWith (fixed 1) (toNumber b / 1024.0) <> " KB"
   | otherwise = toStringWith (fixed 1) (toNumber b / 1048576.0) <> " MB"
+
+-- | ADR 0031 (migration phase 1): warn — never fail — when a *reached* ulib package's resolved
+-- | version (`spago.lock`, cwd-relative) differs from the version `ulib-manifest.json` supports.
+-- | An absent manifest / spago.lock makes it a no-op. This is the new manifest-based rail laid
+-- | beside the existing `Ulib.Shadow.shadowOrRegistry`; it changes no behaviour yet.
+warnUlibVersionDrift :: forall r. FilePath -> Set.Set String -> Run (FS + LOG + r) Unit
+warnUlibVersionDrift cliRoot reachable = do
+  manifestPath <- resolvePath [ cliRoot, "..", "ulib" ] "ulib-manifest.json"
+  mManifest <- readManifest manifestPath
+  mLock <- map parseLock <$> readText "spago.lock"
+  case mManifest, mLock of
+    Just manifest, Just lock ->
+      for_ (reachedMismatches manifest lock reachable) \mm ->
+        warn
+          ( Log.yellow
+              ( Fmt.fmt
+                  @"⚠ ulib: {pkg} is {got}, but ulib supports {want} — those modules fall back to the registry foreign (run `ulib upgrade`, or align the package-set)"
+                  { pkg: mm.package, got: fromMaybe "?" mm.got, want: mm.want }
+              )
+          )
+    _, _ -> pure unit
 
 buildCmd :: forall r. FilePath -> BuildOption -> Run (FS + PROC + LOG + EFFECT + r) Unit
 buildCmd cliRoot args = do
@@ -93,6 +115,11 @@ buildCmd cliRoot args = do
   let reachable = reachableClosure roots (Map.fromFoldable importPairs)
   let mods = Array.filter (\mod -> Set.member (printModname mod) reachable) allMods
   info (Log.green $ Fmt.fmt @"✓ {count} of {total} module(s) are selected." { count: Array.length mods, total: Array.length allMods }) *> br
+  -- ADR 0031 (migration phase 1, warn-only): the manifest-based version check, laid beside the
+  -- existing `shadowOrRegistry` *without changing behaviour*. For each reached ulib package whose
+  -- resolved version (`spago.lock`) differs from the version `ulib-manifest.json` supports, warn —
+  -- never fail. An absent manifest / spago.lock skips the check.
+  warnUlibVersionDrift cliRoot reachable
   modules <- for mods \mod -> do
     source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
     case parseModule source of

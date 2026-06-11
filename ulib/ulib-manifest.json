@@ -1,0 +1,18 @@
+{
+  "arrays": {
+    "version": "7.3.0",
+    "modules": ["Data.Array"]
+  },
+  "foldable-traversable": {
+    "version": "6.0.0",
+    "modules": ["Data.Foldable"]
+  },
+  "prelude": {
+    "version": "6.0.2",
+    "modules": ["Control.Apply", "Control.Bind", "Data.Eq", "Data.Functor", "Data.Ord", "Data.Show"]
+  },
+  "strings": {
+    "version": "6.0.1",
+    "modules": ["Data.String.CodePoints", "Data.String.CodeUnits", "Data.String.Common", "Data.String.Unsafe"]
+  }
+}
