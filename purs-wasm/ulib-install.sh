@@ -2,12 +2,9 @@
 # Build the ulib shadow library (ADR 0028/0031): compile each ulib module in
 # `<ulib-src>/<package>/<Module>.purs` (dotted, flat per package — ADR 0031 §2.1) against the
 # resolved package-set sources (so its imports/interface resolve) with WasmBase overlaid, then
-# extract the modules' corefn + externs into `<lib>/<package>-<version>/<Module>/`. The version is
-# read from `<manifest>` (`ulib-manifest.json`) since it is no longer encoded in the source path.
-#
-# NOTE (ADR 0031 migration phase 3): only the SOURCE layout moved; the lib OUTPUT layout is still the
-# versioned `<package>-<version>/<Module>/` so `loadShadowMap` / `shadowOrRegistry` / `ulib validate`
-# keep working unchanged. The new `$LIB/<Module>/` layout lands at the switch (phase 4).
+# extract the modules' corefn + externs into the flat `<lib>/<Module>/` layout (ADR 0031 §2.2). The
+# version lives only in `<manifest>` (`ulib-manifest.json`); `pkgver` reads it for the install log
+# and as the "package must be ulib-covered" guard.
 #
 # Invoked by `purs-wasm ulib install` as:
 #   sh ulib-install.sh <lib> <ulib-src> <wasm-base-src> <purs> <manifest> <wasm-as> [<spago-packages-dir>]
@@ -54,18 +51,25 @@ done
 # 4. compile the whole set to corefn (+ externs, for `ulib check`).
 "$PURS" compile --codegen corefn --output "$TMP/output" "$TMP/src/**/*.purs"
 
-# 5. extract the shadowed modules into the (still versioned) lib layout; a sibling co-located `.wat`
-#    (the module's kept foreign, e.g. Data.Show's showNumberImpl) is assembled into `foreign.wasm`,
-#    so the build provides it from the lib instead of the global ulib wat layer.
+# 4b. copy the manifest into the lib root so the precompiled lib is self-describing (ADR 0031): the
+#     build + `ulib validate` read versions from `$LIB/ulib-manifest.json`, needing no ulib source.
+mkdir -p "$LIB"
+cp "$MANIFEST" "$LIB/ulib-manifest.json"
+
+# 5. extract the shadowed modules into the flat `$LIB/<Module>/` lib layout (ADR 0031 §2.2 — the
+#    version is in the manifest, not the path); a sibling co-located `.wat` (the module's kept
+#    foreign, e.g. Data.Show's showNumberImpl) is assembled into `foreign.wasm`. `pkgver` still runs
+#    (its manifest lookup is the "package must be ulib-covered" check + the install log).
 for rel in $shadows; do
   pkg="${rel%%/*}"; mod="$(basename "$rel" .purs)"
-  dst="$LIB/$(pkgver "$pkg")/$mod"
+  pv="$(pkgver "$pkg")"
+  dst="$LIB/$mod"
   mkdir -p "$dst"
   cp "$TMP/output/$mod/corefn.json" "$dst/corefn.json"
   cp "$TMP/output/$mod/externs.cbor" "$dst/externs.cbor"
   wat="$ULIB_SRC/$pkg/$mod.wat"
   [ -f "$wat" ] && assemble_wat "$wat" "$dst/foreign.wasm"
-  echo "  ulib: installed $mod ($pkg)"
+  echo "  ulib: installed $mod ($pv)"
 done
 
 # 6. ADR 0031: wat-only ulib modules — a co-located `<package>/<Module>.wat` with NO sibling `.purs`
@@ -76,8 +80,9 @@ wats="$(cd "$ULIB_SRC" && find . -mindepth 2 -name '*.wat' ! -name 'foreign.wat'
 for rel in $wats; do
   pkg="${rel%%/*}"; mod="$(basename "$rel" .wat)"
   [ -f "$ULIB_SRC/$pkg/$mod.purs" ] && continue          # a shadow — already handled in step 5
-  dst="$LIB/$(pkgver "$pkg")/$mod"
+  pv="$(pkgver "$pkg")"
+  dst="$LIB/$mod"
   mkdir -p "$dst"
   assemble_wat "$ULIB_SRC/$rel" "$dst/foreign.wasm"
-  echo "  ulib: installed $mod ($pkg, foreign only)"
+  echo "  ulib: installed $mod ($pv, foreign only)"
 done

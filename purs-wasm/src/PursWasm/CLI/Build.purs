@@ -38,7 +38,7 @@ import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
 import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
-import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, shadowSet)
+import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, shadowSet, ulibManifestFile)
 import PursWasm.CLI.Ulib.Shadow (loadShadowMap, shadowOrRegistry)
 import PursWasm.CLI.Version as Version
 import Run (Run, EFFECT, liftEffect)
@@ -113,8 +113,10 @@ buildCmd cliRoot args = do
   -- ADR 0031: read the ulib manifest + spago.lock once. `shadowSet` (manifest + lock, exact match)
   -- now DRIVES resolution — a module is taken from the lib (shadowed) iff it is in this set; the
   -- legacy `major.minor`-from-path decision is gone. `warnUlibVersionDrift` still surfaces a reached
-  -- package whose resolved version differs from the manifest.
-  mManifest <- readManifest =<< resolvePath [ cliRoot, "..", "ulib" ] "ulib-manifest.json"
+  -- package whose resolved version differs from the manifest. The manifest is read from the lib
+  -- itself (`$LIB/ulib-manifest.json`, copied in at install) so the precompiled lib is self-
+  -- describing — the build needs no ulib source tree (matters for the `ulib upgrade` user flow).
+  mManifest <- readManifest =<< joinPath [ libPath, ulibManifestFile ]
   mLock <- map parseLock <$> readText "spago.lock"
   warnUlibVersionDrift mManifest mLock reachable
   let shadowed = fromMaybe Set.empty (shadowSet <$> mManifest <*> mLock <*> pure reachable)

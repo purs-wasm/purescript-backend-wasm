@@ -9,6 +9,7 @@
 module PursWasm.CLI.Ulib.Manifest
   ( PkgEntry
   , Manifest
+  , ulibManifestFile
   , readManifest
   , parseManifest
   , LockView
@@ -39,6 +40,12 @@ import Foreign.Object as FO
 import PursWasm.CLI.Effect (FS, FilePath, readText)
 import Run (Run)
 import Type.Row (type (+))
+
+-- | The manifest's filename. It is copied into the installed lib (`$LIB/ulib-manifest.json`, ADR
+-- | 0031) so the precompiled lib is self-describing — a user with only `$PURS_WASM_LIB` (no ulib
+-- | source tree) can still resolve shadows and `validate`. Lib scanners filter this entry out.
+ulibManifestFile :: String
+ulibManifestFile = "ulib-manifest.json"
 
 -- | A manifest entry: the one supported version of a ulib package, and the modules it covers.
 type PkgEntry = { version :: String, modules :: Array String }

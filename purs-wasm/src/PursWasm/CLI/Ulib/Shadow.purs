@@ -1,7 +1,6 @@
--- | ulib lib-first shadow resolution (ADR 0028): scan the bundled lib for shadow corefn, and at
--- | link time prefer a shadow over the user's registry module when the user's resolved package
--- | version matches (by `major.minor`) the shadow's target — else fall back to the registry
--- | module (correct, just unspecialized) with a warning. Never fails the build.
+-- | ulib lib-first resolution (ADR 0028 / 0031): scan the bundled lib (flat `$LIB/<Module>/`) for
+-- | each module's shadow corefn and/or kept-foreign wasm; at link time the build's `shadowSet`
+-- | (manifest + lock) decides which to use (`shadowOrRegistry`). Never fails the build.
 module PursWasm.CLI.Ulib.Shadow
   ( Shadow
   , loadShadowMap
@@ -24,16 +23,17 @@ import PureScript.Backend.Wasm.Compiler (parseModule)
 import PureScript.CoreFn (Module, ModuleName)
 import PursWasm.CLI.Effect (FS, FilePath, LOG, debug, exists, joinPath, readDir, readText)
 import PursWasm.CLI.Module (printModname)
-import PursWasm.CLI.Ulib.Version (splitPkgVer)
+import PursWasm.CLI.Ulib.Manifest (ulibManifestFile)
 import Run (Run)
 import Type.Row (type (+))
 
--- | A lib entry for a registry module: its package/version, the shadow corefn path, and the
--- | per-module `foreign.wasm` path (the assembled kept-foreign, ADR 0031 — may not exist for a
--- | module with no kept foreign). Both paths are *candidates*; existence is checked by the caller.
-type Shadow = { package :: String, version :: String, corefn :: FilePath, foreignWasm :: FilePath }
+-- | A lib entry for a registry module: candidate paths for its shadow `corefn.json` and its
+-- | kept-foreign `foreign.wasm` (ADR 0031 — either may be absent: a wat-only module has no corefn,
+-- | a foreign-free shadow has no foreign.wasm). Existence is checked by the caller. The version is
+-- | no longer stored — it lives in the manifest, and the build's `shadowSet` drives resolution.
+type Shadow = { corefn :: FilePath, foreignWasm :: FilePath }
 
--- | Scan the lib: each `<lib>/<package>-<version>/<Module>/` holds a shadow `corefn.json` and/or a
+-- | Scan the (flat, ADR 0031 §2.2) lib: each `<lib>/<Module>/` holds a shadow `corefn.json` and/or a
 -- | kept-foreign `foreign.wasm`. Returns a `Module name -> Shadow` map; an absent lib → empty.
 loadShadowMap :: forall r. FilePath -> Run (FS + r) (Map String Shadow)
 loadShadowMap libPath = do
@@ -41,17 +41,11 @@ loadShadowMap libPath = do
   if not present then pure Map.empty
   else readDir libPath >>= case _ of
     Nothing -> pure Map.empty
-    Just pkgDirs -> do
-      rows <- for pkgDirs \pkgVer -> do
-        pkgPath <- joinPath [ libPath, pkgVer ]
-        let { pkg, ver } = splitPkgVer pkgVer
-        readDir pkgPath >>= case _ of
-          Nothing -> pure []
-          Just ms -> for ms \m -> do
-            corefn <- joinPath [ pkgPath, m, "corefn.json" ]
-            foreignWasm <- joinPath [ pkgPath, m, "foreign.wasm" ]
-            pure (Tuple m { package: pkg, version: ver, corefn, foreignWasm })
-      pure (Map.fromFoldable (Array.concat rows))
+    -- the lib root also holds the self-describing `ulib-manifest.json` (ADR 0031) — not a module dir.
+    Just ms -> Map.fromFoldable <$> for (Array.filter (_ /= ulibManifestFile) ms) \m -> do
+      corefn <- joinPath [ libPath, m, "corefn.json" ]
+      foreignWasm <- joinPath [ libPath, m, "foreign.wasm" ]
+      pure (Tuple m { corefn, foreignWasm })
 
 -- | Use a module's ulib corefn (lib) iff it is in `shadowed` — the set the manifest-based
 -- | `Manifest.shadowSet` computed (reached ∩ covered ∩ exact-version-match, ADR 0031). Otherwise
@@ -68,7 +62,7 @@ shadowOrRegistry shadowed shadows mod registryMod =
       Just libSrc -> case parseModule libSrc of
         Left _ -> pure registryMod
         Right libMod -> do
-          debug (Fmt.fmt @"ulib: shadowing {m} ({pkg} {ver})" { m: name, pkg: s.package, ver: s.version })
+          debug (Fmt.fmt @"ulib: shadowing {m}" { m: name })
           pure libMod
   where
   name = printModname mod

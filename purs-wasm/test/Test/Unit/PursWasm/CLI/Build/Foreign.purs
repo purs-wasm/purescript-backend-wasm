@@ -16,13 +16,11 @@ import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 import Test.Unit.PursWasm.CLI.Effect.Memory (runMem, worldOfText)
 
--- a lib entry whose `foreign.wasm` sits beside the shadow corefn (ADR 0031)
+-- a lib entry whose `foreign.wasm` sits beside the shadow corefn (ADR 0031, flat `$LIB/<Module>/`)
 showShadow :: Shadow
 showShadow =
-  { package: "prelude"
-  , version: "6.0.2"
-  , corefn: "lib/prelude-6.0.2/Data.Show/corefn.json"
-  , foreignWasm: "lib/prelude-6.0.2/Data.Show/foreign.wasm"
+  { corefn: "lib/Data.Show/corefn.json"
+  , foreignWasm: "lib/Data.Show/foreign.wasm"
   }
 
 spec :: Spec Unit
@@ -38,9 +36,9 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
   it "uses the lib's per-module foreign.wasm for a ulib module's kept foreign (ADR 0031)" do
     let
       shadows = Map.singleton "Data.Show" showShadow
-      world = worldOfText [ Tuple "lib/prelude-6.0.2/Data.Show/foreign.wasm" "<wasm>" ]
+      world = worldOfText [ Tuple "lib/Data.Show/foreign.wasm" "<wasm>" ]
     let Tuple w prov = runMem world (resolveForeign shadows "output" "bundle" "Data.Show")
-    prov.wasm `shouldEqual` Just "lib/prelude-6.0.2/Data.Show/foreign.wasm"
+    prov.wasm `shouldEqual` Just "lib/Data.Show/foreign.wasm"
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0
 
