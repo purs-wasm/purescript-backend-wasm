@@ -9,8 +9,10 @@ import Prelude
 
 import Effect (Effect)
 import Test.E2E.Cli.AsPattern as AsPattern
+import Test.E2E.Cli.ExprEval as ExprEval
 import Test.E2E.Cli.FibAnd as FibAnd
 import Test.E2E.Cli.IntConv as IntConv
+import Test.E2E.Cli.Link as Link
 import Test.E2E.Cli.NestedRecordPat as NestedRecordPat
 import Test.E2E.Cli.PreludeArith as PreludeArith
 import Test.E2E.Cli.PreludeBool as PreludeBool
@@ -19,9 +21,17 @@ import Test.E2E.Cli.PreludeCompare as PreludeCompare
 import Test.E2E.Cli.PreludeEqOrd as PreludeEqOrd
 import Test.E2E.Cli.PreludeErased as PreludeErased
 import Test.E2E.Cli.PreludeEuclid as PreludeEuclid
+import Test.E2E.Cli.PreludeField as PreludeField
 import Test.E2E.Cli.PreludeFnInstance as PreludeFnInstance
 import Test.E2E.Cli.PreludeFunctor as PreludeFunctor
+import Test.E2E.Cli.PreludeGeneric as PreludeGeneric
+import Test.E2E.Cli.PreludeGenericShowCompare as PreludeGenericShowCompare
 import Test.E2E.Cli.PreludeGuards as PreludeGuards
+import Test.E2E.Cli.PreludeMonad as PreludeMonad
+import Test.E2E.Cli.PreludeMonoid as PreludeMonoid
+import Test.E2E.Cli.PreludeNumber as PreludeNumber
+import Test.E2E.Cli.PreludeSemigroup as PreludeSemigroup
+import Test.E2E.Cli.PreludeShow as PreludeShow
 import Test.E2E.Cli.RecordInstances as RecordInstances
 import Test.E2E.Cli.RecordUnsafe as RecordUnsafe
 import Test.E2E.Cli.Records as Records
@@ -32,20 +42,30 @@ import Test.Spec.Runner.Node (runSpecAndExitProcess)
 main :: Effect Unit
 main = runSpecAndExitProcess [ consoleReporter ] do
   PreludeArith.spec
+  PreludeNumber.spec
+  PreludeField.spec
   PreludeBool.spec
   PreludeCompare.spec
   PreludeEqOrd.spec
   PreludeEuclid.spec
   PreludeBounded.spec
+  PreludeSemigroup.spec
+  PreludeMonoid.spec
+  PreludeShow.spec
   PreludeErased.spec
   PreludeFnInstance.spec
   PreludeFunctor.spec
+  PreludeMonad.spec
+  PreludeGeneric.spec
+  PreludeGenericShowCompare.spec
   PreludeGuards.spec
   Records.spec
   RecordInstances.spec
   RecordUnsafe.spec
   AsPattern.spec
   NestedRecordPat.spec
+  ExprEval.spec
   IntConv.spec
   FibAnd.spec
+  Link.spec
   TailCall.spec
