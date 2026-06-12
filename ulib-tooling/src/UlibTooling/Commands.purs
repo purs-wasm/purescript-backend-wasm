@@ -37,7 +37,6 @@ ulibInstallCmd cliRoot binaryenBinDir opt = do
   let purs = fromMaybe "purs" opt.purs
   ulibSrc <- joinPath [ cliRoot, "ulib" ]
   manifest <- joinPath [ cliRoot, "ulib", "ulib-manifest.json" ]
-  wasmBaseSrc <- joinPath [ cliRoot, "wasm-base", "src" ]
   script <- joinPath [ cliRoot, "ulib-tooling", "ulib-install.sh" ]
   spagoP <- joinPath [ ".spago", "p" ]
   -- "present" means the lib actually holds shadows, not merely that the directory exists — an
@@ -48,7 +47,7 @@ ulibInstallCmd cliRoot binaryenBinDir opt = do
   else do
     when opt.force (execFile "rm" [ "-rf", libPath ])
     info $ Log.green "✓ Compiling shadows..."
-    execFile "sh" [ script, libPath, ulibSrc, wasmBaseSrc, purs, manifest, wasmAsBin binaryenBinDir, spagoP ]
+    execFile "sh" [ script, libPath, ulibSrc, purs, manifest, wasmAsBin binaryenBinDir, spagoP ]
     Log.br *> info (Log.strong $ Log.green "✓ ulib successfully installed!")
 
 -- | `ulib-tooling check` (ADR 0028, deep check): compare each installed shadow's *public

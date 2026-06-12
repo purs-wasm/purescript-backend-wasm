@@ -23,8 +23,11 @@ for (const f of ["runtime.wasm", "marshal.js"]) cpSync(join(repo, "runtime", f),
 // The repo's single MIT LICENSE -> the package (npm includes it on the package page).
 cpSync(join(repo, "LICENSE"), join(pkg, "LICENSE"));
 
-// 3. Precompiled ulib lib -> <pkg>/lib. `ulib-tooling install` (re)builds it at <repo>/lib; copy it
-//    into the package so it ships in the tarball.
+// 3. Precompiled ulib lib -> <pkg>/lib. `ulib-tooling install` compiles the shadows over the resolved
+//    package-set sources in `.spago/p` (incl. the `wasm-base` extraPackage, ADR 0031) — so prime
+//    `.spago` first by building `bench` (its closure pulls wasm-base + the shadows' deps). `install`
+//    (re)builds the lib at <repo>/lib; copy it into the package so it ships in the tarball.
+run("spago", ["build", "-p", "bench", "--output", join(repo, "bench", "output")]);
 run("node", [join(repo, "ulib-tooling", "index.dev.js"), "install", "-f"]);
 const lib = join(pkg, "lib");
 rmSync(lib, { recursive: true, force: true });

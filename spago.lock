@@ -320,15 +320,6 @@
             "spec-node"
           ]
         }
-      },
-      "wasm-base": {
-        "path": "wasm-base",
-        "core": {
-          "dependencies": []
-        },
-        "test": {
-          "dependencies": []
-        }
       }
     },
     "package_set": {
@@ -975,7 +966,9 @@
         "zipperarray": "2.0.0"
       }
     },
-    "extra_packages": {}
+    "extra_packages": {
+      "wasm-base": "0.1.1"
+    }
   },
   "packages": {
     "aff": {
@@ -2189,6 +2182,12 @@
         "type-equality",
         "unsafe-coerce"
       ]
+    },
+    "wasm-base": {
+      "type": "registry",
+      "version": "0.1.1",
+      "integrity": "sha256-1NNv/86dSLEFHdOI2iugdhc5gx6FS9KA4HoDrYiCq7s=",
+      "dependencies": []
     }
   }
 }

@@ -17,17 +17,16 @@ import Test.Spec.Assertions (shouldEqual)
 import Test.Unit.UlibTooling.Effect.Memory (emptyWorld, runMem, worldOfText)
 
 -- The install-script invocation the command builds from `cliRoot` + the defaults (ADR 0031): assets
--- live under `cliRoot` (the repo root) — the script in `ulib-tooling/`, the lib/ulib/wasm-base dirs
--- as siblings, `purs` on PATH, the `ulib-manifest.json` (the version source), the `wasm-as` from the
--- resolved binaryen bin dir, and the `.spago/p` package-set sources. (The in-memory `joinPath` drops
--- `.`/empty.)
+-- live under `cliRoot` (the repo root) — the script in `ulib-tooling/`, the lib/ulib dirs as
+-- siblings, `purs` on PATH, the `ulib-manifest.json` (the version source), the `wasm-as` from the
+-- resolved binaryen bin dir, and the `.spago/p` package-set sources (WasmBase comes in there too,
+-- as the resolved `wasm-base` package). (The in-memory `joinPath` drops `.`/empty.)
 defaultInvoke :: Tuple String (Array String)
 defaultInvoke =
   Tuple "sh"
     [ "cli/ulib-tooling/ulib-install.sh"
     , "cli/lib"
     , "cli/ulib"
-    , "cli/wasm-base/src"
     , "purs"
     , "cli/ulib/ulib-manifest.json"
     , wasmAsBin "bin"
@@ -38,7 +37,7 @@ defaultInvoke =
 invokeWithLib :: String -> Tuple String (Array String)
 invokeWithLib lib =
   Tuple "sh"
-    [ "cli/ulib-tooling/ulib-install.sh", lib, "cli/ulib", "cli/wasm-base/src", "purs", "cli/ulib/ulib-manifest.json", wasmAsBin "bin", ".spago/p" ]
+    [ "cli/ulib-tooling/ulib-install.sh", lib, "cli/ulib", "purs", "cli/ulib/ulib-manifest.json", wasmAsBin "bin", ".spago/p" ]
 
 spec :: Spec Unit
 spec = describe "UlibTooling.Commands.ulibInstallCmd" do
@@ -84,7 +83,6 @@ spec = describe "UlibTooling.Commands.ulibInstallCmd" do
           [ "cli/ulib-tooling/ulib-install.sh"
           , "out/mylib"
           , "cli/ulib"
-          , "cli/wasm-base/src"
           , "/usr/bin/purs"
           , "cli/ulib/ulib-manifest.json"
           , wasmAsBin "bin"

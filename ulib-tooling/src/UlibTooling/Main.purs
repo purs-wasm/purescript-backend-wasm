@@ -21,9 +21,10 @@ import UlibTooling.Commands (ulibCheckCmd, ulibInstallCmd)
 import UlibTooling.Compat (ulibCompatCmd)
 import UlibTooling.Options (Command(..), parse)
 
--- The JS entry passes `cliRoot` (the repo root, where `ulib`/`wasm-base`/`lib` live) and
--- `binaryenBinDir` (the `wasm-as` location) — the maintainer tool runs from the monorepo only, but
--- shares the asset-resolution convention with the user `purs-wasm` CLI.
+-- The JS entry passes `cliRoot` (the repo root, where the `ulib` source + the installed `lib` live;
+-- WasmBase is now a resolved `wasm-base` package, not a local dir) and `binaryenBinDir` (the `wasm-as`
+-- location) — the maintainer tool runs from the monorepo only, but shares the asset-resolution
+-- convention with the user `purs-wasm` CLI.
 main :: FilePath -> FilePath -> Effect Unit
 main cliRoot binaryenBinDir = do
   cliArgs <- Array.drop 2 <$> Process.argv

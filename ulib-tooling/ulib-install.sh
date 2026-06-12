@@ -7,10 +7,12 @@
 # and as the "package must be ulib-covered" guard.
 #
 # Invoked by `ulib-tooling install` as:
-#   sh ulib-install.sh <lib> <ulib-src> <wasm-base-src> <purs> <manifest> <wasm-as> [<spago-packages-dir>]
+#   sh ulib-install.sh <lib> <ulib-src> <purs> <manifest> <wasm-as> [<spago-packages-dir>]
+# WasmBase is no longer overlaid from a local dir — it is a resolved package (`wasm-base`, an
+# extraPackage / registry dep), so it comes in with the rest of the package-set sources in step 1.
 set -eu
 
-LIB="$1"; ULIB_SRC="$2"; WASM_BASE="$3"; PURS="$4"; MANIFEST="$5"; WASM_AS="$6"; SPAGO="${7:-.spago/p}"
+LIB="$1"; ULIB_SRC="$2"; PURS="$3"; MANIFEST="$4"; WASM_AS="$5"; SPAGO="${6:-.spago/p}"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -29,15 +31,14 @@ assemble_wat() { # <src.wat> <dst.wasm>
   "$WASM_AS" "$TMP/asm.wat" -o "$2" --all-features
 }
 
-# 1. all resolved package-set sources (one version per package — coherent set).
-for d in "$SPAGO"/*/src; do
+# 1. all resolved package-set + extra-package sources (one coherent set), INCLUDING the WasmBase
+#    primitives the shadows are PureScript over (`wasm-base`). A registry dep is `<pkg>-<ver>/src`;
+#    a git extraPackage (e.g. wasm-base) is nested `<pkg>/<ref>/src` — so glob both depths.
+for d in "$SPAGO"/*/src "$SPAGO"/*/*/src; do
   [ -d "$d" ] && cp -R "$d/." "$TMP/src/"
 done
 
-# 2. WasmBase primitives (the shadows are PureScript over these).
-cp -R "$WASM_BASE/." "$TMP/src/"
-
-# 3. overlay shadows: replace the registry module with the ulib one, and drop its `.js` foreign
+# 2. overlay shadows: replace the registry module with the ulib one, and drop its `.js` foreign
 #    (the ulib module has none — it is PureScript over WasmBase + a kept foreign provided by wat).
 #    Sources are `<package>/<Module>.purs` (dotted); overlay at the registry module's nested path.
 #    A ulib-internal helper (ADR 0031 §6, e.g. `Data.String.Internal.Utf8`) has no registry module,
