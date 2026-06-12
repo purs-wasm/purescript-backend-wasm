@@ -50,7 +50,7 @@ ulibInstallParser =
     { libPath:
         ArgParser.argument [ "-L", "--lib-path" ]
           "Where to store the compiled ulib corefn/externs.\n\
-          \Defaults to $PURS_WASM_LIB, else the `lib` dir beside the binary (`<cli>/../lib`)."
+          \Defaults to $PURS_WASM_LIB, else the `lib` dir beside the CLI (`<cli>/lib`)."
           # ArgParser.optional
     , purs:
         ArgParser.argument [ "-x", "--purs" ]
@@ -67,7 +67,7 @@ ulibCheckParser =
   ArgParser.fromRecord
     { libPath:
         ArgParser.argument [ "-L", "--lib-path" ]
-          "The installed ulib to check. Defaults to $PURS_WASM_LIB, else `<cli>/../lib`."
+          "The installed ulib to check. Defaults to $PURS_WASM_LIB, else `<cli>/lib`."
           # ArgParser.optional
     , input:
         ArgParser.argument [ "-I", "--input" ]

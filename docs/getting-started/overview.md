@@ -4,7 +4,21 @@ This is your starting point for using purs-wasm. The sections below cover how to
 
 ## Installation
 
-Coming soon...
+purs-wasm is distributed on npm. Add it to your PureScript project as a dev dependency:
+
+```sh
+npm i -D purs-wasm
+```
+
+This also pulls in [`binaryen`](https://www.npmjs.com/package/binaryen) — the `wasm-merge` /
+`wasm-as` tools the build links with. The CLI is then available as `npx purs-wasm` (or plain
+`purs-wasm` from a `package.json` script).
+
+You also need the PureScript toolchain — the `purs` compiler and
+[spago](https://github.com/purescript/spago), which you already have for a PureScript project —
+and a recent **Node.js (22 or newer)** to run the generated wasm (it uses WebAssembly GC).
+
+> **Note** A Nix install (`nix run …`) is planned as a fast follow-up to the npm release.
 
 ## How to Use It
 
@@ -33,7 +47,7 @@ Once the build succeeds without errors, you are ready. The following command com
 PureScript application to wasm:
 
 ```sh
-purs-wasm build -e Main
+npx purs-wasm build -e Main
 ```
 
 This produces the build artifacts, including the wasm, under `output-wasm/`:

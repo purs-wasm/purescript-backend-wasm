@@ -1,14 +1,48 @@
 {
   "name": "purs-wasm",
   "version": "0.1.0",
-  "main": "index.js",
+  "description": "An experimental WebAssembly (GC) backend for the PureScript compiler.",
+  "keywords": [
+    "purescript",
+    "webassembly",
+    "wasm",
+    "wasm-gc",
+    "compiler",
+    "backend"
+  ],
+  "homepage": "https://purs-wasm.github.io/documentation/",
+  "bugs": "https://github.com/purs-wasm/purescript-backend-wasm/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/purs-wasm/purescript-backend-wasm.git"
+  },
+  "license": "MIT",
+  "author": "Katsujukou Kineya",
   "type": "module",
+  "main": "index.js",
+  "bin": {
+    "purs-wasm": "./index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "index.js",
+    "bundle/",
+    "runtime/",
+    "lib/"
+  ],
+  "dependencies": {
+    "binaryen": "^123.0.0"
+  },
   "scripts": {
     "compile": "spago build -p purs-wasm",
     "test:unit": "spago test -p purs-wasm --monochrome",
     "test": "npm run test:unit",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test",
+    "bundle": "node scripts/bundle.mjs",
+    "prepack": "node scripts/prepack.mjs",
     "version": "echo 'export const version = \"v'$npm_package_version'\";' > ./src/PursWasm/CLI/Version.js && git add ."
   }
 }
