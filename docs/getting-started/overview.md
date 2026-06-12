@@ -1,9 +1,6 @@
 # Overview
 
-Purs-wasm is an experimental compiler from PureScript CoreFn to WebAssembly. According to
-our benchmarks, the compiled wasm typically runs faster than the JavaScript emitted by both
-the stock `purs` compiler and
-[purs-backend-es](https://github.com/aristanetworks/purescript-backend-optimizer).
+This is your starting point for using purs-wasm. The sections below cover how to install it and how to run it on a PureScript project to produce WebAssembly.
 
 ## Installation
 
@@ -93,8 +90,12 @@ details.
 - `-O | --output <dir>` — the directory the build artifacts are written to. Defaults to
   `output-wasm`.
 - `-p | --platform <node|browser|standalone>` — deployment target. `node` / `browser` emit
-  a single wasm plus a JS loader; `standalone` emits a self-contained single wasm with no
+  a single wasm plus a JS loader (the loader differs only in how it loads the wasm: Node reads
+  the file, the browser `fetch`es it); `standalone` emits a self-contained single wasm with no
   loader. Defaults to `node`.
+- `-E | --executable` — produce a runnable: the JS loader calls the entry module's `main` on
+  load, so running the loader runs the program. Requires `main :: Effect Unit` and
+  `--platform=node` or `browser` (not valid with `standalone`).
 - `-t | --text` — emit the WebAssembly text format (`.wat`) instead of a binary `.wasm`.
 - `-g | --debug` — debug build: skip the Binaryen optimizer (keeps the wasm close to the
   emitted IR).

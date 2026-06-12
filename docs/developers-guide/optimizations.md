@@ -39,7 +39,7 @@ rationale lives in the [ADRs](../design-decisions); the mechanism lives in
 Optimization is a **middle end** (ADR 0005) operating on a high-level IR (MIR) that
 sits between CoreFn and the backend lowering:
 
-```
+```plain
 CoreFn ── Transl ──▶ MIR ── optimizeProgram ──▶ MIR ── lowerModules ──▶ backend IR ──▶ Codegen ──▶ wasm
 ```
 
@@ -53,7 +53,7 @@ CoreFn ── Transl ──▶ MIR ── optimizeProgram ──▶ MIR ── l
   dependency order**, each against the already-finalized form of its dependencies, rather
   than re-running the whole program to a fixed point (ADR 0021):
 
-  ```
+  ```plain
   lambda-lift each module                          (per module)
   specialize higher-order calls                    (whole-program, once)
   for each module, in dependency order:
@@ -336,7 +336,7 @@ above compose to collapse it entirely. For `countTo n` (count the state from 0 t
 The result is exactly the loop you would hope for, with no allocation and no growing
 stack:
 
-```
+```purs
 countTo n s = case s == n of
   true -> n
   _    -> countTo n (s + 1)
@@ -353,7 +353,7 @@ optimization would overflow, which a value-only test could not detect).
 "cyclic dictionaries" a dictionary-passing backend pays for per step. Impurification +
 the simplifier collapse them all. For a pure counting loop in `Effect`:
 
-```
+```purs
 countTo n = unsafePerformEffect (go 0)
   where go acc = if acc >= n then pure acc else pure (acc + 1) >>= go
 ```
