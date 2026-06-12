@@ -38,3 +38,6 @@ purs-wasm/lib/
 purs-wasm/*.tgz
 purs-wasm/package/
 purs-wasm/LICENSE
+
+# nix build output
+result
