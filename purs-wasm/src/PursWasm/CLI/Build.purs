@@ -79,8 +79,8 @@ warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
         )
   _, _ -> pure unit
 
-buildCmd :: forall r. FilePath -> BuildOption -> Run (ENV + FS + PROC + LOG + EFFECT + r) Unit
-buildCmd cliRoot args = do
+buildCmd :: forall r. FilePath -> FilePath -> BuildOption -> Run (ENV + FS + PROC + LOG + EFFECT + r) Unit
+buildCmd cliRoot binaryenBinDir args = do
   debug (show args)
   start <- liftEffect nowMsImpl
 
@@ -201,7 +201,7 @@ buildCmd cliRoot args = do
       writeBinary appPath bytes
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader.
-      providers <- for foreignMods (resolveForeign shadows libPath args.input bundleDir)
+      providers <- for foreignMods (resolveForeign binaryenBinDir shadows libPath args.input bundleDir)
       let wasmProvided = Array.mapMaybe (\p -> Tuple p.name <$> p.wasm) providers
       let jsProvided = Array.mapMaybe (\p -> if isNothing p.wasm then Just p.name else Nothing) providers
       -- Policy on foreign imports with no `foreign.wat` provider (they otherwise fall back to a
@@ -212,13 +212,13 @@ buildCmd cliRoot args = do
         _ -> when args.noJsFallback (logAndThrow (Fmt.fmt @"--no-js-fallback set, but {n} foreign import(s) lack a foreign.wat provider: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided }))
       let mergeForeigns = wasmProvided >>= \(Tuple name wp) -> [ wp, name ]
       info (Fmt.fmt @"Linking runtime + {n} foreign provider(s) with wasm-merge…\n" { n: Array.length wasmProvided })
-      execFile wasmMergeBin ([ appPath, "app", runtimeWasm, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
+      execFile (wasmMergeBin binaryenBinDir) ([ appPath, "app", runtimeWasm cliRoot, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
       unlink appPath
       for_ providers \p -> when p.assembled (maybe (pure unit) unlink p.wasm)
       artifact <-
         if args.text then do
           watPath <- joinPath [ bundleDir, "index.wat" ]
-          execFile wasmDisBin [ wasmPath, "-o", watPath, "--all-features" ]
+          execFile (wasmDisBin binaryenBinDir) [ wasmPath, "-o", watPath, "--all-features" ]
           unlink wasmPath
           info $ Log.blue (Fmt.fmt @"✓ Wrote {file}" { file: watPath })
           pure watPath
@@ -232,7 +232,7 @@ buildCmd cliRoot args = do
           -- node and browser share the same loader except for how it loads the wasm bytes (Node reads
           -- the file; the browser `fetch`es it). Browser emits a single wasm — chunking, which
           -- `--no-chunks` opts out of, is not implemented yet.
-          let emit browser = emitLoader browser args.executable bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs)
+          let emit browser = emitLoader cliRoot browser args.executable bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs)
           case args.platform of
             Standalone -> pure unit
             Browser -> when needLoader (emit true)

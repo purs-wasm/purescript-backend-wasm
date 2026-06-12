@@ -22,13 +22,15 @@ import PursWasm.CLI.Node (runNode)
 import PursWasm.CLI.Options (parse)
 import PursWasm.CLI.Options.Types (Command(..))
 
--- `cliRoot` is the entry's directory (passed by
--- `index.dev.js`), used to locate `<cliRoot>/../lib`
-main :: FilePath -> Effect Unit
-main cliRoot = do
+-- The JS entry passes two roots (it resolves them per environment): `cliRoot` locates the bundled
+-- assets (`<cliRoot>/runtime`, `<cliRoot>/lib`), and `binaryenBinDir` the `wasm-merge`/`wasm-dis`
+-- binaries (`<repo>/binaryen/node_modules/binaryen/bin` in dev, `require.resolve('binaryen')` in the
+-- published package). Keeping the resolution in JS keeps the wasm self-locating without an FFI.
+main :: FilePath -> FilePath -> Effect Unit
+main cliRoot binaryenBinDir = do
   cliArgs <- Array.drop 2 <$> Process.argv
 
   case parse cliArgs of
     Left err -> Console.error (ArgParser.printArgError err)
     Right (Tuple globals cmd) -> runNode globals $ case cmd of
-      Build args -> buildCmd cliRoot args
+      Build args -> buildCmd cliRoot binaryenBinDir args

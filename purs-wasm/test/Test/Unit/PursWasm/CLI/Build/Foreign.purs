@@ -28,7 +28,7 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
 
   it "uses a project-local foreign.wasm directly (no assembly)" do
     let world = worldOfText [ Tuple "output/Data.Foo/foreign.wasm" "<wasm bytes>" ]
-    let Tuple w prov = runMem world (resolveForeign Map.empty "lib" "output" "bundle" "Data.Foo")
+    let Tuple w prov = runMem world (resolveForeign "bin" Map.empty "lib" "output" "bundle" "Data.Foo")
     prov.wasm `shouldEqual` Just "output/Data.Foo/foreign.wasm"
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0
@@ -37,7 +37,7 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
     let
       shadows = Map.singleton "Data.Show" showShadow
       world = worldOfText [ Tuple "lib/Data.Show/foreign.wasm" "<wasm>" ]
-    let Tuple w prov = runMem world (resolveForeign shadows "lib" "output" "bundle" "Data.Show")
+    let Tuple w prov = runMem world (resolveForeign "bin" shadows "lib" "output" "bundle" "Data.Show")
     prov.wasm `shouldEqual` Just "lib/Data.Show/foreign.wasm"
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0
@@ -48,17 +48,17 @@ spec = describe "PursWasm.CLI.Build.Foreign.resolveForeign" do
         [ Tuple "output/Data.Bar/foreign.wat" "(func (export \"f\") (result i32) (i32.const 1))"
         , Tuple "lib/_header.wat" "(; rt header ;)"
         ]
-    let Tuple w prov = runMem world (resolveForeign Map.empty "lib" "output" "bundle" "Data.Bar")
+    let Tuple w prov = runMem world (resolveForeign "bin" Map.empty "lib" "output" "bundle" "Data.Bar")
     prov.wasm `shouldEqual` Just "bundle/Data.Bar.foreign.wasm"
     prov.assembled `shouldEqual` true
     -- exactly one wasm-as invocation, on the wrapped combined .wat → the .foreign.wasm output
-    map fst w.execs `shouldEqual` [ wasmAsBin ]
+    map fst w.execs `shouldEqual` [ wasmAsBin "bin" ]
     (Array.head w.execs >>= (Array.head <<< snd)) `shouldEqual` Just "bundle/Data.Bar.combined.wat"
 
   it "falls back to no in-wasm provider (JS loader) when nothing provides the module (ADR 0031: no global wat)" do
     -- a global ulib/<M>/foreign.wat is NOT consulted by the build anymore — it would have provided this
     let world = worldOfText [ Tuple "ulib/Data.Nope/foreign.wat" "(func (export \"f\") (result i32) (i32.const 1))" ]
-    let Tuple w prov = runMem world (resolveForeign Map.empty "lib" "output" "bundle" "Data.Nope")
+    let Tuple w prov = runMem world (resolveForeign "bin" Map.empty "lib" "output" "bundle" "Data.Nope")
     prov.wasm `shouldEqual` Nothing
     prov.assembled `shouldEqual` false
     Array.length w.execs `shouldEqual` 0

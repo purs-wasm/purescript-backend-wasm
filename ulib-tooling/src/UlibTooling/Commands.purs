@@ -31,14 +31,14 @@ import Type.Row (type (+))
 -- | per-module kept-foreign `foreign.wasm`, ADR 0031 §2.2) via `ulib-install.sh`. Skips if the lib
 -- | already exists, unless `--force`. Versions come from `ulib-manifest.json` (no longer the source
 -- | path); compiled against the resolved package-set sources (`.spago/p`) with WasmBase overlaid.
-ulibInstallCmd :: forall r. FilePath -> UlibInstallOption -> Run (ENV + FS + PROC + LOG + r) Unit
-ulibInstallCmd cliRoot opt = do
+ulibInstallCmd :: forall r. FilePath -> FilePath -> UlibInstallOption -> Run (ENV + FS + PROC + LOG + r) Unit
+ulibInstallCmd cliRoot binaryenBinDir opt = do
   libPath <- resolveLibPath cliRoot opt.libPath
   let purs = fromMaybe "purs" opt.purs
-  ulibSrc <- joinPath [ cliRoot, "..", "ulib" ]
-  manifest <- joinPath [ cliRoot, "..", "ulib", "ulib-manifest.json" ]
-  wasmBaseSrc <- joinPath [ cliRoot, "..", "wasm-base", "src" ]
-  script <- joinPath [ cliRoot, "ulib-install.sh" ]
+  ulibSrc <- joinPath [ cliRoot, "ulib" ]
+  manifest <- joinPath [ cliRoot, "ulib", "ulib-manifest.json" ]
+  wasmBaseSrc <- joinPath [ cliRoot, "wasm-base", "src" ]
+  script <- joinPath [ cliRoot, "ulib-tooling", "ulib-install.sh" ]
   spagoP <- joinPath [ ".spago", "p" ]
   -- "present" means the lib actually holds shadows, not merely that the directory exists — an
   -- empty `-L` dir must still install (`readDir`: `Nothing` if absent, `Just []` if empty).
@@ -48,7 +48,7 @@ ulibInstallCmd cliRoot opt = do
   else do
     when opt.force (execFile "rm" [ "-rf", libPath ])
     info $ Log.green "✓ Compiling shadows..."
-    execFile "sh" [ script, libPath, ulibSrc, wasmBaseSrc, purs, manifest, wasmAsBin, spagoP ]
+    execFile "sh" [ script, libPath, ulibSrc, wasmBaseSrc, purs, manifest, wasmAsBin binaryenBinDir, spagoP ]
     Log.br *> info (Log.strong $ Log.green "✓ ulib successfully installed!")
 
 -- | `ulib-tooling check` (ADR 0028, deep check): compare each installed shadow's *public

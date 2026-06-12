@@ -21,14 +21,15 @@ import UlibTooling.Commands (ulibCheckCmd, ulibInstallCmd)
 import UlibTooling.Compat (ulibCompatCmd)
 import UlibTooling.Options (Command(..), parse)
 
--- `cliRoot` is the entry's directory (passed by `index.dev.js`), used to locate `<cliRoot>/../ulib`,
--- `<cliRoot>/../lib`, etc. — `ulib-tooling` sits one level under the repo root like `purs-wasm`.
-main :: FilePath -> Effect Unit
-main cliRoot = do
+-- The JS entry passes `cliRoot` (the repo root, where `ulib`/`wasm-base`/`lib` live) and
+-- `binaryenBinDir` (the `wasm-as` location) — the maintainer tool runs from the monorepo only, but
+-- shares the asset-resolution convention with the user `purs-wasm` CLI.
+main :: FilePath -> FilePath -> Effect Unit
+main cliRoot binaryenBinDir = do
   cliArgs <- Array.drop 2 <$> Process.argv
   case parse cliArgs of
     Left err -> Console.error (ArgParser.printArgError err)
     Right (Tuple globals cmd) -> runNode globals $ case cmd of
-      Install args -> ulibInstallCmd cliRoot args
+      Install args -> ulibInstallCmd cliRoot binaryenBinDir args
       Check args -> ulibCheckCmd cliRoot args
       Compat args -> ulibCompatCmd args

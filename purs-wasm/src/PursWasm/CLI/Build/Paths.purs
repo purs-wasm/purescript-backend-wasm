@@ -1,6 +1,7 @@
--- | Fixed, **cwd-relative** paths the build shells out to / reads from. The CLI is run from the
--- | repo root (every bench script / harness `cd`s there first), so these resolve against the cwd —
--- | distinct from the `cliRoot`-relative `lib`/`ulib` paths the ulib commands use.
+-- | Build assets and binaries, resolved against the CLI's own roots (NOT the cwd) so the installed
+-- | package works from any directory. `runtime/*` live under `cliRoot`; the binaryen binaries under
+-- | `binaryenBinDir` — the JS entry resolves that per environment (`<repo>/binaryen/node_modules/
+-- | binaryen/bin` in dev, `require.resolve('binaryen')` in the published package).
 module PursWasm.CLI.Build.Paths
   ( runtimeWasm
   , loaderGlue
@@ -9,19 +10,22 @@ module PursWasm.CLI.Build.Paths
   , wasmAsBin
   ) where
 
-runtimeWasm :: String
-runtimeWasm = "runtime/runtime.wasm"
+import Prelude ((<>))
+
+-- | The merged runtime wasm (`$rt.*`, ADR 0010), under `cliRoot`.
+runtimeWasm :: String -> String
+runtimeWasm cliRoot = cliRoot <> "/runtime/runtime.wasm"
 
 -- | The shared FFI marshalling glue (Issue #10), copied verbatim next to the generated `index.mjs`
--- | so the loader can `import { makeMarshal } from "./marshal.js"`.
-loaderGlue :: String
-loaderGlue = "runtime/marshal.js"
+-- | so the loader can `import { makeMarshal } from "./marshal.js"`. Under `cliRoot`.
+loaderGlue :: String -> String
+loaderGlue cliRoot = cliRoot <> "/runtime/marshal.js"
 
-wasmMergeBin :: String
-wasmMergeBin = "binaryen/node_modules/binaryen/bin/wasm-merge"
+wasmMergeBin :: String -> String
+wasmMergeBin binaryenBinDir = binaryenBinDir <> "/wasm-merge"
 
-wasmDisBin :: String
-wasmDisBin = "binaryen/node_modules/binaryen/bin/wasm-dis"
+wasmDisBin :: String -> String
+wasmDisBin binaryenBinDir = binaryenBinDir <> "/wasm-dis"
 
-wasmAsBin :: String
-wasmAsBin = "binaryen/node_modules/binaryen/bin/wasm-as"
+wasmAsBin :: String -> String
+wasmAsBin binaryenBinDir = binaryenBinDir <> "/wasm-as"
