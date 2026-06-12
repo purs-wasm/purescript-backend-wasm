@@ -37,3 +37,4 @@ purs-wasm/runtime/
 purs-wasm/lib/
 purs-wasm/*.tgz
 purs-wasm/package/
+purs-wasm/LICENSE

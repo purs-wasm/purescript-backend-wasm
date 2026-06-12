@@ -1,10 +1,30 @@
 {
   "name": "purs-wasm",
   "version": "0.1.0",
+  "description": "An experimental WebAssembly (GC) backend for the PureScript compiler.",
+  "keywords": [
+    "purescript",
+    "webassembly",
+    "wasm",
+    "wasm-gc",
+    "compiler",
+    "backend"
+  ],
+  "homepage": "https://purs-wasm.github.io/documentation/",
+  "bugs": "https://github.com/purs-wasm/purescript-backend-wasm/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/purs-wasm/purescript-backend-wasm.git"
+  },
+  "license": "MIT",
+  "author": "Katsujukou Kineya",
   "type": "module",
   "main": "index.js",
   "bin": {
     "purs-wasm": "./index.js"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "files": [
     "index.js",

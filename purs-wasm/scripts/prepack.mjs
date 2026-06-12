@@ -20,6 +20,9 @@ rmSync(rt, { recursive: true, force: true });
 mkdirSync(rt, { recursive: true });
 for (const f of ["runtime.wasm", "marshal.js"]) cpSync(join(repo, "runtime", f), join(rt, f));
 
+// The repo's single MIT LICENSE -> the package (npm includes it on the package page).
+cpSync(join(repo, "LICENSE"), join(pkg, "LICENSE"));
+
 // 3. Precompiled ulib lib -> <pkg>/lib. `ulib-tooling install` (re)builds it at <repo>/lib; copy it
 //    into the package so it ships in the tarball.
 run("node", [join(repo, "ulib-tooling", "index.dev.js"), "install", "-f"]);
