@@ -18,7 +18,44 @@ You also need the PureScript toolchain — the `purs` compiler and
 [spago](https://github.com/purescript/spago), which you already have for a PureScript project —
 and a recent **Node.js (22 or newer)** to run the generated wasm (it uses WebAssembly GC).
 
-> **Note** A Nix install (`nix run …`) is planned as a fast follow-up to the npm release.
+### With Nix
+
+If you use Nix (flakes), the CLI is a flake output — run it without installing anything (it
+brings its own `binaryen` and Node.js):
+
+```sh
+nix run github:purs-wasm/purescript-backend-wasm#purs-wasm -- build -e Main
+```
+
+or add `github:purs-wasm/purescript-backend-wasm` as a flake input and use
+`packages.purs-wasm` / `apps.purs-wasm`. (You still need `purs` / spago to produce the CoreFn.)
+
+## Build from Source
+
+To build the CLI from the repository — for development, or to use unreleased changes:
+
+```sh
+git clone https://github.com/purs-wasm/purescript-backend-wasm
+cd purescript-backend-wasm
+nix develop                # the toolchain: purs, spago, esbuild, Node, …
+pnpm install               # the FFI npm deps (binaryen, cbor)
+spago build -p purs-wasm   # compile the CLI
+
+# build + install the bundled ulib library the CLI links against
+spago build -p bench --output bench/output
+node ulib-tooling/index.dev.js install
+```
+
+The CLI then runs through its dev entry, which resolves `runtime/` and `lib/` from the repo root:
+
+```sh
+node purs-wasm/index.dev.js build -e Main -I output -O output-wasm
+```
+
+To produce an installable tarball identical to the npm release, run `cd purs-wasm && npm pack`
+inside `nix develop` (its `prepack` bundles the CLI and ships the runtime + prebuilt lib). See
+[Contributing](https://github.com/purs-wasm/purescript-backend-wasm/blob/main/CONTRIBUTING.md) for
+the development workflow.
 
 ## How to Use It
 
