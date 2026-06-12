@@ -82,14 +82,15 @@ jobs:
           node ./ulib-tooling/index.dev.js compat --check
 
       # graph.sh builds all three backends + renders the 7 algorithm graphs;
-      # count-state-graph.sh / count-effect-graph.sh add the State- and Effect-monad
-      # graphs; curry-graph.sh adds the curry-vs-uncurry tax graph.
+      # count-state-graph.sh / count-effect-graph.sh / count-run-graph.sh add the State-,
+      # Effect-, and Run/Free-monad graphs; curry-graph.sh adds the curry-vs-uncurry tax graph.
       - name: Render benchmark graphs
         working-directory: bench
         run: |
           bash ./graph.sh
           bash ./count-state-graph.sh
           bash ./count-effect-graph.sh
+          bash ./count-run-graph.sh
           bash ./curry-graph.sh
 
       - name: Comparison tables → run summary

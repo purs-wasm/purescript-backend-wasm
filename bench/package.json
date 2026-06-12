@@ -10,6 +10,7 @@
     "snapshot": "./snapshot.sh",
     "graph": "./graph.sh",
     "graph:count-state": "./count-state-graph.sh",
-    "graph:curry": "./curry-graph.sh"
+    "graph:curry": "./curry-graph.sh",
+    "graph:count-run": "./count-run-graph.sh"
   }
 }

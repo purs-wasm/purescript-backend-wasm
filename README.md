@@ -12,7 +12,7 @@ output and produces a single WebAssembly module via the
 GC**, so heap values (ADTs, records, closures) are reclaimed by the host VM.
 
 Currenlty supported features are listed in 
-[`docs/supported-features.md`](docs/supported-features.md).
+[`docs/developers-guide/supported-features.md`](docs/developers-guide/supported-features.md).
 
 Key architectural decisions are recorded as ADRs under
 [`docs/design-decisions/`](docs/design-decisions/).
@@ -24,41 +24,41 @@ PureScript behaves identically; the wasm-specific points worth knowing:
 
 - **Strings are UTF-8 byte arrays.** A `String` is its UTF-8 bytes, so `length` counts
   *bytes* (not UTF-16 code units) and ordering is by code point — a deliberate divergence
-  from `Data.String.CodeUnits`. See [Runtime representation](./docs/runtime-representation.md#string).
+  from `Data.String.CodeUnits`. See [Runtime representation](./docs/developers-guide/runtime-representation.md#string).
 - **`Effect` (and monadic loops) run in constant stack.** `Effect` / `State` do-blocks
   collapse to flat loops, so deep effectful recursion that overflows a JS backend (whose
   bind chain is not tail-call-optimized) runs flat here. See
-  [Optimizations](./docs/optimizations.md#worked-example-the-effect-monad).
+  [Optimizations](./docs/developers-guide/optimizations.md#worked-example-the-effect-monad).
 - **Manual uncurrying rarely pays.** `Fn` / `EffectFn` lower to the *same* arity-1 closures
   as curried code (`mkFnN` is the identity, `runFnN` is the saturated apply), so curried and
   uncurried application are the *same* code on wasm. The [curry benchmark](#benchmarks)
   confirms it — curried/uncurried time is ~1.0 on wasm regardless of size, while
   `purs-backend-es` pays ~3× for curried application through a dynamic boundary. So the JS
   habit of hand-uncurrying hot paths (e.g. Halogen VDom) is unnecessary here. See
-  [Optimizations](./docs/optimizations.md).
+  [Optimizations](./docs/developers-guide/optimizations.md).
 - **Values are wasm-GC heap objects**, managed by the host garbage collector — no linear
   memory, no manual allocation. `Boolean` is an unboxed `i31`; `Int` / `Number` unbox to
-  `i32` / `f64` where boxing is unnecessary. See [Runtime representation](./docs/runtime-representation.md).
+  `i32` / `f64` where boxing is unnecessary. See [Runtime representation](./docs/developers-guide/runtime-representation.md).
 - **Records and type-class dictionaries share one representation** (a label-map), and most
   dictionaries are eliminated outright by the optimizer. See
-  [Optimizations](./docs/optimizations.md#dictionary-elimination).
+  [Optimizations](./docs/developers-guide/optimizations.md#dictionary-elimination).
 - **Polymorphic containers still box their elements** (as JS does) — unboxing applies to
   concrete scalar fields; removing it would need monomorphization (out of scope). See
-  [Optimizations § Known gaps](./docs/optimizations.md#known-gaps).
+  [Optimizations § Known gaps](./docs/developers-guide/optimizations.md#known-gaps).
 - **Crossing to JS is an explicit marshalling boundary** (scalars cross raw; strings,
-  arrays, records, closures are marshalled). See [JS↔WASM interop](./docs/interop.md).
+  arrays, records, closures are marshalled). See [JS↔WASM interop](./docs/developers-guide/interop.md).
 
 ## WIP
 
 ### PureScript language features
 
-- [x] [Higher-order functions](./docs/supported-features.md#closures-and-higher-order-functions) with [full-support for partial/over application](./docs/supported-features.md#function-application-partial-and-over)
-- [x] [strings](./docs/supported-features.md#strings), [arrays](./docs/supported-features.md#arrays) and [records](./docs/supported-features.md#records)
-- [x] [ADT and pattern matching](./docs/supported-features.md#algebraic-data-types-and-pattern-matching)
-- [x] [Recursive let-bindings](./docs/supported-features.md#recursive-let-bindings)
-- [x] [Typeclass resolution](./docs/supported-features.md#typeclass-dictionaries), including cyclic instance groups (`Effect`'s Functor/Applicative/Monad)
-- [x] [The `Effect` monad](./docs/supported-features.md#the-effect-monad) — collapses like a transparent monad (constant-stack loops), with effect order/count preserved
-- [x] [User-defined FFI](./docs/supported-features.md#foreign-function-interface), including [effectful foreigns](./docs/interop.md#an-effectful-foreign) (`a -> Effect b`, the `console.log` shape)
+- [x] [Higher-order functions](./docs/developers-guide/supported-features.md#closures-and-higher-order-functions) with [full-support for partial/over application](./docs/developers-guide/supported-features.md#function-application-partial-and-over)
+- [x] [strings](./docs/developers-guide/supported-features.md#strings), [arrays](./docs/developers-guide/supported-features.md#arrays) and [records](./docs/developers-guide/supported-features.md#records)
+- [x] [ADT and pattern matching](./docs/developers-guide/supported-features.md#algebraic-data-types-and-pattern-matching)
+- [x] [Recursive let-bindings](./docs/developers-guide/supported-features.md#recursive-let-bindings)
+- [x] [Typeclass resolution](./docs/developers-guide/supported-features.md#typeclass-dictionaries), including cyclic instance groups (`Effect`'s Functor/Applicative/Monad)
+- [x] [The `Effect` monad](./docs/developers-guide/supported-features.md#the-effect-monad) — collapses like a transparent monad (constant-stack loops), with effect order/count preserved
+- [x] [User-defined FFI](./docs/developers-guide/supported-features.md#foreign-function-interface), including [effectful foreigns](./docs/developers-guide/interop.md#an-effectful-foreign) (`a -> Effect b`, the `console.log` shape)
 
 ### Optimizations
 
@@ -74,7 +74,7 @@ PureScript behaves identically; the wasm-specific points worth knowing:
 - [x] Effect reflection (impurification) + whole-program purity analysis
 - [ ] Monomorphization
 
-Please refer to the [docs/optimizations.md](./docs/optimizations.md) for detailed explanation.
+Please refer to the [docs/developers-guide/optimizations.md](./docs/developers-guide/optimizations.md) for detailed explanation.
 
 ### Other features
 

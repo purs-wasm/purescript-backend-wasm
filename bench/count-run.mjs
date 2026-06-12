@@ -15,7 +15,7 @@
 // The wasm imports `Partial._crashWith` (the impossible empty-variant case in Run's VariantF
 // matching); it is never hit by correct code, so a throwing stub satisfies instantiation. The
 // `countTo` export is i32-in/i32-out, so the raw call needs no marshalling.
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const partialStub = { Partial: { _crashWith: () => { throw new Error("partial pattern match"); } } };
@@ -59,18 +59,29 @@ for (const fn of [wasm, naive, es]) {
 }
 for (const fn of [wasm, naive, es]) warmUp(fn, 4000);
 
+// Run/Free is stack-safe on every backend, so no curve should drop out; the try/catch is
+// cheap insurance (an overflow becomes NaN, which gnuplot skips via `missing "NaN"`).
+const safeNs = (fn, n) => { try { return nsPerOp(fn, n); } catch (_) { return NaN; } };
+
 console.log("CountRun (Run/State) — ns/op, and wasm vs js-es ratio:");
 console.log("  n        wasm        js-naive    js-es       wasm/js-es");
+const rows = [];
 for (const n of sizes) {
-  const w = nsPerOp(wasm, n);
-  const na = nsPerOp(naive, n);
-  const e = nsPerOp(es, n);
-  const pad = (x, w = 11) => x.padEnd(w);
+  const w = safeNs(wasm, n);
+  const na = safeNs(naive, n);
+  const e = safeNs(es, n);
+  const pad = (x, wd = 11) => x.padEnd(wd);
+  const us = (x) => Number.isFinite(x) ? (x / 1e3).toFixed(1) + "us" : "stack!";
   console.log(
-    "  " + pad(String(n), 9) +
-    pad((w / 1e3).toFixed(1) + "us") +
-    pad((na / 1e3).toFixed(1) + "us") +
-    pad((e / 1e3).toFixed(1) + "us") +
-    (w / e).toFixed(2) + "x",
+    "  " + pad(String(n), 9) + pad(us(w)) + pad(us(na)) + pad(us(e)) +
+    (Number.isFinite(w) && Number.isFinite(e) ? (w / e).toFixed(2) + "x" : "-"),
   );
+  // .dat columns mirror count-effect: "size  js-naive-ms  js-es-ms  wasm-ms"
+  const ms = (x) => Number.isFinite(x) ? (x / 1e6).toFixed(6) : "NaN";
+  rows.push(`${n}  ${ms(na)}  ${ms(e)}  ${ms(w)}`);
 }
+
+const outDir = fileURLToPath(new URL("./results", import.meta.url));
+mkdirSync(outDir, { recursive: true });
+writeFileSync(`${outDir}/count-run.dat`, "# input-size  js-naive-ms  js-es-ms  wasm-ms\n" + rows.join("\n") + "\n");
+console.log(`\nwrote ${outDir}/count-run.dat`);

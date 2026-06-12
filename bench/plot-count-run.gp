@@ -1,0 +1,21 @@
+# The CountRun (purescript-run STATE effect — the Run/Free interpreter loop) sweep on
+# three backends built from the same PureScript source. Log-log axes. Unlike CountState
+# (the hand-rolled State analogue, where wasm wins), Run/Free is stack-safe on every
+# backend, so all three curves run the full sweep — but the per-step VariantF/bind
+# allocation dominates, and wasm-GC trails V8 here: the wasm curve sits ABOVE js-es
+# (~1.6-1.7x), the interpreter-specialization gap the optimizer does not yet close. Driven
+# by -e variables:
+#   datafile  the "size  js-naive-ms  js-es-ms  wasm-ms" data (results/count-run.dat)
+#   outfile   the PNG to write
+set terminal pngcairo size 760,470 font "sans,11"
+set output outfile
+set title "CountRun: Run/State (Free interpreter) iterations   (log-log, lower is better)"
+set xlabel "iterations (n)"
+set ylabel "time per op (ms)"
+set grid lc rgb "#dddddd"
+set logscale xy
+set key top left
+set datafile missing "NaN"
+plot datafile using 1:2 with linespoints lc rgb "#c0c0c0" lw 2 pt 6 ps 1.1 title "JS (purs backend)", \
+     datafile using 1:3 with linespoints lc rgb "#e8a33d" lw 2 pt 4 ps 1.1 title "JS (purs-backend-es)", \
+     datafile using 1:4 with linespoints lc rgb "#4072b4" lw 2.5 pt 7 ps 1.2 title "wasm (this backend)"
