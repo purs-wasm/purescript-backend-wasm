@@ -137,7 +137,7 @@ surfaces only when the value actually crosses the boundary.
 > Rule of thumb: **design your APIs so that first-class functions cross in the wasm → JS
 > direction only.**
 
-*Tracking Issue: [#12](https://github.com/katsujukou/purescript-backend-wasm/issues/12)*
+*Tracking Issue: [#12](https://github.com/purs-wasm/purescript-backend-wasm/issues/12)*
 
 ### Tail calls through a closure value are not stack-safe
 
@@ -149,7 +149,7 @@ recursion; see *Differences from JavaScript-backend PureScript*). The gap remain
 tail recursion routed through a first-class closure the optimizer could not resolve to a
 known function.
 
-*Tracking Issue: [#18](https://github.com/katsujukou/purescript-backend-wasm/issues/18)*
+*Tracking Issue: [#18](https://github.com/purs-wasm/purescript-backend-wasm/issues/18)*
 
 ### `Object a` is currently not supported
 
