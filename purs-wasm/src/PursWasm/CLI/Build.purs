@@ -215,11 +215,13 @@ buildCmd cliRoot args = do
           let exportSigs = rootExportSigs roots allSigs
           let needLoader = not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
           -- `standalone` is a self-contained wasm with no loader; node/browser emit one when needed.
-          -- (browser currently emits a single wasm — chunking, which `--no-chunks` opts out of, is not
-          -- implemented yet, so browser behaves like node here.)
+          -- node and browser share the same loader except for how it loads the wasm bytes (Node reads
+          -- the file; the browser `fetch`es it). Browser emits a single wasm — chunking, which
+          -- `--no-chunks` opts out of, is not implemented yet.
           case args.platform of
             Standalone -> pure unit
-            _ -> when needLoader (emitLoader bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
+            Browser -> when needLoader (emitLoader true bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
+            Node -> when needLoader (emitLoader false bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
           info $ Log.blue (Fmt.fmt @"✓ Wrote {file}" { file: wasmPath })
           pure wasmPath
       -- footer: elapsed wall-clock time and the artifact's size

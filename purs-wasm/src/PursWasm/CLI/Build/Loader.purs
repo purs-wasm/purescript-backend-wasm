@@ -6,6 +6,7 @@
 -- | `runtime/marshal.js` (`makeMarshal`), shared with the e2e harness (Issue #10).
 module PursWasm.CLI.Build.Loader
   ( emitLoader
+  , loaderSource
   , rootExportSigs
   , exportNeedsLoader
   ) where
@@ -29,20 +30,21 @@ import Type.Row (type (+))
 
 emitLoader
   :: forall r
-   . FilePath
+   . Boolean
+  -> FilePath
   -> FilePath
   -> Array String
   -> Object ForeignImport
   -> String
   -> Run (FS + LOG + r) Unit
-emitLoader bundleDir input mods sigs exportManifest = do
+emitLoader browser bundleDir input mods sigs exportManifest = do
   foreignDir <- joinPath [ bundleDir, "foreign" ]
   mkdirP foreignDir
   for_ mods (copyForeign foreignDir)
   marshalDst <- joinPath [ bundleDir, "marshal.js" ]
   readText loaderGlue >>= maybe (pure unit) (writeText marshalDst)
   indexMjs <- joinPath [ bundleDir, "index.mjs" ]
-  writeText indexMjs (loaderSource (manifestJs mods sigs) exportManifest)
+  writeText indexMjs (loaderSource browser (manifestJs mods sigs) exportManifest)
   info $ Log.blue (Fmt.fmt @"✓ Wrote {file} (+ {n} foreign module(s))" { file: indexMjs, n: Array.length mods })
   where
   copyForeign foreignDir m = do
@@ -74,11 +76,11 @@ manifestJs :: Array String -> Object ForeignImport -> String
 manifestJs mods sigs =
   foreignManifestJson (Array.filter (\s -> Array.elem s.moduleName mods) (Object.values sigs))
 
-loaderSource :: String -> String -> String
-loaderSource manifest exportManifest =
-  """import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { makeMarshal } from "./marshal.js";
+loaderSource :: Boolean -> String -> String -> String
+loaderSource browser manifest exportManifest =
+  importPrologue
+    <>
+      """
 
 const MANIFEST = """ <> manifest
     <>
@@ -88,8 +90,8 @@ const EXPORTS_MANIFEST = """
     <>
       """;
 
-const bytes = readFileSync(fileURLToPath(new URL("./index.wasm", import.meta.url)));
-const mod = await WebAssembly.compile(bytes);
+""" <> loadMod <>
+      """
 
 // `E` is a *lazy* view of the (post-instantiation) exports, so the marshalling glue can be built
 // before `inst` exists — `wrap` is used while wiring the importObject below. `wasm-merge` folds the
@@ -160,3 +162,17 @@ for (const name of Object.keys(inst.exports)) {
 export const exports = marshalledExports;
 export default exports;
 """
+  where
+  -- The marshalling wiring and `import('./foreign/<m>.js')` work in both Node and the browser; only
+  -- the wasm-bytes load differs (Node reads the sibling file off disk; the browser fetches it).
+  importPrologue =
+    if browser then """import { makeMarshal } from "./marshal.js";"""
+    else
+      """import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { makeMarshal } from "./marshal.js";"""
+  loadMod =
+    if browser then """const mod = await WebAssembly.compileStreaming(fetch(new URL("./index.wasm", import.meta.url)));"""
+    else
+      """const bytes = readFileSync(fileURLToPath(new URL("./index.wasm", import.meta.url)));
+const mod = await WebAssembly.compile(bytes);"""
