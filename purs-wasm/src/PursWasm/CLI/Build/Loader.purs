@@ -31,20 +31,21 @@ import Type.Row (type (+))
 emitLoader
   :: forall r
    . Boolean
+  -> Boolean
   -> FilePath
   -> FilePath
   -> Array String
   -> Object ForeignImport
   -> String
   -> Run (FS + LOG + r) Unit
-emitLoader browser bundleDir input mods sigs exportManifest = do
+emitLoader browser executable bundleDir input mods sigs exportManifest = do
   foreignDir <- joinPath [ bundleDir, "foreign" ]
   mkdirP foreignDir
   for_ mods (copyForeign foreignDir)
   marshalDst <- joinPath [ bundleDir, "marshal.js" ]
   readText loaderGlue >>= maybe (pure unit) (writeText marshalDst)
   indexMjs <- joinPath [ bundleDir, "index.mjs" ]
-  writeText indexMjs (loaderSource browser (manifestJs mods sigs) exportManifest)
+  writeText indexMjs (loaderSource browser executable (manifestJs mods sigs) exportManifest)
   info $ Log.blue (Fmt.fmt @"✓ Wrote {file} (+ {n} foreign module(s))" { file: indexMjs, n: Array.length mods })
   where
   copyForeign foreignDir m = do
@@ -76,13 +77,14 @@ manifestJs :: Array String -> Object ForeignImport -> String
 manifestJs mods sigs =
   foreignManifestJson (Array.filter (\s -> Array.elem s.moduleName mods) (Object.values sigs))
 
-loaderSource :: Boolean -> String -> String -> String
-loaderSource browser manifest exportManifest =
+loaderSource :: Boolean -> Boolean -> String -> String -> String
+loaderSource browser executable manifest exportManifest =
   importPrologue
     <>
       """
 
-const MANIFEST = """ <> manifest
+const MANIFEST = """
+    <> manifest
     <>
       """;
 const EXPORTS_MANIFEST = """
@@ -90,7 +92,9 @@ const EXPORTS_MANIFEST = """
     <>
       """;
 
-""" <> loadMod <>
+"""
+    <> loadMod
+    <>
       """
 
 // `E` is a *lazy* view of the (post-instantiation) exports, so the marshalling glue can be built
@@ -162,7 +166,11 @@ for (const name of Object.keys(inst.exports)) {
 export const exports = marshalledExports;
 export default exports;
 """
+    <> runMain
   where
+  -- `-E/--executable`: run the entry's `main` (a nullary `Effect`, validated in `Build`) on load, so
+  -- importing/executing this module *is* running the program. The export stays available too.
+  runMain = if executable then "exports.main();\n" else ""
   -- The marshalling wiring and `import('./foreign/<m>.js')` work in both Node and the browser; only
   -- the wasm-bytes load differs (Node reads the sibling file off disk; the browser fetches it).
   importPrologue =

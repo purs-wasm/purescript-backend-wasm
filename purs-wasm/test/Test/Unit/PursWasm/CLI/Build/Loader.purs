@@ -45,8 +45,8 @@ spec = describe "PursWasm.CLI.Build.Loader" do
   describe "loaderSource (node vs browser wasm load)" do
     let
       has s src = contains (Pattern s) src
-      node = loaderSource false "{}" "{}"
-      browser = loaderSource true "{}" "{}"
+      node = loaderSource false false "{}" "{}"
+      browser = loaderSource true false "{}" "{}"
     it "node reads the wasm off disk via node:fs" do
       has "node:fs" node `shouldEqual` true
       has "readFileSync(fileURLToPath" node `shouldEqual` true
@@ -59,3 +59,8 @@ spec = describe "PursWasm.CLI.Build.Loader" do
       has "makeMarshal" browser `shouldEqual` true
       has "export default exports;" browser `shouldEqual` true
       has "export default exports;" node `shouldEqual` true
+
+    it "appends a `main()` call only with --executable (-E)" do
+      has "exports.main();" (loaderSource false true "{}" "{}") `shouldEqual` true
+      has "exports.main();" (loaderSource true true "{}" "{}") `shouldEqual` true
+      has "exports.main();" node `shouldEqual` false

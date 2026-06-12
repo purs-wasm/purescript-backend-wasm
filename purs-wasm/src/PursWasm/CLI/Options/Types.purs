@@ -43,6 +43,7 @@ type BuildOption =
   , platform :: Platform
   , noChunks :: Boolean
   , noJsFallback :: Boolean
+  , executable :: Boolean
   , dumpMir :: Maybe String
   }
 

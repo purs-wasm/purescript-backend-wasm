@@ -84,6 +84,12 @@ buildOptionsParser =
           "Fail the build instead of falling back to a foreign.js for a foreign import that\n\
           \has no foreign.wat provider (only meaningful for --platform=node|browser)."
           # ArgParser.boolean
+    , executable:
+        ArgParser.flag [ "-E", "--executable" ]
+          "Produce a runnable that executes the entry module's `main` (which must be\n\
+          \`main :: Effect Unit`): the JS loader calls it on load. Requires --platform=node\n\
+          \or browser (not valid with standalone)."
+          # ArgParser.boolean
     , dumpMir:
         ArgParser.argument [ "--dump-mir" ]
           "Dump how the given module's middle IR (MIR) changes after every optimizer\n\

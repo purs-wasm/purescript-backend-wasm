@@ -25,7 +25,7 @@ import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Compiler (compileModules, mirTrace, parseModule)
-import PureScript.Backend.Wasm.Lower.IR (exportManifestJson)
+import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
@@ -160,6 +160,19 @@ buildCmd cliRoot args = do
     if Set.member name allModNames then readExterns =<< joinPath [ args.input, name, "externs.cbor" ]
     else readExterns =<< joinPath [ libPath, name, "externs.cbor" ]
   allSigs <- buildForeignSigs args.input libPath externs modules
+  -- `-E/--executable`: produce a runnable that auto-runs the entry's `main`. v0.1 supports this for
+  -- node/browser only (the JS loader calls `main` on load); `main` must be `main :: Effect Unit` (a
+  -- nullary `Effect`). Validate up front so the build fails before the expensive compile/merge.
+  when args.executable do
+    case args.platform of
+      Standalone -> logAndThrow "--executable is not supported with --platform=standalone (it has no loader to run `main`). Use --platform=node or browser."
+      _ -> pure unit
+    case Object.lookup "main" (rootExportSigs roots allSigs) of
+      Just s
+        | Array.null s.params
+        , MEffect _ <- s.result -> pure unit
+      Just _ -> logAndThrow "--executable requires the entry module's `main` to have type `Effect Unit`."
+      Nothing -> logAndThrow "--executable: no `main` export found in the entry module(s)."
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
   -- One bundle per build, written flat under `--output` (no per-module subdir): the build emits a
   -- single linked wasm + optional loader, not per-module artifacts (ADR 0009), so a module-named
@@ -213,15 +226,17 @@ buildCmd cliRoot args = do
           -- emit the JS loader when there are JS foreign imports to satisfy, or when any entry export
           -- needs marshalling (a non-`i32`/`f64` param/result); ADR 0014.
           let exportSigs = rootExportSigs roots allSigs
-          let needLoader = not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
+          -- `-E` forces a loader (it must call `main` on load) even if nothing else needs marshalling.
+          let needLoader = args.executable || not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
           -- `standalone` is a self-contained wasm with no loader; node/browser emit one when needed.
           -- node and browser share the same loader except for how it loads the wasm bytes (Node reads
           -- the file; the browser `fetch`es it). Browser emits a single wasm — chunking, which
           -- `--no-chunks` opts out of, is not implemented yet.
+          let emit browser = emitLoader browser args.executable bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs)
           case args.platform of
             Standalone -> pure unit
-            Browser -> when needLoader (emitLoader true bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
-            Node -> when needLoader (emitLoader false bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs))
+            Browser -> when needLoader (emit true)
+            Node -> when needLoader (emit false)
           info $ Log.blue (Fmt.fmt @"✓ Wrote {file}" { file: wasmPath })
           pure wasmPath
       -- footer: elapsed wall-clock time and the artifact's size
