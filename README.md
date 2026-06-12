@@ -2,7 +2,7 @@
 
 An experimental WebAssembly backend for PureScript compiler
 
-[![purs - v0.15.16](https://img.shields.io/badge/purs-v0.15.16-blue?logo=purescript)](https://github.com/purescript/purescript/releases/tag/v0.15.15) [![CI](https://github.com/katsujukou/purescript-backend-wasm/actions/workflows/ci.yaml/badge.svg)](https://github.com/katsujukou/purescript-backend-wasm/actions/workflows/ci.yaml)
+[![purs - v0.15.16](https://img.shields.io/badge/purs-v0.15.16-blue?logo=purescript)](https://github.com/purescript/purescript/releases/tag/v0.15.15) [![CI](https://github.com/purs-wasm/purescript-backend-wasm/actions/workflows/ci.yaml/badge.svg)](https://github.com/purs-wasm/purescript-backend-wasm/actions/workflows/ci.yaml)
 
 ## Overview
 
@@ -130,17 +130,17 @@ so on wasm the JS habit of hand-uncurrying hot paths is genuinely unnecessary.
 These benchmarks measure **steady-state throughput after warmup**: both the JS and
 the Wasm code are run long enough for V8 to tier up hot code before timing, so the
 results reflect optimized runtime performance rather than startup latency. The graphs
-below are rendered and published to [GitHub Pages](https://katsujukou.github.io/purescript-backend-wasm/)
+below are rendered and published to [GitHub Pages](https://purs-wasm.github.io/purescript-backend-wasm/)
 by CI on each push to `main` (CI-runner timing is indicative — the curves, ratios, and
 stack-overflow behaviour are the signal). Reproduce locally with `cd bench && npm run graph`.
 
 | | |
 |:---:|:---:|
-| ![fib](https://katsujukou.github.io/purescript-backend-wasm/fib.png) | ![sumLoop](https://katsujukou.github.io/purescript-backend-wasm/sumLoop.png) |
-| ![qsort](https://katsujukou.github.io/purescript-backend-wasm/qsort.png) | ![nqueens](https://katsujukou.github.io/purescript-backend-wasm/nqueens.png) |
-| ![bintreeDfs](https://katsujukou.github.io/purescript-backend-wasm/bintreeDfs.png) | ![bintreeBfs](https://katsujukou.github.io/purescript-backend-wasm/bintreeBfs.png) |
-| ![mapFold](https://katsujukou.github.io/purescript-backend-wasm/mapFold.png) | ![countState](https://katsujukou.github.io/purescript-backend-wasm/count-state.png) |
-| ![countEffect](https://katsujukou.github.io/purescript-backend-wasm/count-effect.png) | ![curry](https://katsujukou.github.io/purescript-backend-wasm/curry.png) |
+| ![fib](https://purs-wasm.github.io/purescript-backend-wasm/fib.png) | ![sumLoop](https://purs-wasm.github.io/purescript-backend-wasm/sumLoop.png) |
+| ![qsort](https://purs-wasm.github.io/purescript-backend-wasm/qsort.png) | ![nqueens](https://purs-wasm.github.io/purescript-backend-wasm/nqueens.png) |
+| ![bintreeDfs](https://purs-wasm.github.io/purescript-backend-wasm/bintreeDfs.png) | ![bintreeBfs](https://purs-wasm.github.io/purescript-backend-wasm/bintreeBfs.png) |
+| ![mapFold](https://purs-wasm.github.io/purescript-backend-wasm/mapFold.png) | ![countState](https://purs-wasm.github.io/purescript-backend-wasm/count-state.png) |
+| ![countEffect](https://purs-wasm.github.io/purescript-backend-wasm/count-effect.png) | ![curry](https://purs-wasm.github.io/purescript-backend-wasm/curry.png) |
 
 ## Example
 
