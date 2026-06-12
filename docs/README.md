@@ -1,5 +1,14 @@
-# Documentation for `purs-backend-wasm`
+# Documentation for `purs-wasm`
 
-- [Supported Features](./supported-features.md)
+This directory holds comprehensive documentation for purs-wasm — from how to use it to the
+details of its internal design.
 
-- [Optimizations](./optimizations.md)
+- If you are an application developer or library author and only want to know how to compile
+  your PureScript project to WebAssembly with purs-wasm, read the documents under
+  [getting-started](./getting-started/).
+
+- If you are interested in how purs-wasm works internally, [developers-guide](./developers-guide/)
+  is what you are looking for.
+
+- For why purs-wasm took its current shape out of the many technical alternatives, read
+  [design-decisions](./design-decisions/).

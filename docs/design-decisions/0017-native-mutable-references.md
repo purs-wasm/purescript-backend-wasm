@@ -8,7 +8,7 @@
 `Effect.Ref` (and `Control.Monad.ST`) provide a mutable cell. The standard library
 implements them with FFI whose values are **JS objects** (`_new` returns `{ value }`).
 Routed through the JS provider ladder (ADR 0014), that hits the JS-origin-opaque
-limitation documented in `docs/interop.md`: a `Ref` created on the JS side cannot be held
+limitation documented in `docs/developers-guide/interop.md`: a `Ref` created on the JS side cannot be held
 by wasm and passed back to `read`/`write` — `MOpaque` is carried as the internal GC
 `eqref`, but a JS object is an `externref`, so returning it to a `(result eqref)` import
 throws `TypeError: type incompatibility when transforming from/to JS` at run time. The

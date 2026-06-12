@@ -86,7 +86,7 @@ is left as-is.
 
 - **Fix the JS host path** (marshal `Effect` thunks / loop bodies across the boundary).
   Needs the deferred closure-direction-2 + JS-origin-opaque machinery (ADR 0014 /
-  `docs/interop.md`), is slower (a JS loop re-entering wasm per iteration), and is
+  `docs/developers-guide/interop.md`), is slower (a JS loop re-entering wasm per iteration), and is
   unnecessary since the loops need no host.
 - **Represent `EffectFnN` as a distinct uncurried wasm function type.** More machinery for
   no gain — the uniform arity-1 `$Clo` already models it, making `mkEffectFnN` a no-op.

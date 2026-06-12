@@ -64,7 +64,7 @@ globalized; recursive non-function values remain unsupported.
   methods (`addableInt`, `double1 = double addableInt`) are CAFs, and as nullary
   getter functions they are **re-evaluated on every reference** — re-allocating the
   dictionary `$Rec` struct/arrays and re-doing the label projection on each dispatch
-  (see `docs/supported-features.md`). Globalizing CAFs gives the same evaluate-once
+  (see `docs/developers-guide/supported-features.md`). Globalizing CAFs gives the same evaluate-once
   sharing the JS backend gets from `const double1 = double(addableInt)`, removing
   that per-call allocation from the dictionary hot path. (Eliminating the dictionary
   entirely is the separate ADR 0005 optimization.)

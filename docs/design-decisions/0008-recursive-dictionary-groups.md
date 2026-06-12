@@ -63,7 +63,7 @@ and does **not** constrain construction order.
 
 3. **For sharing / efficiency, memoize** (the same penalty as ADR 0006's CAFs:
    without it each reference rebuilds the dictionary; see
-   `docs/supported-features.md`). Two viable mechanisms:
+   `docs/developers-guide/supported-features.md`). Two viable mechanisms:
    - **CAF globals (preferred, ADR 0006):** build each dictionary once into a
      module global; forcing a superclass thunk then reads the cached dictionary.
    - **Knot-tying (the Slice 2 closure technique):** allocate every group

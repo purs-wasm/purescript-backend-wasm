@@ -89,8 +89,8 @@ instance groups, the `Effect` monad (with `Effect.Ref` and the `effect` package'
 control-flow primitives), and user-defined FFI including effectful foreigns. The `Effect`
 monad collapses like a transparent monad — constant-stack loops — while preserving effect
 order and count. A non-trivial program (a System F type checker / evaluator) compiles to and
-runs on wasm. See [`docs/supported-features.md`](../supported-features.md) and
-[`docs/optimizations.md`](../optimizations.md) for the authoritative, up-to-date status.
+runs on wasm. See [`docs/developers-guide/supported-features.md`](../developers-guide/supported-features.md) and
+[`docs/developers-guide/optimizations.md`](../developers-guide/optimizations.md) for the authoritative, up-to-date status.
 
 Current frontiers, tracked by the records above: the real `bin` linker (reachability
 pruning and streaming, dependency-ordered optimization — ADR 0021), multi-platform packaging
