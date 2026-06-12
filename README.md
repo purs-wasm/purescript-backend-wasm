@@ -8,86 +8,16 @@ An experimental WebAssembly backend for PureScript compiler
 
 The compiler consumes `purs`'s CoreFn (`corefn.json`) and externs (`externs.cbor`)
 output and produces a single WebAssembly module via the
-[Binaryen](https://github.com/WebAssembly/binaryen) JS API. It targets **Wasm
-GC**, so heap values (ADTs, records, closures) are reclaimed by the host VM.
+[Binaryen](https://github.com/WebAssembly/binaryen) JS API.
+It targets **Wasm　GC**, so heap values (ADTs, records, closures) are reclaimed by the host VM.
 
-Currenlty supported features are listed in 
-[`docs/developers-guide/supported-features.md`](docs/developers-guide/supported-features.md).
+For more information, please consult [the documentation site](https://purs-wasm.github.io/documentation/getting-started/overview).
 
-Key architectural decisions are recorded as ADRs under
-[`docs/design-decisions/`](docs/design-decisions/).
+## Future Enhancements
 
-## WASM vs JS
-
-How this backend differs from a JavaScript backend (`purs` / `purs-backend-es`). Most of
-PureScript behaves identically; the wasm-specific points worth knowing:
-
-- **Strings are UTF-8 byte arrays.** A `String` is its UTF-8 bytes, so `length` counts
-  *bytes* (not UTF-16 code units) and ordering is by code point — a deliberate divergence
-  from `Data.String.CodeUnits`. See [Runtime representation](./docs/developers-guide/runtime-representation.md#string).
-- **`Effect` (and monadic loops) run in constant stack.** `Effect` / `State` do-blocks
-  collapse to flat loops, so deep effectful recursion that overflows a JS backend (whose
-  bind chain is not tail-call-optimized) runs flat here. See
-  [Optimizations](./docs/developers-guide/optimizations.md#worked-example-the-effect-monad).
-- **Manual uncurrying rarely pays.** `Fn` / `EffectFn` lower to the *same* arity-1 closures
-  as curried code (`mkFnN` is the identity, `runFnN` is the saturated apply), so curried and
-  uncurried application are the *same* code on wasm. The [curry benchmark](#benchmarks)
-  confirms it — curried/uncurried time is ~1.0 on wasm regardless of size, while
-  `purs-backend-es` pays ~3× for curried application through a dynamic boundary. So the JS
-  habit of hand-uncurrying hot paths (e.g. Halogen VDom) is unnecessary here. See
-  [Optimizations](./docs/developers-guide/optimizations.md).
-- **Values are wasm-GC heap objects**, managed by the host garbage collector — no linear
-  memory, no manual allocation. `Boolean` is an unboxed `i31`; `Int` / `Number` unbox to
-  `i32` / `f64` where boxing is unnecessary. See [Runtime representation](./docs/developers-guide/runtime-representation.md).
-- **Records and type-class dictionaries share one representation** (a label-map), and most
-  dictionaries are eliminated outright by the optimizer. See
-  [Optimizations](./docs/developers-guide/optimizations.md#dictionary-elimination).
-- **Polymorphic containers still box their elements** (as JS does) — unboxing applies to
-  concrete scalar fields; removing it would need monomorphization (out of scope). See
-  [Optimizations § Known gaps](./docs/developers-guide/optimizations.md#known-gaps).
-- **Crossing to JS is an explicit marshalling boundary** (scalars cross raw; strings,
-  arrays, records, closures are marshalled). See [JS↔WASM interop](./docs/developers-guide/interop.md).
-
-## WIP
-
-### PureScript language features
-
-- [x] [Higher-order functions](./docs/developers-guide/supported-features.md#closures-and-higher-order-functions) with [full-support for partial/over application](./docs/developers-guide/supported-features.md#function-application-partial-and-over)
-- [x] [strings](./docs/developers-guide/supported-features.md#strings), [arrays](./docs/developers-guide/supported-features.md#arrays) and [records](./docs/developers-guide/supported-features.md#records)
-- [x] [ADT and pattern matching](./docs/developers-guide/supported-features.md#algebraic-data-types-and-pattern-matching)
-- [x] [Recursive let-bindings](./docs/developers-guide/supported-features.md#recursive-let-bindings)
-- [x] [Typeclass resolution](./docs/developers-guide/supported-features.md#typeclass-dictionaries), including cyclic instance groups (`Effect`'s Functor/Applicative/Monad)
-- [x] [The `Effect` monad](./docs/developers-guide/supported-features.md#the-effect-monad) — collapses like a transparent monad (constant-stack loops), with effect order/count preserved
-- [x] [User-defined FFI](./docs/developers-guide/supported-features.md#foreign-function-interface), including [effectful foreigns](./docs/developers-guide/interop.md#an-effectful-foreign) (`a -> Effect b`, the `console.log` shape)
-
-### Optimizations
-
-- [x] Scalar unboxing — `Int`/`Char` as `i32`, `Number` as `f64`, enum-like ADTs as `i31` tags (no heap box)
-- [x] ADT field unboxing
-- [x] Typeclass dictionary elimination
-- [x] Inlining of Known-function (small or single-use, cycle-free) with β-reduction
-- [x] record-accessor projection & case-of-known-constructor reduction
-- [x] Lambda lifting
-- [x] Higher-order specialization (static-argument transformation)
-- [x] Tail-call elimination
-- [x] Dead-code elimination
-- [x] Effect reflection (impurification) + whole-program purity analysis
-- [ ] Monomorphization
-
-Please refer to the [docs/developers-guide/optimizations.md](./docs/developers-guide/optimizations.md) for detailed explanation.
-
-### Other features
-
-- [ ] Multiple platform support (browser/node/native)
-
-
-## TODO
-
-Toward a **v0.1** release:
-
-- [ ] Streaming / demand-driven production linker (dependency-ordered codegen; ADR 0009 / 0021) — the `purs-wasm` CLI links eagerly today
-- [ ] Publish to npm
-- [ ] One-stop CLI for tryout (via Nix)
+- [ ] Batch compilation and incremental build
+- [ ] WASI support
+- [ ] Monomorphization optimization
 
 ## Benchmarks
 

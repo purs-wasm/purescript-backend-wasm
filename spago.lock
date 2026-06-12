@@ -967,7 +967,10 @@
       }
     },
     "extra_packages": {
-      "wasm-base": "0.1.1"
+      "wasm-base": {
+        "git": "https://github.com/purs-wasm/purescript-wasm-base.git",
+        "ref": "v0.1.1"
+      }
     }
   },
   "packages": {
@@ -2184,9 +2187,9 @@
       ]
     },
     "wasm-base": {
-      "type": "registry",
-      "version": "0.1.1",
-      "integrity": "sha256-1NNv/86dSLEFHdOI2iugdhc5gx6FS9KA4HoDrYiCq7s=",
+      "type": "git",
+      "url": "https://github.com/purs-wasm/purescript-wasm-base.git",
+      "rev": "48d9b4fdc7d7e952f168cf062819ac3c13be67ea",
       "dependencies": []
     }
   }

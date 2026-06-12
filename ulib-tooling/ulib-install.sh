@@ -1,15 +1,18 @@
 #!/usr/bin/env sh
 # Build the ulib shadow library (ADR 0028/0031): compile each ulib module in
 # `<ulib-src>/<package>/<Module>.purs` (dotted, flat per package — ADR 0031 §2.1) against the
-# resolved package-set sources (so its imports/interface resolve) with WasmBase overlaid, then
-# extract the modules' corefn + externs into the flat `<lib>/<Module>/` layout (ADR 0031 §2.2). The
-# version lives only in `<manifest>` (`ulib-manifest.json`); `pkgver` reads it for the install log
-# and as the "package must be ulib-covered" guard.
+# resolved sources in `<spago-packages-dir>` (the package set + the `wasm-base` extraPackage the
+# shadows are PureScript over), then extract the modules' corefn + externs into the flat
+# `<lib>/<Module>/` layout (ADR 0031 §2.2). The version lives only in `<manifest>`
+# (`ulib-manifest.json`); `pkgver` reads it for the install log and as the "package must be
+# ulib-covered" guard.
+#
+# PREREQUISITE: the caller MUST have populated `.spago/p` with the shadows' dependency closure —
+# crucially `wasm-base` (an extraPackage now, not a local dir) — by building something that pulls it
+# first (e.g. `spago build -p bench`). Every caller does this (e2eCliPrebuild / prepack / bench.yaml).
 #
 # Invoked by `ulib-tooling install` as:
 #   sh ulib-install.sh <lib> <ulib-src> <purs> <manifest> <wasm-as> [<spago-packages-dir>]
-# WasmBase is no longer overlaid from a local dir — it is a resolved package (`wasm-base`, an
-# extraPackage / registry dep), so it comes in with the rest of the package-set sources in step 1.
 set -eu
 
 LIB="$1"; ULIB_SRC="$2"; PURS="$3"; MANIFEST="$4"; WASM_AS="$5"; SPAGO="${6:-.spago/p}"

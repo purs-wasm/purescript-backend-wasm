@@ -28,6 +28,10 @@ const entries = walk(srcDir).map(moduleOf).sort();
 
 // the build tooling the CLI needs: its own compile, the installed ulib lib, and the fixtures' corefn.
 run("spago", ["build", "-p", "ulib-tooling"]);
+// `ulib install` compiles the shadows over `.spago/p` (incl. the resolved `wasm-base` package — it is
+// an extraPackage now, not a local dir); prime `.spago` by building `bench` (its closure pulls
+// wasm-base in) so that package is present when the install globs `.spago/p`.
+run("spago", ["build", "-p", "bench", "--output", "bench/output"]);
 run("node", ["ulib-tooling/index.dev.js", "install"]);
 const fixturesOut = "compiler/test/e2e-fixtures-out";
 rmSync(join(repo, fixturesOut), { recursive: true, force: true });
