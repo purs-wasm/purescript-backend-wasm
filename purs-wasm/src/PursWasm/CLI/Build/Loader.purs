@@ -45,6 +45,13 @@ emitLoader cliRoot browser executable bundleDir input mods sigs exportManifest =
   for_ mods (copyForeign foreignDir)
   marshalDst <- joinPath [ bundleDir, "marshal.js" ]
   readText (loaderGlue cliRoot) >>= maybe (pure unit) (writeText marshalDst)
+  -- Mark the whole output as an ESM package, so `marshal.js` and the copied `foreign/*.js` load as
+  -- ES modules even when the *user's* project is CommonJS (no `"type": "module"`) — otherwise Node
+  -- treats the emitted `.js` as CJS and `import { makeMarshal }` fails.
+  pkgJson <- joinPath [ bundleDir, "package.json" ]
+  writeText pkgJson
+    """{ "type": "module" }
+"""
   indexMjs <- joinPath [ bundleDir, "index.mjs" ]
   writeText indexMjs (loaderSource browser executable (manifestJs mods sigs) exportManifest)
   info $ Log.blue (Fmt.fmt @"✓ Wrote {file} (+ {n} foreign module(s))" { file: indexMjs, n: Array.length mods })

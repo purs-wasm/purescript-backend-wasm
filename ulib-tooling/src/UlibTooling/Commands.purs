@@ -26,7 +26,7 @@ import UlibTooling.Options (UlibCheckOption, UlibInstallOption)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
 
--- | `ulib-tooling install` (ADR 0028/0031): compile the ulib modules (`<cli>/../ulib/<package>/
+-- | `ulib-tooling install` (ADR 0028/0031): compile the ulib modules (`<cli>/ulib/<package>/
 -- | <Module>.purs`, ADR 0031 §2.1) into the flat lib (`$LIB/<Module>/`, corefn + externs +
 -- | per-module kept-foreign `foreign.wasm`, ADR 0031 §2.2) via `ulib-install.sh`. Skips if the lib
 -- | already exists, unless `--force`. Versions come from `ulib-manifest.json` (no longer the source

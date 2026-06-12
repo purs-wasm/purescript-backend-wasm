@@ -90,8 +90,8 @@ buildCmd cliRoot binaryenBinDir args = do
   info ""
   info "Selecting modules to pack in..."
 
-  -- Where the ulib lib lives (ADR 0031 §5): `$PURS_WASM_LIB` if set, else `<cliRoot>/../lib` beside
-  -- the binary. `build` has no `-L` flag, so the override is always `Nothing` here.
+  -- Where the ulib lib lives (ADR 0031 §5): `$PURS_WASM_LIB` if set, else `<cliRoot>/lib` shipped in
+  -- the package. `build` has no `-L` flag, so the override is always `Nothing` here.
   libPath <- resolveLibPath cliRoot Nothing
   shadows <- loadShadowMap libPath
   -- Each subdirectory of `input` is named by its dotted module name; sort for a deterministic

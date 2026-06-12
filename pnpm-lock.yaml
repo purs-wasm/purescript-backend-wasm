@@ -30,7 +30,23 @@ importers:
 
   compiler/test/e2e-fixtures-out: {}
 
-  purs-wasm: {}
+  examples/output: {}
+
+  examples/output-effect-prim: {}
+
+  examples/output-meta: {}
+
+  examples/output-priv: {}
+
+  examples/output-random: {}
+
+  examples/output-run: {}
+
+  purs-wasm:
+    dependencies:
+      binaryen:
+        specifier: ^123.0.0
+        version: 123.0.0
 
   ulib-tooling: {}
 

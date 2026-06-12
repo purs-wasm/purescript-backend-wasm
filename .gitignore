@@ -29,3 +29,11 @@ compiler/test/e2e-fixtures-out/
 
 #
 _draft
+
+# purs-wasm npm bundle build artifacts
+purs-wasm/bundle/
+purs-wasm/.build/
+purs-wasm/runtime/
+purs-wasm/lib/
+purs-wasm/*.tgz
+purs-wasm/package/
