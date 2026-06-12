@@ -93,8 +93,12 @@ details.
 - `-O | --output <dir>` — the directory the build artifacts are written to. Defaults to
   `output-wasm`.
 - `-p | --platform <node|browser|standalone>` — deployment target. `node` / `browser` emit
-  a single wasm plus a JS loader; `standalone` emits a self-contained single wasm with no
+  a single wasm plus a JS loader (the loader differs only in how it loads the wasm: Node reads
+  the file, the browser `fetch`es it); `standalone` emits a self-contained single wasm with no
   loader. Defaults to `node`.
+- `-E | --executable` — produce a runnable: the JS loader calls the entry module's `main` on
+  load, so running the loader runs the program. Requires `main :: Effect Unit` and
+  `--platform=node` or `browser` (not valid with `standalone`).
 - `-t | --text` — emit the WebAssembly text format (`.wat`) instead of a binary `.wasm`.
 - `-g | --debug` — debug build: skip the Binaryen optimizer (keeps the wasm close to the
   emitted IR).
