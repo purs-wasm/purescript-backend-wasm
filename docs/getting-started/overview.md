@@ -1,9 +1,6 @@
 # Overview
 
-Purs-wasm is an experimental compiler from PureScript CoreFn to WebAssembly. According to
-our benchmarks, the compiled wasm typically runs faster than the JavaScript emitted by both
-the stock `purs` compiler and
-[purs-backend-es](https://github.com/aristanetworks/purescript-backend-optimizer).
+This is your starting point for using purs-wasm. The sections below cover how to install it and how to run it on a PureScript project to produce WebAssembly.
 
 ## Installation
 
