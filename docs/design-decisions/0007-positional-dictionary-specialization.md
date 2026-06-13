@@ -1,6 +1,6 @@
 # 0007. Positional (tuple) type-class dictionary specialization
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-13: the decision is two-fold and accepted as such — (a) **keep** the interned-i32 label-map as the dictionary/record representation, which is shipped and load-bearing (`$Rec`/`$LabelIds`, dict elimination in the ADR-0005 IR); (b) **defer** positional (tuple) specialization as a future optimization, still unimplemented. The kept baseline is in production; the positional layout is deferred-within-Accepted.)_
 - Date: 2026-05-31
 
 ## Context

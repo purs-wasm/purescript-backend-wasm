@@ -1,6 +1,6 @@
 # 0030. `Data.String` over UTF-8: code-point semantics, byte access via `Wasm.String`
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-13: implemented. The ulib `Data.String.*` shadows (`CodeUnits` / `CodePoints` / `Common` / `Unsafe`, over the private `Data.String.Internal.Utf8` codec) give code-point semantics over the UTF-8 `$Str`; byte-level access lives in `Wasm.String` (`byteLength` / `byteAt`); `Char` is a Unicode code point.)_
 - Date: 2026-06-10
 - Builds on: [0001](0001-wasm-gc-substrate-and-value-representation.md) (`$Str` = UTF-8 bytes), [0026](0026-wasmbase-primitive-layer.md) (WasmBase `Wasm.*`), [0028](0028-ulib-library-layer-shadowing.md) (lib-first shadowing)
 
