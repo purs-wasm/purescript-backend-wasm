@@ -15,6 +15,7 @@ import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift as Lambda
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.FreeVars as FreeVars
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify as Simplify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize as Specialize
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify as Impurify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import Test.Unit.PureScript.Backend.Wasm.SourceForeigns as SourceForeigns
@@ -35,6 +36,7 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   LambdaLift.spec
   Simplify.spec
   Specialize.spec
+  DictElim.spec
   Impurify.spec
   Purity.spec
   SourceForeigns.spec
