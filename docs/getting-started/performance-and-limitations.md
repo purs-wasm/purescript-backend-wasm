@@ -191,6 +191,11 @@ main :: Effect Unit
 main = logShow (shrink (alice // { bio: "…" }))
 ```
 
+The workaround helps only when the top-level value is in **your** code. If a **library** holds
+such a binding internally — `record-studio`, whose `keys`/`shrink` route through
+`unfoldrArrayImpl`, is one — moving your own code into `main` does not help, and the program traps
+at load until the fix lands (the `examples/record-meta` example is kept as a repro of exactly this).
+
 The fix (the loader runs initialization *after* instantiation, instead of the wasm start section)
 rides along with the streaming-compilation work — see
 [ADR 0006](https://github.com/purs-wasm/purescript-backend-wasm/blob/main/docs/design-decisions/0006-top-level-value-bindings-as-globals.md)
