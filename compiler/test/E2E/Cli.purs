@@ -10,6 +10,7 @@ import Prelude
 
 import Effect (Effect)
 import Test.E2E.Cli.AsPattern as AsPattern
+import Test.E2E.Cli.CafForeign as CafForeign
 import Test.E2E.Cli.Counter as Counter
 import Test.E2E.Cli.Eff as Eff
 import Test.E2E.Cli.EffectPrim as EffectPrim
@@ -102,6 +103,7 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   EffectPrim.spec
   Counter.spec
   ForeignImport.spec
+  CafForeign.spec
   ForeignMarshal.spec
   ForeignRecord.spec
   ForeignExport.spec

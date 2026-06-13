@@ -124,12 +124,18 @@ for (const { module, name } of WebAssembly.Module.imports(mod)) {
 }
 
 inst = await WebAssembly.instantiate(mod, importObject);
+// Run module initialization (the CAF globals, ADR 0006) AFTER instantiation, not via the wasm
+// `start` section — so a CAF whose init calls a JS foreign that re-enters wasm reaches the
+// now-bound instance instead of trapping during instantiation (ADR 0021). `caf_init` is absent
+// when the program globalizes no CAFs.
+inst.exports.caf_init?.();
 // expose the exports as plain JS values. A function export (the type has arguments) is
 // wrapped so callers pass/receive JS values; a nullary value binding (a CAF, the type
 // has no arguments) is evaluated once here and exposed as the value itself — marshalled
 // for a non-raw result — so JS sees `exports.x` as `42` / "hi" / {…}, not a function.
 const marshalledExports = {};
 for (const name of Object.keys(inst.exports)) {
+  if (name === "caf_init") continue; // internal module-init hook, not a user export
   const e = inst.exports[name];
   const sig = EXPORTS_MANIFEST[name];
   if (!sig || typeof e !== "function") {

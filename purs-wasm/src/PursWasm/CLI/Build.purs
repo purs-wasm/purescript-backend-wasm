@@ -8,8 +8,8 @@ module PursWasm.CLI.Build
 
 import Prelude
 
+import Binaryen as B
 import Data.Array as Array
-import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..), either)
 import Data.Foldable (for_)
 import Data.Int (toNumber)
@@ -24,7 +24,7 @@ import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Compiler (compileModules, mirTrace, parseModule)
+import PureScript.Backend.Wasm.Compiler (linkModule, mirTrace, parseModule)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
@@ -48,10 +48,6 @@ import Type.Row (type (+))
 -- | The dotted import module names of a `corefn.json`, extracted cheaply (no full decode), for
 -- | file-level reachability pruning.
 foreign import corefnImportsImpl :: String -> Array String
-
--- | The host-import module names a wasm binary declares (the user `foreign import` modules a JS
--- | loader must satisfy; ADR 0014).
-foreign import importModulesImpl :: Uint8Array -> Effect (Array String)
 
 -- | A monotonic clock in milliseconds, for the elapsed-time report.
 foreign import nowMsImpl :: Effect Number
@@ -195,15 +191,13 @@ buildCmd cliRoot binaryenBinDir args = do
   appPath <- joinPath [ bundleDir, "app.wasm" ]
   wasmPath <- joinPath [ bundleDir, "index.wasm" ]
   info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length modules })
-  liftEffect (compileModules opts roots modules externs allSigs) >>= case _ of
+  liftEffect (linkModule opts roots modules externs allSigs) >>= case _ of
     Left err -> logAndThrow err
-    Right bytes -> do
-      -- the user `foreign import` modules the wasm needs (empty for a self-contained program).
-      foreignMods <- liftEffect (importModulesImpl bytes)
-      writeBinary appPath bytes
+    Right built -> do
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
-      -- merged (speaks the internal ABI), else it falls back to the JS loader.
-      providers <- for foreignMods (resolveForeign binaryenBinDir shadows libPath args.input bundleDir)
+      -- merged (speaks the internal ABI), else it falls back to the JS loader. `foreignModules` is
+      -- the precise set the codegen emitted imports for (no byte re-parse).
+      providers <- for built.foreignModules (resolveForeign binaryenBinDir shadows libPath args.input bundleDir)
       let wasmProvided = Array.mapMaybe (\p -> Tuple p.name <$> p.wasm) providers
       let jsProvided = Array.mapMaybe (\p -> if isNothing p.wasm then Just p.name else Nothing) providers
       -- Policy on foreign imports with no `foreign.wat` provider (they otherwise fall back to a
@@ -212,6 +206,21 @@ buildCmd cliRoot binaryenBinDir args = do
       when (not (Array.null jsProvided)) case args.platform of
         Standalone -> logAndThrow (Fmt.fmt @"--platform=standalone needs every foreign import provided as wasm, but {n} fall back to JS: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided })
         _ -> when args.noJsFallback (logAndThrow (Fmt.fmt @"--no-js-fallback set, but {n} foreign import(s) lack a foreign.wat provider: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided }))
+      let exportSigs = rootExportSigs roots allSigs
+      -- `-E` forces a loader (it must call `main` on load) even if nothing else needs marshalling.
+      let needLoader = args.executable || not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
+      -- Packaging decides how CAF init runs (ADR 0006 / 0021): when a loader is emitted
+      -- (node/browser + needLoader) it calls `$caf_init` AFTER instantiation, so a CAF whose init
+      -- routes through a re-entrant JS foreign reaches the bound instance; with no loader, set it as
+      -- the wasm `start` section (safe — a no-loader build has no JS foreign to re-enter). Then emit
+      -- and dispose the live module (the "emit" half of the link/emit split).
+      let loaderEmitted = args.platform /= Standalone && needLoader
+      bytes <- liftEffect do
+        when (not loaderEmitted) (maybe (pure unit) (B.setStart built.mod) built.cafInit)
+        b <- B.emitBinary built.mod
+        B.dispose built.mod
+        pure b
+      writeBinary appPath bytes
       let mergeForeigns = wasmProvided >>= \(Tuple name wp) -> [ wp, name ]
       info (Fmt.fmt @"Linking runtime + {n} foreign provider(s) with wasm-merge…\n" { n: Array.length wasmProvided })
       execFile (wasmMergeBin binaryenBinDir) ([ appPath, "app", runtimeWasm cliRoot, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
@@ -225,15 +234,11 @@ buildCmd cliRoot binaryenBinDir args = do
           info $ Log.blue (Fmt.fmt @"✓ Wrote {file}" { file: watPath })
           pure watPath
         else do
-          -- emit the JS loader when there are JS foreign imports to satisfy, or when any entry export
-          -- needs marshalling (a non-`i32`/`f64` param/result); ADR 0014.
-          let exportSigs = rootExportSigs roots allSigs
-          -- `-E` forces a loader (it must call `main` on load) even if nothing else needs marshalling.
-          let needLoader = args.executable || not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
-          -- `standalone` is a self-contained wasm with no loader; node/browser emit one when needed.
-          -- node and browser share the same loader except for how it loads the wasm bytes (Node reads
-          -- the file; the browser `fetch`es it). Browser emits a single wasm — chunking, which
-          -- `--no-chunks` opts out of, is not implemented yet.
+          -- emit the JS loader (it satisfies JS foreigns, marshals non-scalar exports, and runs
+          -- `$caf_init` + `main`) when needed — ADR 0014. `standalone` is a self-contained wasm with
+          -- no loader; node/browser emit one when needed. node and browser share the same loader
+          -- except for how it loads the wasm bytes (Node reads the file; the browser `fetch`es it).
+          -- Browser emits a single wasm — chunking, which `--no-chunks` opts out of, is not yet done.
           let emit browser = emitLoader cliRoot browser args.executable bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs)
           case args.platform of
             Standalone -> pure unit
