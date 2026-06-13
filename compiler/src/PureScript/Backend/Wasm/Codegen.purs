@@ -54,8 +54,29 @@ import PureScript.Backend.Wasm.Lower.Reps (primRep)
 -- | runtime type group, add every function (`eqref` calling convention; lifted
 -- | code functions take `(ref $Clo, eqref)`), then add an `i32` export wrapper
 -- | per exported function.
+-- |
+-- | Structured as the three-phase codegen seam — `initCodegen` (substrate + whole-program
+-- | tables) → add each function (`addFunc`) → `finalizeCodegen` (CAF init + export wrappers) —
+-- | so streaming codegen (ADR 0021 b1) can later feed functions module-by-module and discard
+-- | each module's IR, instead of holding the whole `Program` as here.
 buildModule :: Program -> Effect CompiledModule
 buildModule prog = do
+  st <- initCodegen prog
+  traverse_ (addFunc st.ctx) prog.funcs
+  cafInit <- finalizeCodegen st prog
+  pure { mod: st.ctx.mod, foreignModules: foreignModuleNames prog, cafInit }
+
+-- | The accumulating codegen state: the live Binaryen module (in `ctx`) and the CAF plan.
+-- | Set up by `initCodegen`, fed functions via `addFunc ctx`, closed by `finalizeCodegen`.
+type CodegenState = { ctx :: Ctx, cplan :: CafPlan }
+
+-- | Phase 1 of the codegen seam: create the module, build the value/data type substrate, and
+-- | install the whole-program tables and globals (function sigs, foreign imports, the
+-- | `internStr` resolver, nullary/CAF globals, the test counter). Everything a function body
+-- | needs to exist before it is added. (Streaming b1 will derive these from a summary scan;
+-- | here they come from the whole `Program`.)
+initCodegen :: Program -> Effect CodegenState
+initCodegen prog = do
   mod <- B.createModule
   B.setFeaturesGC mod
   rt <- buildRuntimeTypes mod
@@ -69,10 +90,16 @@ buildModule prog = do
   addNullaryGlobals ctx (nullaryTags prog)
   addCafGlobals ctx cplan.globals
   when (needsCounter prog) (addCounterGlobal ctx)
-  traverse_ (addFunc ctx) prog.funcs
-  cafInit <- addCafInit ctx cplan
-  traverse_ (addExportWrapper ctx prog.exportSigs) prog.funcs
-  pure { mod, foreignModules: foreignModuleNames prog, cafInit }
+  pure { ctx, cplan }
+
+-- | Phase 3 of the codegen seam (after every function is added): synthesize the CAF-init
+-- | function and the host export wrappers. Returns the CAF-init function for packaging to wire
+-- | (loader call vs wasm `start`, ADR 0006).
+finalizeCodegen :: CodegenState -> Program -> Effect (Maybe B.Function)
+finalizeCodegen st prog = do
+  cafInit <- addCafInit st.ctx st.cplan
+  traverse_ (addExportWrapper st.ctx prog.exportSigs) prog.funcs
+  pure cafInit
 
 -- | The result of building a Binaryen module from the IR, with what packaging needs after:
 -- | the distinct user `foreign import` module names to resolve (ADR 0014) and the CAF-init
