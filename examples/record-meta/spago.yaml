@@ -1,0 +1,7 @@
+package:
+  name: examples-recordmeta
+  dependencies:
+    - console
+    - effect
+    - prelude
+    - record-studio

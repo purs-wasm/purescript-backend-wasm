@@ -11,6 +11,21 @@
 > - **`$Clo` / `$Code`**: closures are **not** per-lambda subtypes. `$Clo = (struct funcref (ref $Vals))` — a single non-subtyped struct holding the code as a generic `funcref` plus a captured-env `$Vals` array (a free variable is read positionally: `EnvField i`). The code field is deliberately `funcref` (its lifted body structurally matches `$Code`), and `$Code` is built in a **separate** type group, not `$Clo`'s. Mutual recursion is knot-tied by back-patching the **env array** (`array.set` into the `(mut eqref)` `$Vals`), not by mutable struct fields on subtypes.
 > - **Type-group structure**: the value types are each emitted as an **independent singleton rec group** (not one multi-member `(rec …)`); `$Ref = (struct (mut eqref))` was added later for `Effect.Ref`/`STRef` (ADR 0017).
 > - **String semantics**: the UTF-8 vs `Data.String.CodeUnits` note in Consequences was refined by **[ADR 0030](0030-data-string-over-utf8.md)** — `Data.String.CodeUnits` is **code-point**-indexed over UTF-8 (an astral char counts as 1), not UTF-16 code-unit-indexed; byte-level access lives in `Wasm.String`.
+>
+> **Update (2026-06-13) — runtime label interning (for record metaprogramming):** the uniform
+> label-map gives each label a program-wide **interned `i32` id**. Those ids were a *closed,
+> compile-time* set: `collectLabels` enumerates every **syntactic** record label (a `{l: …}` literal,
+> a `.l` accessor, an `r {l = …}` update, a `{l: pat}` binder) and assigns dense ids `0..N-1`, and the
+> string→id resolver `$internStr` (used by the string-keyed `Record.Unsafe` ops) ended in
+> `unreachable` for anything outside that set. That broke **record metaprogramming that introduces a
+> field whose name is not a syntactic label** (`Record.insert` / `Record.Builder` / `unsafeSet` over a
+> computed or `Symbol`-only name): the new label had no id, so `$internStr` trapped. The id space is
+> now **hybrid**: static labels keep their compile-time `0..N-1` ids (the dictionary/record fast path
+> is unchanged), and `$internStr` falls back to a **runtime intern table** (`$rt.internDynamic`,
+> `runtime.wat`) that find-or-appends an unknown name and returns `N + index`. Dynamic ids therefore
+> never collide with static ones, and `recSet`'s sorted insert keeps each record's `$LabelIds` ordered
+> for any id, so a dynamically-named field is read/written like any other. Reads, iteration, and
+> in-place updates were always fine; this closes field *addition*. (Regression: `Test.E2E.Cli.RecordMeta`.)
 
 ## Context
 

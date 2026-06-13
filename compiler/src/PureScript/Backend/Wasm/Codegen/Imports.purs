@@ -12,6 +12,7 @@ module PureScript.Backend.Wasm.Codegen.Imports
   , recHasHelperName
   , recSetHelperName
   , recDeleteHelperName
+  , internDynamicHelperName
   , strEqHelperName
   , strCmpHelperName
   , strConcatHelperName
@@ -58,6 +59,9 @@ importRuntime ctx = do
   imp recHasHelperName "recHas" [ B.eqref, B.i32 ] B.i32
   imp recSetHelperName "recSet" [ B.eqref, B.i32, B.eqref ] B.eqref
   imp recDeleteHelperName "recDelete" [ B.eqref, B.i32 ] B.eqref
+  -- runtime string interning for label names not in the compile-time table (record
+  -- metaprogramming that introduces a field name dynamically); `internStr`'s fallback.
+  imp internDynamicHelperName "internDynamic" [ B.eqref ] B.i32
   imp strEqHelperName "strEq" [ B.eqref, B.eqref ] B.i32
   imp strCmpHelperName "strCmp" [ B.eqref, B.eqref ] B.i32
   imp strConcatHelperName "strConcat" [ B.eqref, B.eqref ] B.eqref
@@ -102,6 +106,14 @@ recSetHelperName = "$rt.recSet"
 
 recDeleteHelperName :: String
 recDeleteHelperName = "$rt.recDelete"
+
+-- | Runtime string interning: maps a label `String` with no compile-time id (a field
+-- | name introduced dynamically, e.g. via `Record.insert` / `unsafeSet` whose name is not
+-- | a syntactic record label anywhere in the program) to a stable `i32` index in a runtime
+-- | table. `internStr`'s fallback adds the compile-time label count so the dynamic ids never
+-- | collide with the static `0..N-1` ones (ADR 0001 label-map; the runtime extension of it).
+internDynamicHelperName :: String
+internDynamicHelperName = "$rt.internDynamic"
 
 -- | The emitted resolver from a runtime label `String` to its interned `i32` id
 -- | (the program's `labels` table as an `if strEq … then id` chain). Lets

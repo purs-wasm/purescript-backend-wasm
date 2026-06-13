@@ -41,7 +41,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGlobalName, importRuntime, internStrName, projHelperName, recSetHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGlobalName, importRuntime, internDynamicHelperName, internStrName, projHelperName, recSetHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
@@ -287,12 +287,22 @@ readCaf ctx name rep = B.globalGet ctx.mod (cafGlobalName name) (repType ctx rep
 
 -- | Emit the `internStr` resolver: a `String` key → its interned `i32` label id,
 -- | as an `if (strEq key "label") then <id> else …` chain over the program's
--- | `labels` (ending in `unreachable` — a queried label is always interned). Used
--- | by `Record.Unsafe`'s string-keyed access to reach the id-keyed record helpers.
--- | (Binaryen prunes it when no record op references it.)
+-- | compile-time `labels`. A key NOT in that table — a field name introduced
+-- | dynamically (record metaprogramming: `Record.insert`/`unsafeSet` over a name that
+-- | is not a syntactic record label anywhere) — falls through to the runtime intern
+-- | table `$rt.internDynamic`, offset by the compile-time label count so the dynamic
+-- | ids never collide with the static `0..N-1` ones. `recSet`'s sorted insert keeps a
+-- | record's `$LabelIds` ordered for any id, so the dynamic ids slot in transparently.
+-- | Used by `Record.Unsafe`'s string-keyed access to reach the id-keyed record helpers.
+-- | (Binaryen prunes it — and the unused `internDynamic` import — when no record op
+-- | references it.)
 addInternStr :: Ctx -> Boolean -> Array (Tuple String Int) -> Effect Unit
 addInternStr ctx exportIt labels = do
-  miss <- B.unreachable ctx.mod
+  miss <- do
+    key <- B.localGet ctx.mod 0 B.eqref
+    dyn <- B.call ctx.mod internDynamicHelperName [ key ] B.i32
+    base <- B.i32Const ctx.mod (Array.length labels)
+    B.i32Add ctx.mod base dyn
   body <- foldr step (pure miss) labels
   _ <- B.addFunction ctx.mod internStrName (B.createType [ B.eqref ]) B.i32 [] body
   -- exported when a record/object foreign needs name→id resolution from the JS

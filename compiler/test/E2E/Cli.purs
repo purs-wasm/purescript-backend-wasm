@@ -43,6 +43,7 @@ import Test.E2E.Cli.PreludeSemigroup as PreludeSemigroup
 import Test.E2E.Cli.PreludeShow as PreludeShow
 import Test.E2E.Cli.RecordInstances as RecordInstances
 import Test.E2E.Cli.RecordUnsafe as RecordUnsafe
+import Test.E2E.Cli.RecordMeta as RecordMeta
 import Test.E2E.Cli.Records as Records
 import Test.E2E.Cli.Scalars as Scalars
 import Test.E2E.Cli.DataTypes as DataTypes
@@ -88,6 +89,7 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Records.spec
   RecordInstances.spec
   RecordUnsafe.spec
+  RecordMeta.spec
   AsPattern.spec
   NestedRecordPat.spec
   ExprEval.spec

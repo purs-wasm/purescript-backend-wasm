@@ -191,6 +191,20 @@
           "dependencies": []
         }
       },
+      "examples-recordmeta": {
+        "path": "examples/record-meta",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "prelude",
+            "record-studio"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-run": {
         "path": "examples/run",
         "core": {
@@ -1454,6 +1468,20 @@
         "unfoldable"
       ]
     },
+    "heterogeneous": {
+      "type": "registry",
+      "version": "0.7.0",
+      "integrity": "sha256-pQwcFvhWL8noktxaoD7FlLs2F2lYf3QHoyO0VOWO3I0=",
+      "dependencies": [
+        "either",
+        "foldable-traversable",
+        "functors",
+        "prelude",
+        "record",
+        "tuples",
+        "variant"
+      ]
+    },
     "identity": {
       "type": "registry",
       "version": "6.0.0",
@@ -1947,6 +1975,19 @@
       "dependencies": [
         "functions",
         "prelude",
+        "unsafe-coerce"
+      ]
+    },
+    "record-studio": {
+      "type": "registry",
+      "version": "1.0.4",
+      "integrity": "sha256-CRnFvSXpDDzio+buibUxFU9zPZDd7/lzrYC1Ya3FuIw=",
+      "dependencies": [
+        "heterogeneous",
+        "lists",
+        "prelude",
+        "record",
+        "typelevel-prelude",
         "unsafe-coerce"
       ]
     },
