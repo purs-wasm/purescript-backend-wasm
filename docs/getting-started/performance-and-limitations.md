@@ -161,42 +161,20 @@ boundary.
 `Aff` is not supported: its asynchronous scheduler relies on FFI that purs-wasm does not
 provide.
 
-### A top-level value computed through a re-entrant JS foreign traps at load
+### Higher-order foreigns whose callbacks carry non-scalar values
 
-A **top-level binding (CAF)** is computed once **at instantiation** — its value is stored in a
-module global the rest of the program reads (ADR 0006). If such a binding's computation
-transitively calls a **JS foreign that calls back into wasm** — a higher-order `foreign.js` that
-receives wasm closures, e.g. `Data.Unfoldable.unfoldrArrayImpl`, which `record-studio`'s
-`keys` / `shrink` reach — it **traps at load** with `TypeError: Cannot read properties of
-undefined (reading 'exports')`. The callback re-enters the instance's exports, but the loader binds
-the instance only *after* `WebAssembly.instantiate` returns, while initialization runs *during* it;
-WebAssembly does not let an instance's exports be re-entered from JS during its own start.
+A *scalar* wasm closure handed out to a JS foreign works (see *Restrictions on function
+marshalling* above — e.g. `mapJS :: (Int -> Int) -> …`). But a higher-order JS foreign whose
+**callbacks pass non-scalar values** (ADTs such as `Maybe` / `Tuple`, records, …) across the
+boundary is not yet supported: those values marshal as opaque references that the callback then
+cannot transform back, throwing `TypeError: type incompatibility when transforming from/to JS`.
 
-This only affects **top-level** values whose initializer routes through such a foreign — most record
-metaprogramming (including building records with `record-studio`) is fine when run from a function.
+The clearest example is `Data.Unfoldable.unfoldrArrayImpl` (the JS foreign behind `unfoldr`):
+its step function is `b -> Maybe (Tuple a b)`, so a `Maybe`/`Tuple` crosses on every call. Anything
+reaching it through the JS fallback hits this — including `record-studio`'s `keys` / `shrink`, so
+its record metaprogramming does not run yet (`examples/record-meta` is kept as a repro). Record
+metaprogramming written with first-order primitives — `RowToList` + `reflectSymbol` +
+`Record.insert` / `Record.Builder` (no `unfoldr` callback across JS) — works (see
+`Test.E2E.Cli.RecordMeta`).
 
-**Workaround:** compute the value inside `main` (or any function called after load), not as a
-top-level binding:
-
-```purescript
--- traps at load:
-result :: SomeRecord
-result = shrink (alice // { bio: "…" })
-
-main :: Effect Unit
-main = logShow result
-
--- works — computed after load:
-main :: Effect Unit
-main = logShow (shrink (alice // { bio: "…" }))
-```
-
-The workaround helps only when the top-level value is in **your** code. If a **library** holds
-such a binding internally — `record-studio`, whose `keys`/`shrink` route through
-`unfoldrArrayImpl`, is one — moving your own code into `main` does not help, and the program traps
-at load until the fix lands (the `examples/record-meta` example is kept as a repro of exactly this).
-
-The fix (the loader runs initialization *after* instantiation, instead of the wasm start section)
-rides along with the streaming-compilation work — see
-[ADR 0006](https://github.com/purs-wasm/purescript-backend-wasm/blob/main/docs/design-decisions/0006-top-level-value-bindings-as-globals.md)
-and [ADR 0021](https://github.com/purs-wasm/purescript-backend-wasm/blob/main/docs/design-decisions/0021-streaming-dependency-ordered-wpo.md).
+*Tracking Issue: [#12](https://github.com/purs-wasm/purescript-backend-wasm/issues/12)*
