@@ -16,6 +16,7 @@
 module PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline
   ( inlineCandidates
   , newtypeCtorNames
+  , generalInlineCap
   ) where
 
 import Prelude

@@ -27,7 +27,7 @@ def n e = M.NonRec Nothing n e
 
 -- the analysis over one module `T`, seeded with the single effectful foreign `T.eff`
 impureOf :: Array M.Bind -> Set.Set String
-impureOf decls = impureKeys (Set.singleton "T.eff") [ { name: [ "T" ], decls } ]
+impureOf decls = impureKeys (Set.singleton "T.eff") Set.empty [ { name: [ "T" ], decls } ]
 
 spec :: Spec Unit
 spec = describe "PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity" do
@@ -68,7 +68,7 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity" do
   describe "memEffKeys (memory-write effect set)" do
     let
       wa n = M.Var (Qualified (Just [ "Wasm", "Array" ]) n)
-      memEffOf decls = memEffKeys [ { name: [ "T" ], decls } ]
+      memEffOf decls = memEffKeys Set.empty [ { name: [ "T" ], decls } ]
 
     it "a binding that writes via unsafeSet is memory-effectful" do
       -- w = \a -> unsafeSet a 0 1

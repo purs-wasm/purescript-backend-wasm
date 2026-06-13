@@ -77,6 +77,13 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   specialized = specializeProgram lifted
   ordered = topoOrder specialized
 
+  -- The whole-program inline set's keys, computed once over the specialized program: exactly the
+  -- bindings any dependent may inline (`DictElim.buildCtx.inline` ∪ general inline candidates). A
+  -- finalized dependency's summary must retain these bodies so cross-module inlining — including the
+  -- large single-use helpers that expose a `perform` (e.g. `Control.Monad.ap`) — is preserved
+  -- regardless of pruning (ADR 0021 b1; guarded by the `DictElim` unit + `EffectPrim` e2e tests).
+  summaryInlineKeys = Set.fromFoldable (Map.keys (buildContext effectfulForeigns Set.empty Set.empty specialized).inline)
+
   snap :: String -> Array M.Module -> Array String
   snap label prog = case traceTarget of
     Nothing -> []
@@ -90,7 +97,12 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- For an acyclic module graph this equals the old whole-program fixed point, yet it
   -- cannot compound — a finalized module is never re-inlined — which is what made the old
   -- N-round whole-program loop blow up on transformer-heavy code.
-  result = Array.foldl step { done: [], trace: snap "initial (specialized)" specialized } ordered
+  -- `done` accumulates the fully-optimized modules (kept for post-inline specialization and
+  -- codegen); `summaries` accumulates their *pruned* forms (`DictElim.summarize`) — the inline
+  -- context each later module is optimized against, so a finalized dependency's large bodies need
+  -- not stay resident to inline against (ADR 0021 b1). `buildContext` over the pruned summaries is
+  -- equivalent for dictionary elimination (guarded by the cross-module `DictElim` unit test).
+  result = Array.foldl step { done: [], summaries: [], impure: Set.empty, memEff: Set.empty, trace: snap "initial (specialized)" specialized } ordered
 
   -- Post-inline specialization (ADR 0027). The pre-inline `specializeProgram` above misses
   -- the `where`-worker idiom: `foo f = … go … where go … = … f …` lambda-lifts to a
@@ -104,20 +116,24 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- single bounded pass (specialize + reduce, no re-inlining), not a fixed-point loop, so it
   -- cannot reintroduce the whole-program N-round compounding ADR 0021 removed.
   respecialized = specializeProgram result.done
-  reCtx = buildContext effectfulForeigns respecialized
+  reCtx = buildContext effectfulForeigns Set.empty Set.empty respecialized
   finalized = map (\m -> DictElim.simplifyModule (reCtx { inline = Map.empty }) m) respecialized
 
   step acc m =
     let
-      m' = localOpt acc.done m
+      r = localOpt acc.impure acc.memEff acc.summaries m
     in
-      { done: Array.snoc acc.done m'
+      { done: Array.snoc acc.done r.mod
+      , summaries: Array.snoc acc.summaries (DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff ]) r.mod)
+      , impure: r.impure
+      , memEff: r.memEff
       , trace: case traceTarget of
-          Just t | joinWith "." m.name == t -> acc.trace <> [ "=== " <> t <> " (optimized) ===\n" <> printModule m' ]
+          Just t | joinWith "." m.name == t -> acc.trace <> [ "=== " <> t <> " (optimized) ===\n" <> printModule r.mod ]
           _ -> acc.trace
       }
 
-  -- One module, optimized once against the finalized dependencies plus itself:
+  -- One module, optimized once against its finalized dependencies (as pruned `summarize`d
+  -- modules — ADR 0021 b1) plus itself:
   --   simplify (inline + reduce) → impurify (Effect glue → thunks) → simplify again.
   -- NbE normalizes fully in a single pass, so there is no outer round loop — re-running the
   -- *inlining* pass does not converge, it inline-expands the module further each time (the
@@ -126,19 +142,31 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- / State constant-stack TCE collapse, ADR 0015), which is a set of *local* reductions
   -- (β, perform, Abs-merge, float-lambda-out-of-case); it runs with an **empty inline set**
   -- so it performs that collapse without re-inlining (which would re-expand the module).
-  localOpt :: Array M.Module -> M.Module -> M.Module
-  localOpt done m =
+  localOpt
+    :: Set String
+    -> Set String
+    -> Array M.Module
+    -> M.Module
+    -> { mod :: M.Module, impure :: Set String, memEff :: Set String }
+  localOpt seedImpure seedMemEff deps m =
     let
-      ctx = buildContext effectfulForeigns (Array.snoc done m)
+      ctx = buildContext effectfulForeigns seedImpure seedMemEff (Array.snoc deps m)
       simplified = DictElim.simplifyModule ctx m
       impured = fromMaybe simplified (Array.head (impurifyProgram effArities [ simplified ]))
     in
-      DictElim.simplifyModule (ctx { inline = Map.empty }) impured
+      { mod: DictElim.simplifyModule (ctx { inline = Map.empty }) impured
+      , impure: ctx.impureBindings
+      , memEff: ctx.memEffBindings
+      }
 
 -- | Build the simplifier context (dictionary elimination + general inlining + purity)
 -- | from a set of modules — the finalized dependencies plus the module being optimized.
-buildContext :: Set String -> Array M.Module -> Ctx
-buildContext eff prog =
+-- | `seedImpure` / `seedMemEff` are the purity sets already established by finalized dependencies
+-- | (ADR 0021 b1). The purity fixpoints start from them, so a dependency pruned to a summary (its
+-- | body dropped) still contributes its effectfulness — propagation does not need the dropped body.
+-- | Pass `Set.empty` for a from-scratch whole-program build.
+buildContext :: Set String -> Set String -> Set String -> Array M.Module -> Ctx
+buildContext eff seedImpure seedMemEff prog =
   let
     base = DictElim.buildCtx prog
   in
@@ -146,8 +174,8 @@ buildContext eff prog =
       { inline = Map.union base.inline (Inline.inlineCandidates prog)
       , newtypeCtors = Set.union base.newtypeCtors (Inline.newtypeCtorNames prog)
       , effectfulForeigns = eff
-      , impureBindings = Purity.impureKeys eff prog
-      , memEffBindings = Purity.memEffKeys prog
+      , impureBindings = Purity.impureKeys eff seedImpure prog
+      , memEffBindings = Purity.memEffKeys seedMemEff prog
       }
 
 -- | Order modules so every module comes after the modules it references (a dependency is
