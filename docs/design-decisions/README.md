@@ -72,7 +72,7 @@ language and are kept out of version control.)
 | 0022 | [Join points for `case` in argument position](0022-join-points-for-case-in-argument-position.md) | Accepted |
 | 0023 | [Polymorphic record update via runtime copy-and-set](0023-polymorphic-record-update.md) | Accepted |
 | 0024 | [Export-boundary arity reconciliation, and the transparent-types-only rule](0024-export-boundary-arity-and-transparent-types.md) | Accepted |
-| 0025 | [Multi-platform packaging (`--platform`) and the fallback-JS toggle](0025-multi-platform-packaging.md) | Proposed |
+| 0025 | [Multi-platform packaging (`--platform`) and the fallback-JS toggle](0025-multi-platform-packaging.md) | Accepted (partial — `wasi` & browser-split pending) |
 | 0026 | [WasmBase: a stable primitive layer between `Prim` and `Prelude`](0026-wasmbase-primitive-layer.md) | Accepted |
 | 0027 | [Specialize after inlining: the `where`-worker / forwarder idiom](0027-specialize-after-inlining.md) | Accepted |
 | 0028 | [ulib as a compiler-bundled library layer: lib-first shadowing of registry modules](0028-ulib-library-layer-shadowing.md) | Superseded by 0031 |
@@ -92,7 +92,8 @@ order and count. A non-trivial program (a System F type checker / evaluator) com
 runs on wasm. See [`docs/developers-guide/supported-features.md`](../developers-guide/supported-features.md) and
 [`docs/developers-guide/optimizations.md`](../developers-guide/optimizations.md) for the authoritative, up-to-date status.
 
-Current frontiers, tracked by the records above: the real `bin` linker (reachability
-pruning and streaming, dependency-ordered optimization — ADR 0021), multi-platform packaging
-(ADR 0025), a reduction-aware inliner (ADR 0020), top-level CAFs as globals (ADR 0006), and
-monomorphization.
+Current frontiers, tracked by the records above: streaming / incremental codegen (ADR 0021
+Phase 2 — reachability pruning and dependency-ordered single-pass optimization have already
+shipped); the reduction-aware inline-or-share selection (ADR 0020 — the NbE core is implemented,
+the reduction-driven decision is not); `wasi` packaging and the browser runtime/app split (ADR 0025
+— `node` / `browser` / `standalone` packaging and `-E` have shipped); and monomorphization.

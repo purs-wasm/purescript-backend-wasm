@@ -55,10 +55,12 @@ CoreFn ── Transl ──▶ MIR ── optimizeProgram ──▶ MIR ── l
 
   ```plain
   lambda-lift each module                          (per module)
-  specialize higher-order calls                    (whole-program, once)
+  specialize higher-order calls                    (whole-program)
   for each module, in dependency order:
     build the inline context from the finalized dependencies + this module
     simplify → impurify → simplify                 (this module, once)
+  specialize higher-order calls again              (whole-program; ADR 0027, post-inline)
+  β/reduce-only simplify                           (whole-program)
   ```
 
   Dependency order is what removes the need for repeated rounds: eliminating a dictionary
@@ -76,9 +78,10 @@ below; inlining happens there, which is why the inline set must be acyclic (see
 (`Optimize/Simplify.purs`). They perform the **same** reductions — described next.
 
 `purs-wasm build -I <corefn> -O <out> -e <Entry> --dump-mir <Module>` writes that module's MIR
-after every optimizer sub-stage to `<out>/<Module>.mir.txt` — the way to watch a pass rewrite the
-tree (it sees the real reachable closure, unlike the retired `dump-mir.mjs`/`dump-opt.mjs` scripts,
-which only linked the fixtures you named).
+at the optimizer's snapshot points (the specialized input, the per-module optimized form, and after
+the post-inline specialization) to `<out>/<Module>.mir.txt` — the way to watch the passes rewrite
+the tree (it sees the real reachable closure, unlike the retired `dump-mir.mjs`/`dump-opt.mjs`
+scripts, which only linked the fixtures you named).
 
 ## The reduction kernel: local reductions
 
@@ -362,9 +365,9 @@ countTo n = unsafePerformEffect (go 0)
 thunk floats out of the loop's `case` and merges into the worker; and TCE closes it —
 giving the same allocation-free, constant-stack loop as `State`. The cyclic-dict overhead
 vanishes: `mapEff`/`applyEff` reduce to plain `intAdd`. A *genuinely* effectful do-block
-instead keeps its runs: the e2e `Test.E2E.Cli.ForeignEffect` performs two host effects and checks
-they ran in order, exactly
-once each — and prints a real `console.log "Hello, World!"` through the whole pipeline.
+instead keeps its runs: the e2e `Test.E2E.Cli.ForeignEffect` performs two host effects
+(`record 1; record 2`, each pushing to a JS-side array) and checks they ran in order, exactly
+once each — confirming the reflection preserves effect order and count through the whole pipeline.
 
 ## Known gaps
 

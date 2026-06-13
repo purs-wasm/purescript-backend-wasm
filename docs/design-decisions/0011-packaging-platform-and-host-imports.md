@@ -3,7 +3,13 @@
 - Status: Accepted
 - Date: 2026-06-01
 
-> **Status reaffirmed (2026-06-07):** The current implementation does **not yet** use the `--platform` flag scheme. Codegen always imports `$rt.*` ([ADR 0010](0010-runtime-as-a-separate-wasm-module.md)), and `bin` hard-codes a single packaging: a **standalone bundle (wasm-merge) plus a JS loader only when JS foreigns are present (`emitLoader`/`needLoader`)** — effectively the `standalone`/`node` target. `--platform` (`browser`/`browser-split`/the fallback-JS toggle, …) is split out as future work after the real `bin` implementation — see [ADR 0025](0025-multi-platform-packaging.md). This record's core (packaging is platform-specific, codegen is not) still holds.
+> **Status reaffirmed (2026-06-07):** ~~The current implementation does **not yet** use the `--platform` flag scheme. Codegen always imports `$rt.*` ([ADR 0010](0010-runtime-as-a-separate-wasm-module.md)), and `bin` hard-codes a single packaging: a **standalone bundle (wasm-merge) plus a JS loader only when JS foreigns are present (`emitLoader`/`needLoader`)** — effectively the `standalone`/`node` target. `--platform` (`browser`/`browser-split`/the fallback-JS toggle, …) is split out as future work after the real `bin` implementation — see [ADR 0025](0025-multi-platform-packaging.md).~~ This record's core (packaging is platform-specific, codegen is not) still holds.
+>
+> **Update (2026-06-13):** `--platform` is now **implemented** in the `purs-wasm` CLI (commit
+> 3eba9f7 / PR #34): `node | browser | standalone` (default `node`), plus `-E/--executable` and
+> `--no-js-fallback`. Codegen remains platform-independent — confirming this record's core. Caveats:
+> `browser` currently merges into a single `.wasm` (the runtime/app split described below is still
+> future), and `wasi` is not implemented (issue #36). Full status: [ADR 0025](0025-multi-platform-packaging.md).
 
 ## Context
 
@@ -25,7 +31,9 @@ through and wants on record:
 
 The generated module **always** imports `$rt.*` (one codegen path, ADR 0010). How
 those imports — and any host imports — are satisfied is a **packaging-stage**
-choice, ~~selected by a CLI `--platform` flag~~. Codegen never changes per platform.
+choice, selected by a CLI `--platform` flag. Codegen never changes per platform.
+_(2026-06-13: the strikethrough previously struck here — added when the flag was not yet built —
+is removed; `--platform` shipped in #34.)_
 
 | `--platform` | runtime | packaging |
 | --- | --- | --- |

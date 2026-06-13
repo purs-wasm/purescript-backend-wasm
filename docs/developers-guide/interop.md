@@ -40,7 +40,7 @@ other side's native shape and back. The exception is the raw scalars (`i32` / `f
 ## The provider ladder
 
 When the compiler meets a `foreign import` it resolves the implementation down a ladder
-(ADR 0014; `resolveForeign`), stopping at the first that applies:
+(ADR 0014), stopping at the first that applies:
 
 1. **Intrinsic table** — a built-in primitive (arithmetic, comparisons, `$rt.*` helpers).
    No host call.
@@ -52,6 +52,10 @@ When the compiler meets a `foreign import` it resolves the implementation down a
    JS **loader** supplies it from `foreign.js`, wrapping it with the marshalling glue below.
    Such a program is no longer self-contained (wasm + a JS loader).
 4. Otherwise — a trap / compile error.
+
+(Rung 1 is decided earlier, during **lowering**, by the intrinsics table
+(`Intrinsics.foreignIntrinsic`/`qualifiedIntrinsic`); the build's `resolveForeign` implements
+rungs 2–4.)
 
 Rungs 1–2 keep values at their internal representation end to end; only rung 3 crosses a
 representation boundary and therefore needs marshalling. That is the whole reason the lib
@@ -97,7 +101,10 @@ in `marshal.js`).
 
 ## What crosses, and how
 
-Each kind has a conversion, expressed in terms of `runtime.wat` exports:
+Each kind has a conversion, expressed in terms of the live instance's exports — the `runtime.wat`
+helpers, plus the one codegen-emitted resolver `internStr` (it maps field names to *this* program's
+interned dense label ids, which `runtime.wat` cannot know, so it is generated per program, not a
+`runtime.wat` export):
 
 | kind | boundary value | how it converts |
 | - | - | - |
@@ -132,7 +139,8 @@ The rule that ties it together: **top-level scalars cross raw; everything else c
   | `MEffect k` | `{"eff": <k>}` |
 
   `manifestJs` bakes this into `index.mjs`; `eqrefToJs`/`eqrefFromJs` dispatch on it,
-  calling the `runtime.wat` helpers on the live instance.
+  calling those marshalling exports on the live instance (mostly `runtime.wat` helpers; the
+  `internStr` used to build records is codegen-emitted).
 
 So a foreign `String -> String` has its `$Str` argument turned into a JS string and its
 JS-string result turned back into a `$Str`; a foreign `Array (Record …) -> Int` has its

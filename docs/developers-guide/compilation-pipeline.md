@@ -68,19 +68,22 @@ boundary of the "front" — no optimization happens here.
 or dictionary used in one module is defined in another, so the inline / dictionary /
 purity sets are gathered across all linked modules), but optimizes the modules **one at a
 time in dependency order** (ADR 0021), not in repeated whole-program rounds: lambda
-lifting (per module), then higher-order specialization (once, whole-program), then — for
+lifting (per module), then higher-order specialization (whole-program), then — for
 each module, against its already-finalized dependencies — simplify (dictionary
-elimination + inlining), impurify (the `Effect` rewrite), and simplify again. The output
-is still MIR. See [Optimizations](./optimizations.md) for the individual transformations.
+elimination + inlining), impurify (the `Effect` rewrite), and simplify again; finally a
+**second** whole-program specialization (ADR 0027, to catch the `where`-worker idiom that
+inlining exposes) and a β/reduce-only simplify. The output is still MIR. See [Optimizations](./optimizations.md) for the individual transformations.
 
 ## 4. Lower to the backend IR
 
 `Lower.lowerModules` lowers MIR to the **backend IR** (an ANF-ish tree the code
 generator consumes directly). This stage decides the *physical* shape of the program:
 
-- **Representation analysis & unboxing** (ADR 0013) — assign each value slot a
-  representation (`i32`/`f64`/`eqref`/closure) and unbox scalars where the `eqref` is
-  unnecessary; read the per-constructor field representations from the externs.
+- **Representation analysis & unboxing** (ADR 0013) — when optimizing, assign each value slot
+  a representation (`i32`/`f64`/`eqref`/closure) and unbox scalars where the `eqref` is
+  unnecessary; read the per-constructor field representations from the externs. (Under
+  `--no-opt` the slot analysis is skipped — every slot stays boxed `eqref` — though the
+  constructor field reps are still threaded.)
 - **Closure / application lowering** — closures become `$Clo` construction and arity-1
   `call_ref` application; a saturated call to a known top-level function is a direct
   call (lambda lifting in stage 3 already floated capturing/recursive closures out).
@@ -99,8 +102,9 @@ generator consumes directly). This stage decides the *physical* shape of the pro
 `Codegen.buildModule` turns the backend IR into a **Binaryen module** — the actual
 wasm. It builds the value-type substrate (`Codegen.RuntimeTypes`; see
 [Runtime representation](./runtime-representation.md)), emits each function body and
-call, applies **tail-call elimination** (a tail self-call becomes `return_call`, so
-deep recursion runs in constant stack), and adds the host-facing export wrappers, the
+call, applies **tail-call elimination** (a tail call to a known top-level function — self-
+*or* mutual recursion — becomes `return_call`, so deep recursion runs in constant stack), and
+adds the host-facing export wrappers, the
 foreign host imports, and the `internStr` resolver. The module is validated, then
 emitted as a binary (or disassembled to WAT with `--text`).
 

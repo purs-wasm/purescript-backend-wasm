@@ -38,7 +38,8 @@ opportunity for purs-wasm to optimize it!**
 
 To address this, we ship a set of curated packages reimplemented for wasm (**ulib**)
 alongside purs-wasm; some core packages are resolved to their ulib counterparts at build
-time. For instance, the ulib `Data.Array` defines its `Functor` instance like this:
+time. For instance, the ulib shadow of `Data.Functor` reimplements the `Array` `map` (its
+`Functor` instance) like this:
 
 ```purs
 import Wasm.Array as WA
@@ -107,17 +108,25 @@ the JS backends overflow:
 
 ![CountEffect: Effect-monad iterations across backends (log-log)](https://purs-wasm.github.io/documentation/images/bench/count-effect.png)
 
-## String is an Array of UTF-8 Code Units
+## Strings are UTF-8, and `Data.String` Counts Code Points
 
 Strings in PureScript are UTF-16 encoded. This is a direct consequence of JavaScript strings
 being UTF-16, and we concluded that we need not follow suit on wasm. The string runtime
 representation is therefore **(intentionally diverging from JS-backend PureScript) UTF-8
-encoded**. This has the non-obvious effect that code using `Data.String.CodeUnits` behaves
-differently when compiled to wasm versus JS.
+encoded**.
 
-> **Note** Among scalar values, only `String` diverges in representation; `Int` / `Char` /
-> `Number` keep the same semantics as the JS backend (in particular, `Int`'s 32-bit wrapping
-> matches JS).
+This changes the semantics of `Data.String`. On the JS backend, `Data.String.CodeUnits` indexes
+**UTF-16 code units**, so an astral character (a code point above U+FFFF — an emoji, say) counts
+as **2**. On wasm, both `Data.String.CodeUnits` and `Data.String.CodePoints` adopt **code-point**
+semantics over the UTF-8 representation: `length` / `charAt` / `take` / `drop` count Unicode code
+points, so the same astral character counts as **1**. In other words, `Data.String.CodeUnits` does
+*not* expose the underlying UTF-8 bytes; byte-level access is not part of `Data.String` at all — it
+lives in `Wasm.String` (`byteLength` / `byteAt`).
+
+> **Note** Two scalar types diverge from the JS backend: `String` (UTF-8, code-point–indexed as
+> above) and `Char` (on wasm a `Char` is a full Unicode **code point** and may hold a value above
+> U+FFFF, whereas a JS-backend `Char` is a single UTF-16 code unit). `Int` (32-bit wrapping) and
+> `Number` (f64) keep the same semantics as the JS backend.
 
 ## Dual Support of FFI
 

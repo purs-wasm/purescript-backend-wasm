@@ -19,11 +19,13 @@ the build input). You have three choices, in resolution order:
 | - | - | - |
 | `foreign.wasm` | a precompiled wasm provider | self-contained `index.wasm` |
 | `foreign.wat` | a self-contained, platform-agnostic foreign, or a low-level wasm leaf primitive, written in WebAssembly text | self-contained `index.wasm` |
-| `foreign.js` | reuse an existing JavaScript implementation unchanged | `index.wasm` + the loader (`index.mjs`, `marshal.js`, `foreign/<Module>.js`) |
+| `foreign.js` | reuse an existing JavaScript implementation unchanged | `index.wasm` + the loader (`index.mjs`, `marshal.js`, `foreign/<Module>.js`, and a `package.json` marking them ES modules) |
 
 Choose **wat/wasm** for a self-contained or platform-agnostic foreign (this is how some of
 the `ulib` core packages are built). Choose **js** to reuse JavaScript. If you provide none
-and the name is not a built-in, the call traps.
+and the name is not a built-in, the foreign becomes an unsatisfied wasm host import — the module
+fails at instantiation (and `--platform=standalone`, which forbids JS-fallback foreigns, fails the
+build outright).
 
 ## Writing a JS foreign
 
@@ -43,8 +45,10 @@ export const shout = (s) => s.toUpperCase();
 ```
 
 The build emits a loader (`index.mjs`) that imports `foreign.js`, wraps `shout` with
-marshalling, and instantiates the module. A program with **no** JS foreigns emits no loader —
-it stays a single self-contained `index.wasm`.
+marshalling, and instantiates the module. A program with **no** JS foreigns *and* only raw-scalar
+(`Int`/`Number`) exports emits no loader — it stays a single self-contained `index.wasm`. A
+non-scalar export that needs marshalling (a `String`, `Array`, `Record`, or closure), or
+`-E/--executable`, still emits the loader even without any JS foreigns.
 
 ## Writing an effectful foreign
 

@@ -115,8 +115,9 @@ method, including superclass access (arbitrarily deep hierarchies work). Derivin
 ## Records
 
 Construction, field access, **monomorphic update** (`r { x = v }`), and **pattern
-destructuring** (`\{ x } -> …`; field sub-binders are var/wildcard — a nested field
-pattern like `\{ x: Just y } -> …` is not yet supported) are supported, as are
+destructuring** (`\{ x } -> …`, including nested field patterns like `\{ x: Just y } -> …` —
+these compile via the general Maranget decision tree; only the allocation-free fast path is
+restricted to var/wildcard field binders) are supported, as are
 `Record.Unsafe`'s
 dynamic-`String`-key operations (`unsafeGet` / `unsafeSet` / `unsafeHas` /
 `unsafeDelete`), bridged by an emitted `internStr` resolver (label string → interned

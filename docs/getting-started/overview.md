@@ -124,9 +124,11 @@ backend-agnostic language design possible, but it is also a headache for anyone 
 to build or use a non-JS backend: every foreign module would otherwise have to be
 reimplemented in the target language.
 
-purs-wasm mitigates this: when a foreign import has no corresponding `foreign.wat`, it
-falls back to the conventional `foreign.js`. This partially solves the problem and lets you
-build your existing PureScript app for wasm right away.
+purs-wasm mitigates this: a foreign import is resolved down a provider ladder — a built-in
+intrinsic, then a hand-written `foreign.wasm` / `foreign.wat`, then a lib-provided wasm foreign,
+and only if none of those applies does it fall back to the conventional `foreign.js`. That JS
+fallback partially solves the problem and lets you build your existing PureScript app for wasm
+right away.
 
 That said, not every JavaScript can be turned into wasm — there are some constraints on the
 JS code you can call through the FFI. See the *Performance and Limitations* page for
@@ -154,5 +156,8 @@ details.
   still runs. Useful for an unoptimized benchmark baseline.
 - `--no-js-fallback` — fail the build instead of falling back to a `foreign.js` for a
   foreign import that has no `foreign.wat` provider.
-- `--dump-mir <Module>` — dump how the module's middle IR changes after every optimizer
-  sub-stage to `<output>/<Module>.mir.txt` (debugging).
+- `--no-chunks` — emit a single wasm instead of code-split chunks (browser only). Chunking is
+  not implemented yet, so this is currently the default for `--platform browser`.
+- `--dump-mir <Module>` — dump the module's middle IR at the optimizer's snapshot points
+  (specialized input, per-module optimized, post-inline specialization) to
+  `<output>/<Module>.mir.txt` (debugging).
