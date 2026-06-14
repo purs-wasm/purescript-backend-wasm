@@ -17,6 +17,14 @@
 -- | Specializations are de-duplicated by the callee plus the lambda's *shape* (its
 -- | free variables abstracted), so two call sites with the same lambda up to their
 -- | captures share one specialization, each passing its own captures.
+-- |
+-- | Each specialization is **homed in the consuming module** — the module whose call site
+-- | drives it — not in the callee's defining module (ADR 0032). A module's specialized output
+-- | then depends only on its own source plus its dependencies' bodies, never on its consumers,
+-- | which is what lets specialization run per module and the build cache per module. The cost is
+-- | that two *different* consumers specializing the same callee with the same lambda each home
+-- | their own copy (the de-duplication above is within one consuming module); the duplicate
+-- | copies are identical, so Binaryen's duplicate-function elimination merges them.
 module PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize
   ( specializeProgram
   ) where
@@ -150,18 +158,21 @@ allSelfCallsPass qname i p = go
 
 -- transformation --------------------------------------------------------------
 
+-- `home` is the module being specialized: every spec a call site here induces is placed in
+-- `home` (caller-homed, ADR 0032), not in the callee's defining module, so a module's output
+-- depends only on its own source plus its dependencies' bodies — never on its consumers.
 specModule :: Map String FuncInfo -> M.Module -> S M.Module
 specModule funcs m = do
-  decls <- traverse (specBind funcs) m.decls
+  decls <- traverse (specBind funcs m.name) m.decls
   pure m { decls = decls }
 
-specBind :: Map String FuncInfo -> M.Bind -> S M.Bind
-specBind funcs = case _ of
-  M.NonRec meta i e -> M.NonRec meta i <$> specExpr funcs e
-  M.Rec rs -> M.Rec <$> traverse (\r -> (\e -> r { expr = e }) <$> specExpr funcs r.expr) rs
+specBind :: Map String FuncInfo -> ModuleName -> M.Bind -> S M.Bind
+specBind funcs home = case _ of
+  M.NonRec meta i e -> M.NonRec meta i <$> specExpr funcs home e
+  M.Rec rs -> M.Rec <$> traverse (\r -> (\e -> r { expr = e }) <$> specExpr funcs home r.expr) rs
 
-specExpr :: Map String FuncInfo -> M.Expr -> S M.Expr
-specExpr funcs = go
+specExpr :: Map String FuncInfo -> ModuleName -> M.Expr -> S M.Expr
+specExpr funcs home = go
   where
   go expr = do
     expr' <- descend expr
@@ -170,7 +181,7 @@ specExpr funcs = go
         | Just qn <- qkey q
         , Just info <- Map.lookup qn funcs
         , Just k <- firstSpecializable info args ->
-            specializeCall funcs info k args
+            specializeCall funcs home info k args
       _ -> pure expr'
 
   descend = case _ of
@@ -199,20 +210,22 @@ firstSpecializable info args = Array.find isLam info.static
     Just (M.Abs _ _) -> true
     _ -> false
 
-specializeCall :: Map String FuncInfo -> FuncInfo -> Int -> Array M.Expr -> S M.Expr
-specializeCall funcs info k args = do
+specializeCall :: Map String FuncInfo -> ModuleName -> FuncInfo -> Int -> Array M.Expr -> S M.Expr
+specializeCall funcs home info k args = do
   let lam = fromMaybe (M.Lit (LitInt 0)) (Array.index args k)
   let frees = lambdaFrees lam
-  let dedup = key info.modName info.ident <> "#" <> show k <> "#" <> canonicalKey frees lam
+  -- the dedup key is scoped to `home`: two consumers specializing the same callee with the same
+  -- lambda get their own homed copy (ADR 0032), so neither depends on the other having made it.
+  let dedup = joinWith "." home <> "#" <> key info.modName info.ident <> "#" <> show k <> "#" <> canonicalKey frees lam
   existing <- gets (Map.lookup dedup <<< _.specs)
   specIdent <- case existing of
     Just e -> pure e.ident
-    Nothing -> createSpec funcs info k lam frees dedup
+    Nothing -> createSpec funcs home info k lam frees dedup
   let callArgs = map localVar frees <> removeAt k args
-  pure (mkApp (M.Var (Qualified (Just info.modName) specIdent)) callArgs)
+  pure (mkApp (M.Var (Qualified (Just home) specIdent)) callArgs)
 
-createSpec :: Map String FuncInfo -> FuncInfo -> Int -> M.Expr -> Array String -> String -> S String
-createSpec funcs info k lam frees dedup = do
+createSpec :: Map String FuncInfo -> ModuleName -> FuncInfo -> Int -> M.Expr -> Array String -> String -> S String
+createSpec funcs home info k lam frees dedup = do
   specIdent <- freshSpecIdent (info.ident <> "$spec")
   let pk = fromMaybe "" (Array.index info.params k)
   let restParams = removeAt k info.params
@@ -221,13 +234,15 @@ createSpec funcs info k lam frees dedup = do
   -- Capture-avoiding substitution is required: the lambda's free vars (e.g. `put`'s
   -- argument `s`) must not be captured by a binder of the same name in the callee body
   -- (`mkState`'s state param `s`) — that capture silently mis-threaded the State monad.
-  let specName = Qualified (Just info.modName) specIdent
+  -- The spec is homed in `home` (the consuming module), so self-calls and the registered
+  -- entry name it there; the callee body's own qualified name keeps pointing at its module.
+  let specName = Qualified (Just home) specIdent
   let rewritten = substMany (Map.singleton pk lam) (rewriteSelfCalls (key info.modName info.ident) specName k frees info.body)
   -- register first (so a self-call inside resolves to this spec), then specialize
   -- nested higher-order calls in the body
-  modify_ \s -> s { specs = Map.insert dedup { modName: info.modName, ident: specIdent, expr: M.Abs (frees <> restParams) rewritten } s.specs }
-  body' <- specExpr funcs rewritten
-  modify_ \s -> s { specs = Map.insert dedup { modName: info.modName, ident: specIdent, expr: M.Abs (frees <> restParams) body' } s.specs }
+  modify_ \s -> s { specs = Map.insert dedup { modName: home, ident: specIdent, expr: M.Abs (frees <> restParams) rewritten } s.specs }
+  body' <- specExpr funcs home rewritten
+  modify_ \s -> s { specs = Map.insert dedup { modName: home, ident: specIdent, expr: M.Abs (frees <> restParams) body' } s.specs }
   pure specIdent
 
 -- | A spec ident `<base><i>` for the smallest `i` not already in the program (across
