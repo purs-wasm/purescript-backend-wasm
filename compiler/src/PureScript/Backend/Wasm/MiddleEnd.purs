@@ -39,6 +39,18 @@ import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
 
+-- | The accumulated dependency context (ADR 0021 b1 / incremental): the inline set, transparent /
+-- | data constructors, and instance-field maps contributed by the already-finalized modules. It is
+-- | grown by one module's contribution as each module finalizes, so a module is optimized against
+-- | `accCtx ⊕ its own contribution` rather than by rebuilding the context over every accumulated
+-- | summary each step — turning the per-module loop from O(N²) to O(N) in the module count.
+type AccumCtx =
+  { inline :: Map String M.Expr
+  , newtypeCtors :: Set String
+  , dataCtors :: Set String
+  , instanceFields :: Map String (Array (Tuple String M.Expr))
+  }
+
 -- | Translate and optimize a whole program to MIR. Each module's name is kept; only
 -- | its top-level bindings are represented (lambda lifting may also prepend lifted
 -- | supercombinators).
@@ -104,42 +116,84 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- module is specialized/optimized against, so a finalized dependency's large bodies need not stay
   -- resident (ADR 0021 b1). Every pass is per module (ADR 0032 caller-homed specialization), so the
   -- loop yields finalized modules one at a time and there is no whole-program post-pass.
-  result = Array.foldl step { finalized: [], summaries: [], impure: Set.empty, memEff: Set.empty, trace: [] } ordered
+  result = Array.foldl step
+    { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, trace: [] }
+    ordered
+
+  -- The inline / constructor / instance-field contributions of one finalized dependency summary,
+  -- computed in O(|m|): the dictionary machinery + general inline candidates of *that summary alone*
+  -- (`DictElim.buildCtx [m]` ∪ `Inline.inlineCandidates [m]`), unioned into the running `accCtx`.
+  -- This replaces rebuilding the context over every accumulated summary each step (the O(N²) cost).
+  -- Candidacy is thus per-summary-local rather than over the whole accumulated set, so the inline
+  -- decision is an approximation of the old per-step whole-program recompute — acceptable here (it
+  -- only changes *which* small/single-use bodies inline, never correctness; the global use-count is a
+  -- knob a future reduction-aware inliner removes, ADR 0020). Guarded by e2e/unit + bench checksums.
+  moduleContribs :: M.Module -> AccumCtx
+  moduleContribs m =
+    let
+      bc = DictElim.buildCtx [ m ]
+    in
+      { inline: Map.union bc.inline (Inline.inlineCandidates [ m ])
+      , newtypeCtors: Set.union bc.newtypeCtors (Inline.newtypeCtorNames [ m ])
+      , dataCtors: bc.dataCtors
+      , instanceFields: bc.instanceFields
+      }
+
+  mergeAccum :: AccumCtx -> AccumCtx -> AccumCtx
+  mergeAccum a b =
+    { inline: Map.union a.inline b.inline
+    , newtypeCtors: Set.union a.newtypeCtors b.newtypeCtors
+    , dataCtors: Set.union a.dataCtors b.dataCtors
+    , instanceFields: Map.union a.instanceFields b.instanceFields
+    }
+
+  -- The full simplifier `Ctx` for optimizing `m`: the accumulated dependency context (`accCtx`,
+  -- whose inline set is the global `summaryInlineKeys` candidates of finalized deps) merged with
+  -- `m`'s *own* context built over `[m]` alone. The own-context uses `buildContext [m]` rather than
+  -- the `summaryInlineKeys` slice so it also picks up `m`'s **local** candidates — chiefly its
+  -- caller-homed `$specN` bindings (single-use within `m`, not present in the lifted-program
+  -- `summaryInlineKeys`) — which must inline intra-module or they would survive as extra functions.
+  -- Purity is computed incrementally (fixpoint over just `m`, seeded by the dependencies' purity).
+  ctxFromAccum :: AccumCtx -> Set String -> Set String -> M.Module -> Ctx
+  ctxFromAccum accCtx seedImpure seedMemEff m =
+    let
+      own = buildContext effectfulForeigns Set.empty Set.empty [ m ]
+    in
+      { newtypeCtors: Set.union accCtx.newtypeCtors own.newtypeCtors
+      , dataCtors: Set.union accCtx.dataCtors own.dataCtors
+      , inline: Map.union accCtx.inline own.inline
+      , instanceFields: Map.union accCtx.instanceFields own.instanceFields
+      , effectfulForeigns: effectfulForeigns
+      , impureBindings: Purity.impureKeys effectfulForeigns seedImpure [ m ]
+      , memEffBindings: Purity.memEffKeys seedMemEff [ m ]
+      }
 
   -- Post-inline specialization (ADR 0027), per module (ADR 0032). `localOpt` inlines the
-  -- `where`-worker forwarder (`foo f = … go … where go … = … f …` lambda-lifts to a forwarder
-  -- `foo` that only forwards `f` and a worker `go$liftN` that applies it), so the literal lambda
-  -- finally lands at the worker's call site — where a second specialization fuses it. This runs
-  -- per module against the dependency summaries: the worker may be a *library* `$liftN` (e.g.
-  -- `Data.Foldable.go$lift1`) in a dependency, but the summary retains its body
-  -- (`specializationCalleeKeys`) and the spec is caller-homed in `m`, so the cross-module case is
-  -- caught without a whole-program pass (the regression that defeated the naive per-module fold
-  -- before ADR 0032's caller-homing). A β/reduce-only simplify (empty inline set, exactly as
-  -- `localOpt`'s second simplify) then collapses the `(\… -> …)(…)` redexes the substitution
-  -- leaves; its purity is recomputed over the summaries plus the freshly-specialized module
-  -- (seeded by the dependencies' purity) so a new effectful spec's discarded effect is not dropped.
-  finalizeModule deps seedImpure seedMemEff m =
+  -- `where`-worker forwarder so the literal lambda lands at the worker's call site, where a second
+  -- specialization fuses it. The worker may be a *library* `$liftN` in a dependency, but the summary
+  -- retains its body (`specializationCalleeKeys`) and the spec is caller-homed in `m`, so the
+  -- cross-module case is caught without a whole-program pass. A β/reduce-only simplify (empty inline
+  -- set) then collapses the residual redexes; purity is recomputed incrementally so a new effectful
+  -- spec's discarded effect is not dropped.
+  finalizeModule accCtx deps seedImpure seedMemEff m =
     let
       respec = specializeModule deps m
-      ctx = buildContext effectfulForeigns seedImpure seedMemEff (Array.snoc deps respec)
+      ctx = ctxFromAccum accCtx seedImpure seedMemEff respec
     in
       DictElim.simplifyModule (ctx { inline = Map.empty }) respec
 
   step acc m =
     let
-      -- per-module pre-inline specialization against the finalized dependency summaries (ADR 0032):
-      -- caller-homed, so every spec lands in `m`; the summaries supply the cross-module callee bodies
-      -- (kept by `specializationCalleeKeys` below).
       speced = specializeModule acc.summaries m
-      r = localOpt acc.impure acc.memEff acc.summaries speced
-      finalMod = finalizeModule acc.summaries r.impure r.memEff r.mod
+      r = localOpt acc.accCtx acc.impure acc.memEff speced
+      finalMod = finalizeModule acc.accCtx acc.summaries r.impure r.memEff r.mod
+      summary = DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod
     in
       { finalized: Array.snoc acc.finalized finalMod
-      -- the summary is the pre-respecialize `localOpt` form (as the old whole-program loop fed
-      -- later modules), kept beyond inline candidates / effectful bindings to this module's
-      -- specialization-callee bodies so a *dependent* can specialize them across the boundary
-      , summaries: Array.snoc acc.summaries
-          (DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod)
+      -- `summaries` is kept only for `specializeModule`'s candidate-callee lookup; the optimization
+      -- context is the incrementally-accumulated `accCtx` (extended by this module's summary).
+      , summaries: Array.snoc acc.summaries summary
+      , accCtx: mergeAccum acc.accCtx (moduleContribs summary)
       , impure: r.impure
       , memEff: r.memEff
       , trace: case traceTarget of
@@ -149,25 +203,18 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
           _ -> acc.trace
       }
 
-  -- One module, optimized once against its finalized dependencies (as pruned `summarize`d
-  -- modules — ADR 0021 b1) plus itself:
-  --   simplify (inline + reduce) → impurify (Effect glue → thunks) → simplify again.
-  -- NbE normalizes fully in a single pass, so there is no outer round loop — re-running the
-  -- *inlining* pass does not converge, it inline-expands the module further each time (the
-  -- non-idempotence that, looped, blew up the old whole-program optimizer). The second
-  -- simplify is needed only to collapse the thunks impurify introduces (the pure-`Effect`
-  -- / State constant-stack TCE collapse, ADR 0015), which is a set of *local* reductions
-  -- (β, perform, Abs-merge, float-lambda-out-of-case); it runs with an **empty inline set**
-  -- so it performs that collapse without re-inlining (which would re-expand the module).
+  -- One module, optimized once against its finalized dependencies (the accumulated `accCtx`, ADR
+  -- 0021 b1) plus itself: simplify (inline + reduce) → impurify (Effect glue → thunks) → simplify
+  -- again (empty inline set, to collapse the impurify thunks without re-inlining).
   localOpt
-    :: Set String
+    :: AccumCtx
     -> Set String
-    -> Array M.Module
+    -> Set String
     -> M.Module
     -> { mod :: M.Module, impure :: Set String, memEff :: Set String }
-  localOpt seedImpure seedMemEff deps m =
+  localOpt accCtx seedImpure seedMemEff m =
     let
-      ctx = buildContext effectfulForeigns seedImpure seedMemEff (Array.snoc deps m)
+      ctx = ctxFromAccum accCtx seedImpure seedMemEff m
       simplified = DictElim.simplifyModule ctx m
       impured = fromMaybe simplified (Array.head (impurifyProgram effArities [ simplified ]))
     in
@@ -175,6 +222,9 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
       , impure: ctx.impureBindings
       , memEff: ctx.memEffBindings
       }
+
+  emptyAccum :: AccumCtx
+  emptyAccum = { inline: Map.empty, newtypeCtors: Set.empty, dataCtors: Set.empty, instanceFields: Map.empty }
 
 -- | Build the simplifier context (dictionary elimination + general inlining + purity)
 -- | from a set of modules — the finalized dependencies plus the module being optimized.
