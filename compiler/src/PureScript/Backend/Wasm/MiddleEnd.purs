@@ -34,7 +34,7 @@ import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline as Inline
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift (lambdaLiftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx)
-import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram, specializeModule, specializationCalleeKeys)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeModule, specializationCalleeKeys)
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
@@ -67,7 +67,7 @@ optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff 
 -- | trace; when `Nothing` the trace stays empty and costs nothing.
 runOpt :: Boolean -> Set String -> Map String Int -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String }
 runOpt dictElim effectfulForeigns effArities traceTarget modules =
-  if dictElim then { modules: finalized, trace: result.trace <> snap "after post-inline specialization" finalized }
+  if dictElim then { modules: result.finalized, trace: result.trace <> snap "after post-inline specialization" result.finalized }
   else { modules: lifted, trace: snap "initial (translated + lifted)" lifted }
   where
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
@@ -94,35 +94,36 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
           <> maybe ("(module " <> t <> " not found)") printModule (Array.find (\m -> joinWith "." m.name == t) prog)
       ]
 
-  -- Dependency-ordered optimization (ADR 0021): optimize each module once to a local
-  -- fixed point against the already-finalized modules (`done`), never re-optimizing them.
-  -- For an acyclic module graph this equals the old whole-program fixed point, yet it
-  -- cannot compound — a finalized module is never re-inlined — which is what made the old
+  -- Dependency-ordered optimization (ADR 0021): specialize → optimize → post-inline specialize →
+  -- finalize each module once against the already-finalized dependency summaries, never
+  -- re-optimizing them. For an acyclic module graph this equals the old whole-program fixed point,
+  -- yet it cannot compound — a finalized module is never re-inlined — which is what made the old
   -- N-round whole-program loop blow up on transformer-heavy code.
-  -- `done` accumulates the fully-optimized modules (kept for post-inline specialization and
-  -- codegen); `summaries` accumulates their *pruned* forms (`DictElim.summarize`) — the inline
-  -- context each later module is optimized against, so a finalized dependency's large bodies need
-  -- not stay resident to inline against (ADR 0021 b1). `buildContext` over the pruned summaries is
-  -- equivalent for dictionary elimination (guarded by the cross-module `DictElim` unit test).
-  result = Array.foldl step { done: [], summaries: [], impure: Set.empty, memEff: Set.empty, trace: [] } ordered
+  -- `finalized` accumulates each module's fully finalized MIR (for codegen); `summaries`
+  -- accumulates their *pruned* `localOpt` forms (`DictElim.summarize`) — the context each later
+  -- module is specialized/optimized against, so a finalized dependency's large bodies need not stay
+  -- resident (ADR 0021 b1). Every pass is per module (ADR 0032 caller-homed specialization), so the
+  -- loop yields finalized modules one at a time and there is no whole-program post-pass.
+  result = Array.foldl step { finalized: [], summaries: [], impure: Set.empty, memEff: Set.empty, trace: [] } ordered
 
-  -- Post-inline specialization (ADR 0027). The pre-inline `specializeProgram` above misses
-  -- the `where`-worker idiom: `foo f = … go … where go … = … f …` lambda-lifts to a
-  -- *forwarder* `foo` (passes `f`, never applies it — not a static-arg candidate) and a
-  -- *worker* `go$liftN` (applies `f`, but its call sites only ever get the forwarded
-  -- variable, never a literal lambda). The per-module `localOpt` then inlines the forwarder,
-  -- so the lambda finally lands at the worker's call site — where the (unchanged) specializer
-  -- can fuse it. A second `specializeProgram` over the optimized program catches these; a
-  -- β/reduce-only simplify (empty inline set, exactly as `localOpt`'s second simplify) then
-  -- collapses the `(\… -> …)(…)` redexes the static-argument substitution leaves. This is a
-  -- single bounded pass (specialize + reduce, no re-inlining), not a fixed-point loop, so it
-  -- cannot reintroduce the whole-program N-round compounding ADR 0021 removed. It must stay
-  -- whole-program: the worker is often a *library* `$liftN` (e.g. `Data.Foldable.go$lift1`) whose
-  -- concrete lambda only appears at a *consuming* module's call site after that module inlines its
-  -- forwarder, so the spec spans a module boundary and a per-module pass would forgo it.
-  respecialized = specializeProgram result.done
-  reCtx = buildContext effectfulForeigns Set.empty Set.empty respecialized
-  finalized = map (\m -> DictElim.simplifyModule (reCtx { inline = Map.empty }) m) respecialized
+  -- Post-inline specialization (ADR 0027), per module (ADR 0032). `localOpt` inlines the
+  -- `where`-worker forwarder (`foo f = … go … where go … = … f …` lambda-lifts to a forwarder
+  -- `foo` that only forwards `f` and a worker `go$liftN` that applies it), so the literal lambda
+  -- finally lands at the worker's call site — where a second specialization fuses it. This runs
+  -- per module against the dependency summaries: the worker may be a *library* `$liftN` (e.g.
+  -- `Data.Foldable.go$lift1`) in a dependency, but the summary retains its body
+  -- (`specializationCalleeKeys`) and the spec is caller-homed in `m`, so the cross-module case is
+  -- caught without a whole-program pass (the regression that defeated the naive per-module fold
+  -- before ADR 0032's caller-homing). A β/reduce-only simplify (empty inline set, exactly as
+  -- `localOpt`'s second simplify) then collapses the `(\… -> …)(…)` redexes the substitution
+  -- leaves; its purity is recomputed over the summaries plus the freshly-specialized module
+  -- (seeded by the dependencies' purity) so a new effectful spec's discarded effect is not dropped.
+  finalizeModule deps seedImpure seedMemEff m =
+    let
+      respec = specializeModule deps m
+      ctx = buildContext effectfulForeigns seedImpure seedMemEff (Array.snoc deps respec)
+    in
+      DictElim.simplifyModule (ctx { inline = Map.empty }) respec
 
   step acc m =
     let
@@ -131,9 +132,11 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
       -- (kept by `specializationCalleeKeys` below).
       speced = specializeModule acc.summaries m
       r = localOpt acc.impure acc.memEff acc.summaries speced
+      finalMod = finalizeModule acc.summaries r.impure r.memEff r.mod
     in
-      { done: Array.snoc acc.done r.mod
-      -- the summary keeps, beyond the inline candidates / effectful bindings, this module's
+      { finalized: Array.snoc acc.finalized finalMod
+      -- the summary is the pre-respecialize `localOpt` form (as the old whole-program loop fed
+      -- later modules), kept beyond inline candidates / effectful bindings to this module's
       -- specialization-callee bodies so a *dependent* can specialize them across the boundary
       , summaries: Array.snoc acc.summaries
           (DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod)
