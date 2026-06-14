@@ -34,7 +34,7 @@ import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline as Inline
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift (lambdaLiftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx)
-import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeProgram, specializeModule, specializationCalleeKeys)
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
@@ -72,17 +72,19 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   where
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
   lifted = map lambdaLiftModule mir
-  -- Higher-order specialization runs once, whole-program, before the per-module pass:
-  -- specializations come from call sites' lambda arguments, which exist pre-simplification.
-  specialized = specializeProgram lifted
-  ordered = topoOrder specialized
+  -- Higher-order specialization is now per module, inside the loop (`step`), against the
+  -- dependency summaries (ADR 0032 caller-homed): the pre-loop whole-program pass is gone.
+  -- `topoOrder` is over `lifted` — it counts only non-`$spec` references (a spec imposes no
+  -- ordering, `declRefs`), so the order is the same as over the specialized program.
+  ordered = topoOrder lifted
 
-  -- The whole-program inline set's keys, computed once over the specialized program: exactly the
+  -- The whole-program inline set's keys, computed once over the lifted program: exactly the
   -- bindings any dependent may inline (`DictElim.buildCtx.inline` ∪ general inline candidates). A
   -- finalized dependency's summary must retain these bodies so cross-module inlining — including the
   -- large single-use helpers that expose a `perform` (e.g. `Control.Monad.ap`) — is preserved
   -- regardless of pruning (ADR 0021 b1; guarded by the `DictElim` unit + `EffectPrim` e2e tests).
-  summaryInlineKeys = Set.fromFoldable (Map.keys (buildContext effectfulForeigns Set.empty Set.empty specialized).inline)
+  -- Specializations are caller-homed (local to the consuming module), so they need not appear here.
+  summaryInlineKeys = Set.fromFoldable (Map.keys (buildContext effectfulForeigns Set.empty Set.empty lifted).inline)
 
   snap :: String -> Array M.Module -> Array String
   snap label prog = case traceTarget of
@@ -102,7 +104,7 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- context each later module is optimized against, so a finalized dependency's large bodies need
   -- not stay resident to inline against (ADR 0021 b1). `buildContext` over the pruned summaries is
   -- equivalent for dictionary elimination (guarded by the cross-module `DictElim` unit test).
-  result = Array.foldl step { done: [], summaries: [], impure: Set.empty, memEff: Set.empty, trace: snap "initial (specialized)" specialized } ordered
+  result = Array.foldl step { done: [], summaries: [], impure: Set.empty, memEff: Set.empty, trace: [] } ordered
 
   -- Post-inline specialization (ADR 0027). The pre-inline `specializeProgram` above misses
   -- the `where`-worker idiom: `foo f = … go … where go … = … f …` lambda-lifts to a
@@ -124,14 +126,23 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
 
   step acc m =
     let
-      r = localOpt acc.impure acc.memEff acc.summaries m
+      -- per-module pre-inline specialization against the finalized dependency summaries (ADR 0032):
+      -- caller-homed, so every spec lands in `m`; the summaries supply the cross-module callee bodies
+      -- (kept by `specializationCalleeKeys` below).
+      speced = specializeModule acc.summaries m
+      r = localOpt acc.impure acc.memEff acc.summaries speced
     in
       { done: Array.snoc acc.done r.mod
-      , summaries: Array.snoc acc.summaries (DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff ]) r.mod)
+      -- the summary keeps, beyond the inline candidates / effectful bindings, this module's
+      -- specialization-callee bodies so a *dependent* can specialize them across the boundary
+      , summaries: Array.snoc acc.summaries
+          (DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod)
       , impure: r.impure
       , memEff: r.memEff
       , trace: case traceTarget of
-          Just t | joinWith "." m.name == t -> acc.trace <> [ "=== " <> t <> " (optimized) ===\n" <> printModule r.mod ]
+          Just t | joinWith "." m.name == t -> acc.trace
+            <> [ "=== " <> t <> " (specialized) ===\n" <> printModule speced ]
+            <> [ "=== " <> t <> " (optimized) ===\n" <> printModule r.mod ]
           _ -> acc.trace
       }
 

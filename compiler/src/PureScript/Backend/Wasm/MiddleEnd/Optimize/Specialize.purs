@@ -27,6 +27,8 @@
 -- | copies are identical, so Binaryen's duplicate-function elimination merges them.
 module PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize
   ( specializeProgram
+  , specializeModule
+  , specializationCalleeKeys
   ) where
 
 import Prelude
@@ -77,6 +79,36 @@ specializeProgram modules =
     specsOf mn = Array.mapMaybe (\e -> if e.modName == mn then Just (M.Rec [ { meta: Nothing, ident: e.ident, expr: e.expr } ]) else Nothing) (Map.values st.specs # Array.fromFoldable)
   in
     map (\m -> m { decls = m.decls <> specsOf m.name }) modules'
+
+-- | Specialize a single module's call sites against the candidate callees of `context` (its
+-- | finalized dependency summaries) plus its own — the per-module form of `specializeProgram`
+-- | for the dependency-ordered loop (ADR 0032). Caller-homing (every spec lands in `m`) means
+-- | only `m`'s own decls gain specializations; the context modules are read for callee bodies
+-- | only and returned untouched (so they are not part of the result). Fresh spec names avoid
+-- | `m`'s own idents alone — not the context's — so a spec's name depends only on `m`, keeping
+-- | the per-module output cacheable.
+specializeModule :: Array M.Module -> M.Module -> M.Module
+specializeModule context m =
+  let
+    funcs = Map.fromFoldable ((Array.snoc context m) >>= moduleFuncs)
+    existing = Set.fromFoldable (m.decls >>= declIdents)
+    Tuple m' st = runState (specModule funcs m) { existing, specs: Map.empty }
+    specs = Array.mapMaybe
+      (\e -> if e.modName == m.name then Just (M.Rec [ { meta: Nothing, ident: e.ident, expr: e.expr } ]) else Nothing)
+      (Map.values st.specs # Array.fromFoldable)
+  in
+    m' { decls = m'.decls <> specs }
+
+-- | The keys of `m`'s bindings that are **specialization callees** — functions with at least one
+-- | static function parameter (applied in the body, passed unchanged through recursion). A
+-- | dependency summary must retain these bodies so a consumer's `specializeModule` can specialize
+-- | them across the module boundary (ADR 0032).
+specializationCalleeKeys :: M.Module -> Set String
+specializationCalleeKeys m = Set.fromFoldable do
+  b <- m.decls
+  case funcOf m.name b of
+    Just (Tuple k info) | not (Array.null info.static) -> [ k ]
+    _ -> []
 
 -- collect candidate callees ---------------------------------------------------
 
