@@ -17,7 +17,8 @@ import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, optimizeProgramCached)
+import Partial.Unsafe (unsafeCrashWith)
+import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, IncInput, optimizeIncremental, optimizeProgramCached)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
@@ -60,6 +61,32 @@ sourceHashes = Map.fromFoldable [ Tuple "Dep" "hDep", Tuple "Main" "hMain" ]
 run :: CacheInput -> { modules :: Array M.Module, writes :: Array CacheWrite }
 run cache = optimizeProgramCached true Set.empty Map.empty cache program
 
+-- The same two-module program as MIR, for the decode-free `optimizeIncremental` path: `lift`
+-- yields these directly (no CoreFn decode), `imports` orders them.
+depMir :: M.Module
+depMir =
+  { name: [ "Dep" ]
+  , decls:
+      [ M.NonRec Nothing "foo" (M.Abs [ "x" ] (M.Var (CF.Qualified Nothing "x")))
+      , M.NonRec Nothing "bar" (M.Lit (CF.LitInt 5))
+      ]
+  }
+
+mainMir :: M.Module
+mainMir =
+  { name: [ "Main" ]
+  , decls:
+      [ M.NonRec Nothing "baz"
+          (M.App (M.Var (CF.Qualified (Just [ "Dep" ]) "foo")) [ M.Var (CF.Qualified (Just [ "Dep" ]) "bar") ])
+      ]
+  }
+
+coldInc :: Array IncInput
+coldInc =
+  [ { name: "Dep", imports: [], sourceHash: "hDep", cached: Nothing, lift: \_ -> depMir }
+  , { name: "Main", imports: [ "Dep" ], sourceHash: "hMain", cached: Nothing, lift: \_ -> mainMir }
+  ]
+
 spec :: Spec Unit
 spec = describe "PureScript.Backend.Wasm.MiddleEnd (incremental cache)" do
   let cold = run { sourceHashes, loaded: Map.empty }
@@ -81,3 +108,17 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd (incremental cache)" do
     let warm = run { sourceHashes: changed, loaded }
     map _.name warm.writes `shouldEqual` [ "Main" ]
     warm.modules `shouldEqual` cold.modules
+
+  describe "optimizeIncremental (decode-free)" do
+    let coldI = optimizeIncremental Set.empty Map.empty coldInc
+    let cachedOf = Map.fromFoldable (map (\w -> Tuple w.name { key: w.entry.key, deps: w.deps, summary: w.entry.summary, finalMod: w.entry.finalMod }) coldI.writes)
+    -- Warm: every module cached, and `lift` rigged to crash if forced — so a passing test
+    -- proves a hit never decodes/translates (the whole point of ADR 0034).
+    let warmInc = map (\i -> i { cached = Map.lookup i.name cachedOf, lift = \_ -> unsafeCrashWith ("lift forced on a cache hit: " <> i.name) }) coldInc
+    let warmI = optimizeIncremental Set.empty Map.empty warmInc
+
+    it "produces the same finalized MIR as a cold lazy build" do
+      warmI.modules `shouldEqual` coldI.modules
+
+    it "reuses every module without forcing lift, and writes nothing" do
+      warmI.writes `shouldEqual` []

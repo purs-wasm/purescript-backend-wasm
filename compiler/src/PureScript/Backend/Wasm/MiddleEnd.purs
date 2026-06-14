@@ -13,11 +13,13 @@
 module PureScript.Backend.Wasm.MiddleEnd
   ( optimizeProgram
   , optimizeProgramCached
+  , optimizeIncremental
   , optimizeProgramTrace
   , optimizeModule
   , CacheInput
   , CacheEntry
   , CacheWrite
+  , IncInput
   , noCache
   ) where
 
@@ -30,6 +32,7 @@ import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith, contains, Pattern(..))
+import Data.String as Str
 import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (key, references)
@@ -89,9 +92,10 @@ type CacheInput = { sourceHashes :: Map String String, loaded :: Map String Cach
 -- | works with the combined record; the file split is the caller's (CLI's) concern.
 type CacheEntry = { key :: String, finalMod :: M.Module, summary :: M.Module }
 
--- | A cache miss to persist: the module's dotted name, its precise dependency names (for the
--- | `.pmi`), and the entry itself.
-type CacheWrite = { name :: String, deps :: Array String, entry :: CacheEntry }
+-- | A cache miss to persist: the module's dotted name, its source hash and precise dependency
+-- | names (both for the `.pmi`, ADR 0034 — the source hash drives the decode-skip pre-pass), and
+-- | the entry itself.
+type CacheWrite = { name :: String, sourceHash :: String, deps :: Array String, entry :: CacheEntry }
 
 noCache :: CacheInput
 noCache = { sourceHashes: Map.empty, loaded: Map.empty }
@@ -110,6 +114,112 @@ optimizeProgramCached
   -> { modules :: Array M.Module, writes :: Array CacheWrite }
 optimizeProgramCached dictElim eff arities cache modules =
   let r = runOpt dictElim eff arities cache Nothing modules in { modules: r.modules, writes: r.writes }
+
+-- | One module's input to the **decode-free** incremental optimizer (ADR 0034). `lift` produces
+-- | the translated + lambda-lifted MIR on demand — called only for a cache *miss*, so an unchanged
+-- | module is never decoded. `cached` is the loaded `.pmi` (key + precise deps + summary) joined
+-- | with the `.pmo` (finalized MIR). `imports` (the corefn import names, cheap to extract) order
+-- | the modules without translating. `sourceHash` is the module's `corefn.json` digest.
+type IncInput =
+  { name :: String
+  , imports :: Array String
+  , sourceHash :: String
+  , cached :: Maybe { key :: String, deps :: Array String, summary :: M.Module, finalMod :: M.Module }
+  , lift :: Unit -> M.Module
+  }
+
+-- | The dependency-ordered optimizer over **lazy** per-module inputs (ADR 0034): a cache hit
+-- | (its key matches the loaded `.pmi`) reuses the finalized + summary MIR and never forces `lift`,
+-- | so decode / translate / lambda-lift / optimize are all skipped; a miss forces `lift` and runs
+-- | the full per-module pipeline, recording the entry to persist. Order is by corefn imports (a
+-- | sound superset of references; modules are acyclic). `summaryInlineKeys` is computed over the
+-- | available view — cached summaries plus the lifted form of any module without a cache — a good
+-- | approximation (it only widens/narrows which bodies a summary retains for downstream inlining,
+-- | never correctness; bench-gated, not byte-identity). The caller (CLI) decides which modules to
+-- | decode (a coarse transitive source-unchanged pre-pass) and supplies `lift` only for those.
+optimizeIncremental :: Set String -> Map String Int -> Array IncInput -> { modules :: Array M.Module, writes :: Array CacheWrite }
+optimizeIncremental eff arities inputs =
+  { modules: result.finalized, writes: result.writes }
+  where
+  names = Set.fromFoldable (map _.name inputs)
+  ordered = topoImports inputs
+  -- A `case` (not `maybe`): the lift fallback must stay unforced for a cached module, since
+  -- PureScript is strict and `maybe (i.lift unit) …` would evaluate the thunk eagerly — defeating
+  -- the whole decode-free goal (and crashing the test's hit-only `lift`).
+  viewOf i = case i.cached of
+    Just c -> c.summary
+    Nothing -> i.lift unit
+  programView = map viewOf inputs
+  summaryInlineKeys = Set.fromFoldable (Map.keys (buildContext eff Set.empty Set.empty programView).inline)
+
+  depHashes :: Array String -> Map String String -> Array String
+  depHashes deps sh = Array.mapMaybe (\d -> Map.lookup d sh) deps
+
+  result = Array.foldl step
+    { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, summaryHashes: Map.empty, writes: [] }
+    ordered
+
+  step acc i = case i.cached of
+    Just c | cacheKey i.sourceHash (depHashes c.deps acc.summaryHashes) == c.key ->
+      acc
+        { finalized = Array.snoc acc.finalized c.finalMod
+        , summaries = Array.snoc acc.summaries c.summary
+        , accCtx = mergeAccum acc.accCtx (moduleContribs c.summary)
+        , impure = Purity.impureKeys eff acc.impure [ c.summary ]
+        , memEff = Purity.memEffKeys acc.memEff [ c.summary ]
+        , summaryHashes = Map.insert i.name (hashBytes (encode c.summary)) acc.summaryHashes
+        }
+    _ ->
+      let
+        lifted = i.lift unit
+        speced = specializeModule acc.summaries lifted
+        r = localOpt eff arities acc.accCtx acc.impure acc.memEff speced
+        finalMod = finalizeModule eff acc.accCtx acc.summaries r.impure r.memEff r.mod
+        summary = DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod
+        deps = referencedModules names lifted
+        key = cacheKey i.sourceHash (depHashes deps acc.summaryHashes)
+      in
+        acc
+          { finalized = Array.snoc acc.finalized finalMod
+          , summaries = Array.snoc acc.summaries summary
+          , accCtx = mergeAccum acc.accCtx (moduleContribs summary)
+          , impure = r.impure
+          , memEff = r.memEff
+          , summaryHashes = Map.insert i.name (hashBytes (encode summary)) acc.summaryHashes
+          , writes = Array.snoc acc.writes { name: i.name, sourceHash: i.sourceHash, deps, entry: { key, finalMod, summary } }
+          }
+
+-- | Order incremental inputs so each comes after the modules it imports (within the input set).
+-- | Imports are an acyclic superset of cross-module references, so this is a valid optimization
+-- | order computable without translating (unlike `topoOrder`, which needs the lifted MIR).
+topoImports :: Array IncInput -> Array IncInput
+topoImports inputs = Array.mapMaybe (\n -> Map.lookup n byName) ordered.out
+  where
+  byName = Map.fromFoldable (map (\i -> Tuple i.name i) inputs)
+  names = Set.fromFoldable (map _.name inputs)
+  depsOf n = case Map.lookup n byName of
+    Nothing -> []
+    Just i -> Array.filter (\d -> d /= n && Set.member d names) (Array.nub i.imports)
+  ordered = Array.foldl visit { seen: Set.empty, out: [] } (map _.name inputs)
+  visit acc n
+    | Set.member n acc.seen = acc
+    | otherwise =
+        let
+          after = Array.foldl visit (acc { seen = Set.insert n acc.seen }) (depsOf n)
+        in
+          after { out = Array.snoc after.out n }
+
+-- | The dependency module names a lifted module references (within the known input set): each
+-- | reference key is `Module.ident` (ident dotless, `Analysis.key`), so the defining module is the
+-- | prefix before the last dot. Restricted to input modules (drops intrinsics / foreigns), matching
+-- | the `keyModL` resolution the whole-program path uses.
+referencedModules :: Set String -> M.Module -> Array String
+referencedModules names m =
+  Array.filter (\d -> d /= joinWith "." m.name && Set.member d names)
+    (Array.nub (Array.mapMaybe moduleOfKey (declRefs m)))
+
+moduleOfKey :: String -> Maybe String
+moduleOfKey k = (\i -> Str.take i k) <$> Str.lastIndexOf (Pattern ".") k
 
 -- | Like `optimizeProgram`, but also returns a human-readable trace of the named module's
 -- | MIR — a snapshot after specialization and one after it is optimized (simplify →
@@ -137,11 +247,11 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
 
   -- A module's cache key and the precise dependency names it was keyed against (recorded in
   -- the `.pmi`, ADR 0034). `Nothing` when the module has no source hash, i.e. is uncacheable.
-  keyAndDeps :: String -> M.Module -> Map String String -> Maybe { key :: String, deps :: Array String }
+  keyAndDeps :: String -> M.Module -> Map String String -> Maybe { key :: String, deps :: Array String, src :: String }
   keyAndDeps name m summaryHashes = do
     src <- Map.lookup name cache.sourceHashes
     let deps = Array.filter (_ /= name) (Array.nub (Array.mapMaybe (\k -> Map.lookup k keyModL) (declRefs m)))
-    pure { key: cacheKey src (Array.mapMaybe (\d -> Map.lookup d summaryHashes) deps), deps }
+    pure { key: cacheKey src (Array.mapMaybe (\d -> Map.lookup d summaryHashes) deps), deps, src }
   -- Higher-order specialization is now per module, inside the loop (`step`), against the
   -- dependency summaries (ADR 0032 caller-homed): the pre-loop whole-program pass is gone.
   -- `topoOrder` is over `lifted` — it counts only non-`$spec` references (a spec imposes no
@@ -230,7 +340,7 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
       -- dependent will key against is the same digest whether this module hit or missed.
       , summaryHashes: Map.insert (modName m) (hashBytes (encode summary)) acc.summaryHashes
       , writes: case mkd of
-          Just kd -> Array.snoc acc.writes { name: modName m, deps: kd.deps, entry: { key: kd.key, finalMod, summary } }
+          Just kd -> Array.snoc acc.writes { name: modName m, sourceHash: kd.src, deps: kd.deps, entry: { key: kd.key, finalMod, summary } }
           Nothing -> acc.writes
       }
 
