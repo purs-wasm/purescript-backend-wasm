@@ -25,7 +25,7 @@ import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
 import Partial.Unsafe (unsafeCrashWith)
-import PureScript.Backend.Wasm.Compiler (linkModule, linkModuleIncremental, mirTrace, parseModule)
+import PureScript.Backend.Wasm.Compiler (linkModule, linkModuleIncremental, mirTrace, parseModule, printMir)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
@@ -190,10 +190,13 @@ buildCmd cliRoot binaryenBinDir args = do
   -- directory would be misleading.
   let bundleDir = args.outDir
   mkdirP bundleDir
-  -- `--cache` (ADR 0034): reuse unchanged modules from `<output>/_build`, decoding only the modules
-  -- the cache cannot reuse. Enabled only when optimizing MIR and not dumping the MIR trace (which
-  -- needs every module decoded). Disabled → decode every module, exactly as before.
-  let useCache = args.cache && opts.optimizeMir && isNothing args.dumpMir
+  -- Incremental cache (ADR 0034), on by default: reuse unchanged modules from `<output>/_build`,
+  -- decoding only the modules the cache cannot reuse. Active whenever MIR is optimized; `--no-opt`
+  -- (no optimized MIR to cache) takes the whole-program path. `-f/--force` keeps the cache machinery
+  -- on (so it is refreshed) but ignores the existing entries — a clean rebuild from scratch.
+  -- `--dump-mir` does NOT disable the cache: on a cached build the target's optimized MIR is
+  -- pretty-printed straight from its `.pmo` after linking (below).
+  let useCache = opts.optimizeMir
   cacheDir <- joinPath [ args.outDir, "_build" ]
   -- The qualified CoreFn-declared foreign names for lowering's opaque-import fallback (ADR 0016),
   -- from the cheap extraction — available for every module without decoding.
@@ -205,16 +208,19 @@ buildCmd cliRoot binaryenBinDir args = do
   info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
   linkResult <-
     if useCache then do
-      -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load.
-      cachedMap <- map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i -> do
-        pmiPath <- joinPath [ cacheDir, i.name <> ".pmi" ]
-        pmoPath <- joinPath [ cacheDir, i.name <> ".pmo" ]
-        mPmi <- readBinary pmiPath
-        mPmo <- readBinary pmoPath
-        pure do
-          pmi <- hush <<< decodePmi =<< mPmi
-          finalMod <- hush <<< decodePmo =<< mPmo
-          pure (Tuple i.name { sourceHash: pmi.sourceHash, key: pmi.key, deps: pmi.deps, summary: pmi.summary, finalMod })
+      -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
+      -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.
+      cachedMap <-
+        if args.force then pure Map.empty
+        else map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i -> do
+          pmiPath <- joinPath [ cacheDir, i.name <> ".pmi" ]
+          pmoPath <- joinPath [ cacheDir, i.name <> ".pmo" ]
+          mPmi <- readBinary pmiPath
+          mPmo <- readBinary pmoPath
+          pure do
+            pmi <- hush <<< decodePmi =<< mPmi
+            finalMod <- hush <<< decodePmo =<< mPmo
+            pure (Tuple i.name { sourceHash: pmi.sourceHash, key: pmi.key, deps: pmi.deps, summary: pmi.summary, finalMod })
       -- Coarse decode-skip pre-pass (ADR 0034): a module need not be decoded at all iff its source
       -- AND every transitive dependency's source are unchanged (a guaranteed cache hit). The precise
       -- per-module key inside the optimizer still decides reuse for the modules that are decoded.
@@ -275,6 +281,19 @@ buildCmd cliRoot binaryenBinDir args = do
           pmoPath <- joinPath [ cacheDir, w.name <> ".pmo" ]
           writeBinary pmiPath (encodePmi { sourceHash: w.sourceHash, key: w.entry.key, deps: w.deps, summary: w.entry.summary })
           writeBinary pmoPath (encodePmo w.entry.finalMod)
+      -- `--dump-mir` on a cached build: the optimized MIR is in the target's `.pmo` (just written
+      -- if it was a miss, otherwise the unchanged hit), so pretty-print that — no re-optimize, no
+      -- cache disable. (`--no-opt` has no `.pmo`; it took the whole-program `mirTrace` path above.)
+      case args.dumpMir of
+        Just target | useCache -> do
+          mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
+          pmoPath <- joinPath [ cacheDir, target <> ".pmo" ]
+          readBinary pmoPath >>= case _ of
+            Just bytes -> case decodePmo bytes of
+              Right m -> writeText mirPath (printMir m) *> info (Log.blue ("✓ Wrote MIR for " <> target <> " to " <> mirPath))
+              Left e -> warn (Log.yellow ("--dump-mir: could not decode " <> target <> ".pmo: " <> e))
+            Nothing -> warn (Log.yellow ("--dump-mir: no cached .pmo for " <> target <> " (is it in the reachable set?)"))
+        _ -> pure unit
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader. `foreignModules` is
       -- the precise set the codegen emitted imports for (no byte re-parse).
