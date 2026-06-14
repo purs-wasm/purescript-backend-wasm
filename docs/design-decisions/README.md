@@ -81,6 +81,7 @@ language and are kept out of version control.)
 | 0031 | [ulib as a single library-module layer: last-wins artifact merge, retiring the shadow/wat duality](0031-ulib-unified-library-modules.md) | Accepted |
 | 0032 | [Caller-homed specialization for per-module, incremental builds](0032-caller-homed-specialization-for-incremental-builds.md) | Accepted |
 | 0033 | [Shipping `ulib` as precompiled MIR (`.pmo`) artifacts](0033-precompiled-ulib-pmo-artifacts.md) | Proposed |
+| 0034 | [Split the module cache into `.pmi` interface and `.pmo` object](0034-pmi-interface-pmo-object-split.md) | Proposed |
 
 ## Scope
 
