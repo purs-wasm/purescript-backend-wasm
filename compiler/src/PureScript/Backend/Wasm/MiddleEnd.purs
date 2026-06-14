@@ -114,7 +114,10 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- β/reduce-only simplify (empty inline set, exactly as `localOpt`'s second simplify) then
   -- collapses the `(\… -> …)(…)` redexes the static-argument substitution leaves. This is a
   -- single bounded pass (specialize + reduce, no re-inlining), not a fixed-point loop, so it
-  -- cannot reintroduce the whole-program N-round compounding ADR 0021 removed.
+  -- cannot reintroduce the whole-program N-round compounding ADR 0021 removed. It must stay
+  -- whole-program: the worker is often a *library* `$liftN` (e.g. `Data.Foldable.go$lift1`) whose
+  -- concrete lambda only appears at a *consuming* module's call site after that module inlines its
+  -- forwarder, so the spec spans a module boundary and a per-module pass would forgo it.
   respecialized = specializeProgram result.done
   reCtx = buildContext effectfulForeigns Set.empty Set.empty respecialized
   finalized = map (\m -> DictElim.simplifyModule (reCtx { inline = Map.empty }) m) respecialized
