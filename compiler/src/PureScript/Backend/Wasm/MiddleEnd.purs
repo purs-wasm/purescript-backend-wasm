@@ -12,8 +12,10 @@
 -- | simplify again.
 module PureScript.Backend.Wasm.MiddleEnd
   ( optimizeProgram
+  , optimizeProgramCached
   , optimizeProgramTrace
   , optimizeModule
+  , CacheInput
   ) where
 
 import Prelude
@@ -36,6 +38,9 @@ import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeModule, specializationCalleeKeys)
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize (encode)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (cacheKey, hashBytes)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (PmoEntry)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
 
@@ -66,24 +71,63 @@ type AccumCtx =
 -- | what makes deep tail recursion run in constant stack (disabling it would overflow).
 -- | Pass `false` to build an unoptimized baseline.
 optimizeProgram :: Boolean -> Set String -> Map String Int -> Array Module -> Array M.Module
-optimizeProgram dictElim eff arities modules = (runOpt dictElim eff arities Nothing modules).modules
+optimizeProgram dictElim eff arities modules = (runOpt dictElim eff arities noCache Nothing modules).modules
+
+-- | The incremental-build inputs (ADR 0032 phase 4): each module's source hash (its
+-- | `corefn.json` digest) and any `.pmo` cache entries already on disk, keyed by dotted
+-- | module name. A module is reused from `loaded` iff it has a source hash, a loaded
+-- | entry, and that entry's key equals the freshly computed cache key (source hash ⊕ the
+-- | hashes of the dependency summaries it consumed). The filesystem is the caller's
+-- | concern — this layer is pure: it consumes loaded entries and reports which to persist.
+type CacheInput = { sourceHashes :: Map String String, loaded :: Map String PmoEntry }
+
+noCache :: CacheInput
+noCache = { sourceHashes: Map.empty, loaded: Map.empty }
+
+-- | `optimizeProgram` with the incremental MIR cache: reuse each module's finalized MIR
+-- | from a matching `.pmo` (skipping the expensive specialize/optimize/finalize), and
+-- | return the cache *misses* to persist, paired with their dotted module name. A module
+-- | with no source hash is never cached, so passing `noCache` reproduces `optimizeProgram`
+-- | exactly (the byte-identical gate for this feature).
+optimizeProgramCached
+  :: Boolean
+  -> Set String
+  -> Map String Int
+  -> CacheInput
+  -> Array Module
+  -> { modules :: Array M.Module, writes :: Array (Tuple String PmoEntry) }
+optimizeProgramCached dictElim eff arities cache modules =
+  let r = runOpt dictElim eff arities cache Nothing modules in { modules: r.modules, writes: r.writes }
 
 -- | Like `optimizeProgram`, but also returns a human-readable trace of the named module's
 -- | MIR — a snapshot after specialization and one after it is optimized (simplify →
 -- | impurify → simplify) — for inspecting the optimizer (`purs-wasm --dump-mir`, cf.
 -- | purs-backend-es `--trace-rewrites`). The trace is empty unless a target module is given.
 optimizeProgramTrace :: Boolean -> Set String -> Map String Int -> String -> Array Module -> Array String
-optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff arities (Just target) modules).trace
+optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff arities noCache (Just target) modules).trace
 
 -- | The whole-program optimizer core. `traceTarget` (a dotted module name) enables the MIR
 -- | trace; when `Nothing` the trace stays empty and costs nothing.
-runOpt :: Boolean -> Set String -> Map String Int -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String }
-runOpt dictElim effectfulForeigns effArities traceTarget modules =
-  if dictElim then { modules: result.finalized, trace: result.trace <> snap "after post-inline specialization" result.finalized }
-  else { modules: lifted, trace: snap "initial (translated + lifted)" lifted }
+runOpt :: Boolean -> Set String -> Map String Int -> CacheInput -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String, writes :: Array (Tuple String PmoEntry) }
+runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
+  if dictElim then { modules: result.finalized, trace: result.trace <> snap "after post-inline specialization" result.finalized, writes: result.writes }
+  else { modules: lifted, trace: snap "initial (translated + lifted)" lifted, writes: [] }
   where
   mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
   lifted = map lambdaLiftModule mir
+
+  -- Map a binding key to its defining module, over the lifted program — the same relation
+  -- `topoOrder` uses for dependency ordering, reused here to scope a module's cache key to
+  -- the dependency summaries it actually consumes (`declRefs`, ADR 0032: output depends only
+  -- downward). All deps precede a module in `ordered`, so their summary hashes are known.
+  keyModL :: Map String String
+  keyModL = Map.fromFoldable (lifted >>= \m -> map (\k -> Tuple k (modName m)) (declKeys m))
+
+  cacheKeyFor :: String -> M.Module -> Map String String -> Maybe String
+  cacheKeyFor name m summaryHashes = do
+    src <- Map.lookup name cache.sourceHashes
+    let deps = Array.filter (_ /= name) (Array.nub (Array.mapMaybe (\k -> Map.lookup k keyModL) (declRefs m)))
+    pure (cacheKey src (Array.mapMaybe (\d -> Map.lookup d summaryHashes) deps))
   -- Higher-order specialization is now per module, inside the loop (`step`), against the
   -- dependency summaries (ADR 0032 caller-homed): the pre-loop whole-program pass is gone.
   -- `topoOrder` is over `lifted` — it counts only non-`$spec` references (a spec imposes no
@@ -117,7 +161,7 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
   -- resident (ADR 0021 b1). Every pass is per module (ADR 0032 caller-homed specialization), so the
   -- loop yields finalized modules one at a time and there is no whole-program post-pass.
   result = Array.foldl step
-    { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, trace: [] }
+    { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, trace: [], summaryHashes: Map.empty, writes: [] }
     ordered
 
   -- The inline / constructor / instance-field contributions of one finalized dependency summary,
@@ -182,7 +226,36 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
     in
       DictElim.simplifyModule (ctx { inline = Map.empty }) respec
 
+  -- A module is a cache hit iff it has a source hash, a loaded `.pmo`, and that entry's
+  -- key equals the freshly computed one (source hash ⊕ consumed dependency-summary hashes,
+  -- ADR 0032 phase 4). A hit reuses the finalized + summary MIR and skips the expensive
+  -- specialize/optimize/finalize; a miss runs the full pipeline and (if the module is
+  -- cacheable) records the entry to persist. With no source hash the `Just` guard fails, so
+  -- `noCache` takes the miss path for every module — byte-identical to the non-cached build.
   step acc m =
+    case cacheKeyFor (modName m) m acc.summaryHashes of
+      Just k | Just entry <- Map.lookup (modName m) cache.loaded, entry.key == k -> hitStep acc m entry
+      mKey -> missStep acc m mKey
+
+  hitStep acc m entry =
+    let
+      summary = entry.summary
+    in
+      { finalized: Array.snoc acc.finalized entry.finalMod
+      , summaries: Array.snoc acc.summaries summary
+      , accCtx: mergeAccum acc.accCtx (moduleContribs summary)
+      -- Purity is re-derived from the cached summary against the *current* seed: the summary
+      -- retains all impure / memory-effectful bodies (`DictElim.summarize`), so propagation is
+      -- faithful, and a dependency whose effectfulness changed would have changed its summary
+      -- hash and thus missed here.
+      , impure: Purity.impureKeys effectfulForeigns acc.impure [ summary ]
+      , memEff: Purity.memEffKeys acc.memEff [ summary ]
+      , trace: acc.trace
+      , summaryHashes: Map.insert (modName m) (hashBytes (encode summary)) acc.summaryHashes
+      , writes: acc.writes
+      }
+
+  missStep acc m mKey =
     let
       speced = specializeModule acc.summaries m
       r = localOpt acc.accCtx acc.impure acc.memEff speced
@@ -201,6 +274,12 @@ runOpt dictElim effectfulForeigns effArities traceTarget modules =
             <> [ "=== " <> t <> " (specialized) ===\n" <> printModule speced ]
             <> [ "=== " <> t <> " (optimized) ===\n" <> printModule r.mod ]
           _ -> acc.trace
+      -- Persist a cacheable miss (one with a source hash, hence a key). The summary hash a
+      -- dependent will key against is the same digest whether this module hit or missed.
+      , summaryHashes: Map.insert (modName m) (hashBytes (encode summary)) acc.summaryHashes
+      , writes: case mKey of
+          Just k -> Array.snoc acc.writes (Tuple (modName m) { key: k, finalMod, summary })
+          Nothing -> acc.writes
       }
 
   -- One module, optimized once against its finalized dependencies (the accumulated `accCtx`, ADR

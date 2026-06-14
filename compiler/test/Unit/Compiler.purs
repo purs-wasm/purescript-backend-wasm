@@ -13,6 +13,7 @@ import Test.Unit.PureScript.Backend.Wasm.Lower as Lower
 import Test.Unit.PureScript.Backend.Wasm.Lower.Match as Match
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift as LambdaLift
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.FreeVars as FreeVars
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Cache as Cache
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify as Simplify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize as Specialize
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
@@ -48,3 +49,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   SourceForeigns.spec
   UlibInterface.spec
   FreeVars.spec
+  Cache.spec
