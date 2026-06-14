@@ -20,19 +20,21 @@ import Data.Set as Set
 import Data.String (joinWith)
 import Data.String as Str
 import Data.Traversable (for)
-import Data.Tuple (Tuple(..))
+import Data.Tuple (Tuple(..), fst)
 import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Compiler (linkModule, mirTrace, parseModule)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
 import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
-import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, unlink, warn, writeBinary, writeText)
+import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PursWasm.CLI.Lib (resolveLibPath)
 import PursWasm.CLI.Effect.Log (br)
 import PursWasm.CLI.Effect.Log as Log
@@ -133,7 +135,9 @@ buildCmd cliRoot binaryenBinDir args = do
   -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
   -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
   -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
-  modules <- map Array.catMaybes $ for modNames \name -> do
+  -- Keep each module's corefn source alongside the parsed module: its hash is the
+  -- incremental cache's per-module source key (ADR 0032 phase 4).
+  modulesWithSrc <- map Array.catMaybes $ for modNames \name -> do
     mLibSrc <-
       if Set.member name libSourced then maybe (pure Nothing) readText (Map.lookup name shadows <#> _.corefn)
       else pure Nothing
@@ -144,7 +148,9 @@ buildCmd cliRoot binaryenBinDir args = do
       Nothing -> pure Nothing
       Just src -> case parseModule src of
         Left err -> logAndThrow (name <> ": " <> err)
-        Right m -> pure (Just m)
+        Right m -> pure (Just (Tuple m src))
+  let modules = map fst modulesWithSrc
+  let sourceHashes = Map.fromFoldable (map (\(Tuple m src) -> Tuple (joinWith "." m.name) (hashString src)) modulesWithSrc)
   -- Fail early on a `wasm-base` incompatible with this backend (ADR 0026) / CoreFn from an
   -- unsupported purs (ADR 0029).
   either logAndThrow pure (checkWasmBaseCompat modules)
@@ -190,10 +196,31 @@ buildCmd cliRoot binaryenBinDir args = do
   -- `runtime.wasm` + foreign providers with `wasm-merge` into one self-contained wasm.
   appPath <- joinPath [ bundleDir, "app.wasm" ]
   wasmPath <- joinPath [ bundleDir, "index.wasm" ]
+  -- `--cache` (ADR 0032 phase 4): reuse unchanged modules' optimized MIR from `<output>/_build`.
+  -- A module hits iff its source hash and consumed dependency-summary hashes are unchanged; a
+  -- corrupt or stale `.pmo` simply fails to decode and is treated as a miss. Off → an empty
+  -- `CacheInput`, so every module is recomputed exactly as before (byte-identical).
+  cacheDir <- joinPath [ args.outDir, "_build" ]
+  loaded <-
+    if args.cache then map (Map.fromFoldable <<< Array.catMaybes) $ for modules \m -> do
+      let name = joinWith "." m.name
+      p <- joinPath [ cacheDir, name <> ".pmo" ]
+      readBinary p <#> \mb -> mb >>= \bytes -> case decodePmo bytes of
+        Right entry -> Just (Tuple name entry)
+        Left _ -> Nothing
+    else pure Map.empty
+  let cacheInput = if args.cache then { sourceHashes, loaded } else { sourceHashes: Map.empty, loaded: Map.empty }
   info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length modules })
-  liftEffect (linkModule opts roots modules externs allSigs) >>= case _ of
+  liftEffect (linkModule opts roots modules externs allSigs cacheInput) >>= case _ of
     Left err -> logAndThrow err
     Right built -> do
+      -- Persist cache misses (ADR 0032 phase 4) before the merge, so a later failure still leaves
+      -- a usable cache. Each entry's filename is its dotted module name (`Data.Maybe.pmo`).
+      when args.cache do
+        mkdirP cacheDir
+        for_ built.cacheWrites \(Tuple name entry) -> do
+          p <- joinPath [ cacheDir, name <> ".pmo" ]
+          writeBinary p (encodePmo entry)
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader. `foreignModules` is
       -- the precise set the codegen emitted imports for (no byte re-parse).

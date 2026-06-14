@@ -16,6 +16,7 @@ module PureScript.Backend.Wasm.MiddleEnd
   , optimizeProgramTrace
   , optimizeModule
   , CacheInput
+  , noCache
   ) where
 
 import Prelude

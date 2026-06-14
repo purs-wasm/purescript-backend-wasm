@@ -24,13 +24,15 @@ import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.Traversable (traverse)
+import Data.Tuple (Tuple)
 import Effect (Effect)
 import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
-import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram, optimizeProgramTrace)
+import PureScript.Backend.Wasm.MiddleEnd (CacheInput, noCache, optimizeProgramCached, optimizeProgramTrace)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (PmoEntry)
 import PureScript.CoreFn (Module, ModuleName)
 import PureScript.CoreFn.FromJSON (decodeModule)
 import PureScript.ExternsFile (ExternsFile)
@@ -60,6 +62,10 @@ type CompiledModule =
   { mod :: B.Module
   , foreignModules :: Array String
   , cafInit :: Maybe B.Function
+  -- The incremental-cache misses produced by this link (ADR 0032 phase 4), each paired
+  -- with its dotted module name, for the caller to persist as `.pmo`. Empty unless a
+  -- `CacheInput` with module source hashes was supplied; the caller owns the filesystem.
+  , cacheWrites :: Array (Tuple String PmoEntry)
   }
 
 -- | Link the given modules into one validated Binaryen module and return the **live**
@@ -78,8 +84,9 @@ linkModule
   -> Array Module
   -> Array ExternsFile
   -> Object ForeignSig
+  -> CacheInput
   -> Effect (Either String CompiledModule)
-linkModule opts roots modules externs foreignSigs' =
+linkModule opts roots modules externs foreignSigs' cache =
   case lowered of
     Left err -> pure (Left ("linking failed: " <> show err))
     Right program -> do
@@ -90,7 +97,7 @@ linkModule opts roots modules externs foreignSigs' =
         wat <- B.emitText built.mod
         B.dispose built.mod
         pure (Left ("emitted module failed validation:\n" <> wat))
-      else pure (Right built)
+      else pure (Right { mod: built.mod, foreignModules: built.foreignModules, cafInit: built.cafInit, cacheWrites: optimized.writes })
   where
   -- Prune to the modules transitively imported by the entry roots BEFORE optimizing — the
   -- input dir holds the whole dependency build (often hundreds of modules), but optimizing
@@ -104,8 +111,8 @@ linkModule opts roots modules externs foreignSigs' =
   -- optimizer must preserve `Perform`s for; the same pair `mirTrace` uses (ADR 0015).
   effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
   effArities = effectfulForeignAritiesFromSigs foreignSigs'
-  optimized = optimizeProgram opts.optimizeMir effSet effArities reachable
-  lowered = lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimized
+  optimized = optimizeProgramCached opts.optimizeMir effSet effArities cache reachable
+  lowered = lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimized.modules
 
 -- | The modules transitively reachable from `roots` through CoreFn imports (a fixpoint over
 -- | each kept module's import list). Used to drop unreached dependency modules before the
@@ -134,12 +141,12 @@ reachableModules roots modules = Array.filter (\m -> Set.member (joinWith "." m.
 -- | CAF-init trigger (ADR 0006 / 0021).
 compileModules :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Object ForeignSig -> Effect (Either String Uint8Array)
 compileModules opts roots modules externs sigs =
-  linkModule opts roots modules externs sigs >>= traverse (emitAndDispose B.emitBinary)
+  linkModule opts roots modules externs sigs noCache >>= traverse (emitAndDispose B.emitBinary)
 
 -- | Link the given modules into one wasm and return its WAT (text) form.
 compileModulesText :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Object ForeignSig -> Effect (Either String String)
 compileModulesText opts roots modules externs sigs =
-  linkModule opts roots modules externs sigs >>= traverse (emitAndDispose B.emitText)
+  linkModule opts roots modules externs sigs noCache >>= traverse (emitAndDispose B.emitText)
 
 -- | Run CAF init via the wasm `start` section, then emit and dispose the module — the
 -- | self-contained path (`compileModules`/`compileModulesText`). The CLI instead emits via
