@@ -21,6 +21,22 @@
 > - Cross-link: this ADR's dependency-ordered single pass replaced the whole-program N-round loop that
 >   [ADR 0020](0020-reduction-aware-inliner.md)'s Invariant 1 / step 4 assumed, and reverted ADR 0020
 >   stage 3 (Context above).
+>
+> **Update (2026-06-14): the b1 loop was O(N²); fixed; the incremental cache is now the active plan.**
+> Profiling a `metatheory` build (≈11s; ~5× purs-backend-es) found the dominant cost was the
+> dependency-ordered loop itself: each module rebuilt the whole simplifier context (`buildContext`
+> over *every* accumulated dependency summary), so per-step time grew linearly with module index —
+> **O(N²)** in the module count (~6.7s). Fixed by **accumulating the context incrementally** (a running
+> inline set / transparent + data constructor sets / instance-field map extended by each finalized
+> summary; purity computed per-module seeded by the dependencies'), restoring **O(N)**: `metatheory`
+> 11.2s → 7.2s, on par with `spago build`. Inline candidacy is now per-summary-local — a small
+> approximation of the old per-step whole-program recompute (+1.7% wasm), correctness-neutral.
+> [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) (caller-homed specialization)
+> made each module's optimized output a **pure function of `(its corefn, its dependency summaries)`** —
+> exactly the precondition the *Future: incremental compilation cache* section below needs. With that
+> in place, the **summary-hash baseline cache is the next step**, expected to bring 2nd+ builds to
+> ~purs-backend-es class: the per-module **decode + optimize (~54% of the build) is cacheable**, leaving
+> only the whole-program back half (lower + Binaryen build/`-O` + `wasm-merge`, ~2.5s) to re-run.
 
 ## Context
 

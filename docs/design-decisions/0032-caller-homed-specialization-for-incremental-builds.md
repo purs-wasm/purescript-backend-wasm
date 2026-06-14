@@ -1,7 +1,18 @@
 # 0032. Caller-homed specialization for per-module, incremental builds
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted** _(2026-06-14: phases 1–3 implemented — caller-homed placement, per-module pre-inline and post-inline specialization. Each module's optimized output is now a pure function of `(its corefn, its dependency summaries)`, the precondition for the summary-hash cache (phase 4, below). Behaviour-neutral per the gate: e2e 150/150, unit 130/130, bench checksums unchanged.)_
 - Date: 2026-06-14
+
+> **Update (2026-06-14):** While landing the per-module loop a separate, larger win surfaced and was
+> fixed: the loop rebuilt the whole simplifier context (`buildContext` over *every* accumulated
+> dependency summary) for each module, making the optimizer **O(N²)** in the module count — the
+> dominant build cost (per-step time grew linearly with module index; ~6.7s of an ~11s `metatheory`
+> build). It now accumulates an incremental context (inline set / transparent + data constructors /
+> instance fields extended by each finalized summary; purity computed per-module seeded by the
+> dependencies'), restoring **O(N)** — `metatheory` 11.2s → 7.2s. Inline candidacy became
+> per-summary-local (a small approximation of the old per-step whole-program recompute, +1.7% wasm on
+> `metatheory`); correctness-neutral, and the global use-count it approximates is a knob a future
+> reduction-aware inliner removes (ADR 0020). This is recorded in [ADR 0021](0021-streaming-dependency-ordered-wpo.md) too.
 
 ## Context
 

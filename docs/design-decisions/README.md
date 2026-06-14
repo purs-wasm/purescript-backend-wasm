@@ -79,7 +79,7 @@ language and are kept out of version control.)
 | 0029 | [ulib lib distribution and purs-compiler pinning](0029-ulib-lib-distribution-and-purs-pinning.md) | Accepted (refined by 0031) |
 | 0030 | [`Data.String` over UTF-8: code-point semantics, byte access via `Wasm.String`](0030-data-string-over-utf8.md) | Accepted |
 | 0031 | [ulib as a single library-module layer: last-wins artifact merge, retiring the shadow/wat duality](0031-ulib-unified-library-modules.md) | Accepted |
-| 0032 | [Caller-homed specialization for per-module, incremental builds](0032-caller-homed-specialization-for-incremental-builds.md) | Proposed |
+| 0032 | [Caller-homed specialization for per-module, incremental builds](0032-caller-homed-specialization-for-incremental-builds.md) | Accepted |
 
 ## Scope
 
