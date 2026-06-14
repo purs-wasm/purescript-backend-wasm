@@ -1,5 +1,5 @@
 {
-  "wasmBytes": 8453,
+  "wasmBytes": 9007,
   "node": "v24.16.0",
   "benchmarks": [
     {
@@ -8,32 +8,32 @@
       "points": [
         {
           "size": 20,
-          "nsPerOp": 43482,
-          "ms": 0.0435,
+          "nsPerOp": 41613,
+          "ms": 0.0416,
           "result": 6765
         },
         {
           "size": 22,
-          "nsPerOp": 112992,
-          "ms": 0.113,
+          "nsPerOp": 109257,
+          "ms": 0.1093,
           "result": 17711
         },
         {
           "size": 24,
-          "nsPerOp": 294323,
-          "ms": 0.2943,
+          "nsPerOp": 284152,
+          "ms": 0.2842,
           "result": 46368
         },
         {
           "size": 26,
-          "nsPerOp": 770996,
-          "ms": 0.771,
+          "nsPerOp": 755981,
+          "ms": 0.756,
           "result": 121393
         },
         {
           "size": 28,
-          "nsPerOp": 2038898,
-          "ms": 2.0389,
+          "nsPerOp": 1960972,
+          "ms": 1.961,
           "result": 317811
         }
       ]
@@ -44,32 +44,32 @@
       "points": [
         {
           "size": 200000,
-          "nsPerOp": 147486,
-          "ms": 0.1475,
+          "nsPerOp": 147646,
+          "ms": 0.1476,
           "result": 1602155744
         },
         {
           "size": 400000,
-          "nsPerOp": 294998,
+          "nsPerOp": 295036,
           "ms": 0.295,
           "result": 1536522688
         },
         {
           "size": 600000,
-          "nsPerOp": 442375,
-          "ms": 0.4424,
+          "nsPerOp": 442795,
+          "ms": 0.4428,
           "result": 1084984992
         },
         {
           "size": 800000,
-          "nsPerOp": 589961,
-          "ms": 0.59,
+          "nsPerOp": 592017,
+          "ms": 0.592,
           "result": 1529426816
         },
         {
           "size": 1000000,
-          "nsPerOp": 737352,
-          "ms": 0.7374,
+          "nsPerOp": 737798,
+          "ms": 0.7378,
           "result": -143234976
         }
       ]
@@ -80,32 +80,32 @@
       "points": [
         {
           "size": 500,
-          "nsPerOp": 104839,
-          "ms": 0.1048,
+          "nsPerOp": 103741,
+          "ms": 0.1037,
           "result": 1
         },
         {
           "size": 1000,
-          "nsPerOp": 247515,
-          "ms": 0.2475,
+          "nsPerOp": 235727,
+          "ms": 0.2357,
           "result": 1
         },
         {
           "size": 1500,
-          "nsPerOp": 389545,
-          "ms": 0.3895,
+          "nsPerOp": 390962,
+          "ms": 0.391,
           "result": 1
         },
         {
           "size": 2000,
-          "nsPerOp": 576147,
-          "ms": 0.5761,
+          "nsPerOp": 552918,
+          "ms": 0.5529,
           "result": 1
         },
         {
           "size": 3000,
-          "nsPerOp": 986389,
-          "ms": 0.9864,
+          "nsPerOp": 947410,
+          "ms": 0.9474,
           "result": 1
         }
       ]
@@ -116,26 +116,26 @@
       "points": [
         {
           "size": 6,
-          "nsPerOp": 12795,
-          "ms": 0.0128,
+          "nsPerOp": 12921,
+          "ms": 0.0129,
           "result": 4
         },
         {
           "size": 7,
-          "nsPerOp": 56560,
-          "ms": 0.0566,
+          "nsPerOp": 56965,
+          "ms": 0.057,
           "result": 40
         },
         {
           "size": 8,
-          "nsPerOp": 276015,
-          "ms": 0.276,
+          "nsPerOp": 275486,
+          "ms": 0.2755,
           "result": 92
         },
         {
           "size": 9,
-          "nsPerOp": 1455082,
-          "ms": 1.4551,
+          "nsPerOp": 1478676,
+          "ms": 1.4787,
           "result": 352
         }
       ]
@@ -146,38 +146,38 @@
       "points": [
         {
           "size": 12,
-          "nsPerOp": 45801,
-          "ms": 0.0458,
+          "nsPerOp": 46633,
+          "ms": 0.0466,
           "result": 8386560
         },
         {
           "size": 13,
-          "nsPerOp": 91420,
-          "ms": 0.0914,
+          "nsPerOp": 92665,
+          "ms": 0.0927,
           "result": 33550336
         },
         {
           "size": 14,
-          "nsPerOp": 183238,
-          "ms": 0.1832,
+          "nsPerOp": 185893,
+          "ms": 0.1859,
           "result": 134209536
         },
         {
           "size": 15,
-          "nsPerOp": 366058,
-          "ms": 0.3661,
+          "nsPerOp": 370720,
+          "ms": 0.3707,
           "result": 536854528
         },
         {
           "size": 16,
-          "nsPerOp": 741191,
-          "ms": 0.7412,
+          "nsPerOp": 757066,
+          "ms": 0.7571,
           "result": 2147450880
         },
         {
           "size": 17,
-          "nsPerOp": 1559193,
-          "ms": 1.5592,
+          "nsPerOp": 1650225,
+          "ms": 1.6502,
           "result": -65536
         }
       ]
@@ -188,32 +188,32 @@
       "points": [
         {
           "size": 8,
-          "nsPerOp": 255899,
-          "ms": 0.2559,
+          "nsPerOp": 249143,
+          "ms": 0.2491,
           "result": 32640
         },
         {
           "size": 9,
-          "nsPerOp": 1111373,
-          "ms": 1.1114,
+          "nsPerOp": 1059953,
+          "ms": 1.06,
           "result": 130816
         },
         {
           "size": 10,
-          "nsPerOp": 4231683,
-          "ms": 4.2317,
+          "nsPerOp": 4308454,
+          "ms": 4.3085,
           "result": 523776
         },
         {
           "size": 11,
-          "nsPerOp": 16580806,
-          "ms": 16.5808,
+          "nsPerOp": 16299819,
+          "ms": 16.2998,
           "result": 2096128
         },
         {
           "size": 12,
-          "nsPerOp": 65669875,
-          "ms": 65.6699,
+          "nsPerOp": 64311125,
+          "ms": 64.3111,
           "result": 8386560
         }
       ]
@@ -224,33 +224,153 @@
       "points": [
         {
           "size": 100,
-          "nsPerOp": 514890,
-          "ms": 0.5149,
+          "nsPerOp": 516506,
+          "ms": 0.5165,
           "result": 200300000
         },
         {
           "size": 200,
-          "nsPerOp": 1005494,
-          "ms": 1.0055,
+          "nsPerOp": 998821,
+          "ms": 0.9988,
           "result": 400600000
         },
         {
           "size": 300,
-          "nsPerOp": 1469515,
-          "ms": 1.4695,
+          "nsPerOp": 1476243,
+          "ms": 1.4762,
           "result": 600900000
         },
         {
           "size": 400,
-          "nsPerOp": 1979839,
-          "ms": 1.9798,
+          "nsPerOp": 1977944,
+          "ms": 1.9779,
           "result": 801200000
         },
         {
           "size": 500,
-          "nsPerOp": 2430186,
-          "ms": 2.4302,
+          "nsPerOp": 2426191,
+          "ms": 2.4262,
           "result": 1001500000
+        }
+      ]
+    },
+    {
+      "name": "mapFoldArray",
+      "desc": "map/foldl over a Data.Array (ulib HOFs)",
+      "points": [
+        {
+          "size": 100,
+          "nsPerOp": 308593,
+          "ms": 0.3086,
+          "result": 200300000
+        },
+        {
+          "size": 200,
+          "nsPerOp": 594108,
+          "ms": 0.5941,
+          "result": 400600000
+        },
+        {
+          "size": 300,
+          "nsPerOp": 882171,
+          "ms": 0.8822,
+          "result": 600900000
+        },
+        {
+          "size": 400,
+          "nsPerOp": 1171369,
+          "ms": 1.1714,
+          "result": 801200000
+        },
+        {
+          "size": 500,
+          "nsPerOp": 1464254,
+          "ms": 1.4643,
+          "result": 1001500000
+        }
+      ]
+    },
+    {
+      "name": "countEffect",
+      "desc": "Effect monad: cyclic instance dicts → constant-stack loop",
+      "points": [
+        {
+          "size": 1000,
+          "nsPerOp": 756,
+          "ms": 0.0008,
+          "result": 1000
+        },
+        {
+          "size": 2000,
+          "nsPerOp": 1496,
+          "ms": 0.0015,
+          "result": 2000
+        },
+        {
+          "size": 4000,
+          "nsPerOp": 2971,
+          "ms": 0.003,
+          "result": 4000
+        },
+        {
+          "size": 8000,
+          "nsPerOp": 5929,
+          "ms": 0.0059,
+          "result": 8000
+        },
+        {
+          "size": 16000,
+          "nsPerOp": 11823,
+          "ms": 0.0118,
+          "result": 16000
+        },
+        {
+          "size": 32000,
+          "nsPerOp": 23633,
+          "ms": 0.0236,
+          "result": 32000
+        },
+        {
+          "size": 64000,
+          "nsPerOp": 47235,
+          "ms": 0.0472,
+          "result": 64000
+        }
+      ]
+    },
+    {
+      "name": "curry",
+      "desc": "curried Int->Int->Int dispatch (closure-alloc)",
+      "points": [
+        {
+          "size": 50000,
+          "nsPerOp": 5087130,
+          "ms": 5.0871,
+          "result": 947122104
+        },
+        {
+          "size": 100000,
+          "nsPerOp": 10001188,
+          "ms": 10.0012,
+          "result": 1871094128
+        },
+        {
+          "size": 200000,
+          "nsPerOp": 20270896,
+          "ms": 20.2709,
+          "result": 736856800
+        },
+        {
+          "size": 400000,
+          "nsPerOp": 40485250,
+          "ms": 40.4853,
+          "result": 510277056
+        },
+        {
+          "size": 800000,
+          "nsPerOp": 80670625,
+          "ms": 80.6706,
+          "result": -269423744
         }
       ]
     }

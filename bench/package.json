@@ -3,8 +3,11 @@
   "type": "module",
   "scripts": {
     "build:ps": "cd .. && spago build -p bench --output bench/output",
-    "build:wasm": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main",
-    "build:wasm:base": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main",
+    "build:wasm:main": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm -e Bench.Main",
+    "build:wasm:count-effect": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-count-effect -e CountEffect",
+    "build:wasm:curry": "cd .. && node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-curry -e BenchCurry",
+    "build:wasm": "npm run build:wasm:main && npm run build:wasm:count-effect && npm run build:wasm:curry",
+    "build:wasm:base": "npm run build:wasm",
     "build": "npm run build:ps && npm run build:wasm",
     "base": "npm run build:ps && npm run build:wasm:base && node run.mjs",
     "snapshot": "./snapshot.sh",
