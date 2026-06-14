@@ -19,7 +19,7 @@ import PureScript.Backend.Wasm.Externs (foreignSigs)
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport)
 import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
-import PureScript.CoreFn (Module)
+import PureScript.CoreFn (ModuleName)
 import PureScript.ExternsFile (ExternsFile)
 import PursWasm.CLI.Effect (FS, FilePath, exists, joinPath, readText)
 import PursWasm.CLI.Module (printModname)
@@ -29,12 +29,14 @@ import Type.Row (type (+))
 -- | Module name → its `.purs` source path, parsed from spago's `cache-db.json` (ADR 0016).
 foreign import cacheDbSourcesImpl :: String -> Object String
 
+-- | Only a module's `name` and `foreignNames` are consulted, so the incremental (`--cache`) path
+-- | can pass these (cheaply extracted from corefn text) without decoding a cache hit (ADR 0034).
 buildForeignSigs
-  :: forall r
+  :: forall r s
    . FilePath
   -> FilePath
   -> Array ExternsFile
-  -> Array Module
+  -> Array { name :: ModuleName, foreignNames :: Array String | s }
   -> Run (FS + r) (Object ForeignImport)
 buildForeignSigs input libPath externs modules = do
   let externsSigs = foreignSigs externs

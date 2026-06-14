@@ -20,12 +20,14 @@ import Data.Set as Set
 import Data.String (joinWith)
 import Data.String as Str
 import Data.Traversable (for)
-import Data.Tuple (Tuple(..), fst)
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Compiler (linkModule, mirTrace, parseModule)
+import Partial.Unsafe (unsafeCrashWith)
+import PureScript.Backend.Wasm.Compiler (linkModule, linkModuleIncremental, mirTrace, parseModule)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
+import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
@@ -51,6 +53,10 @@ import Type.Row (type (+))
 -- | The dotted import module names of a `corefn.json`, extracted cheaply (no full decode), for
 -- | file-level reachability pruning.
 foreign import corefnImportsImpl :: String -> Array String
+
+-- | The bare foreign-import names a `corefn.json` declares, extracted cheaply (no full decode), so
+-- | the incremental (`--cache`) path can resolve foreign signatures without decoding a cache hit.
+foreign import corefnForeignNamesImpl :: String -> Array String
 
 -- | A monotonic clock in milliseconds, for the elapsed-time report.
 foreign import nowMsImpl :: Effect Number
@@ -136,26 +142,27 @@ buildCmd cliRoot binaryenBinDir args = do
   -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
   -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
   -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
-  -- Keep each module's corefn source alongside the parsed module: its hash is the
-  -- incremental cache's per-module source key (ADR 0032 phase 4).
-  modulesWithSrc <- map Array.catMaybes $ for modNames \name -> do
+  -- Read each module's corefn source and the cheap metadata derived from it WITHOUT a full decode
+  -- (ADR 0034): the source hash (the cache key's source input), the import names (for dependency
+  -- order), and the foreign-import names (lowering's opaque-import fallback + foreign-sig
+  -- resolution). A registry module's corefn comes from the lib (ADR 0031 §6); a name resolving to no
+  -- corefn is skipped. The corefn is *decoded* later only for modules the cache cannot reuse.
+  srcInfos <- map Array.catMaybes $ for modNames \name -> do
     mLibSrc <-
       if Set.member name libSourced then maybe (pure Nothing) readText (Map.lookup name shadows <#> _.corefn)
       else pure Nothing
     mSrc <- case mLibSrc of
       Just s -> pure (Just s)
       Nothing -> readText =<< joinPath [ args.input, name, "corefn.json" ]
-    case mSrc of
-      Nothing -> pure Nothing
-      Just src -> case parseModule src of
-        Left err -> logAndThrow (name <> ": " <> err)
-        Right m -> pure (Just (Tuple m src))
-  let modules = map fst modulesWithSrc
-  let sourceHashes = Map.fromFoldable (map (\(Tuple m src) -> Tuple (joinWith "." m.name) (hashString src)) modulesWithSrc)
-  -- Fail early on a `wasm-base` incompatible with this backend (ADR 0026) / CoreFn from an
-  -- unsupported purs (ADR 0029).
-  either logAndThrow pure (checkWasmBaseCompat modules)
-  either logAndThrow pure (checkCorefnVersions modules)
+    pure $ mSrc <#> \src ->
+      { name
+      , mn: Str.split (Str.Pattern ".") name
+      , src
+      , sourceHash: hashString src
+      , imports: corefnImportsImpl src
+      , foreignNames: corefnForeignNamesImpl src
+      }
+  let sourceHashes = Map.fromFoldable (map (\i -> Tuple i.name i.sourceHash) srcInfos)
   -- Each module's `externs.cbor` carries the top-level type info CoreFn erased (front B); a module
   -- without readable/decodable externs is simply skipped — its constructors fall back to boxed. A
   -- registry module's externs come from the user output (interface-compatible with the shadow, per
@@ -163,7 +170,7 @@ buildCmd cliRoot binaryenBinDir args = do
   externs <- map Array.catMaybes $ for modNames \name ->
     if Set.member name allModNames then readExterns =<< joinPath [ args.input, name, "externs.cbor" ]
     else readExterns =<< joinPath [ libPath, name, "externs.cbor" ]
-  allSigs <- buildForeignSigs args.input libPath externs modules
+  allSigs <- buildForeignSigs args.input libPath externs (map (\i -> { name: i.mn, foreignNames: i.foreignNames }) srcInfos)
   -- `-E/--executable`: produce a runnable that auto-runs the entry's `main`. v0.1 supports this for
   -- node/browser only (the JS loader calls `main` on load); `main` must be `main :: Effect Unit` (a
   -- nullary `Effect`). Validate up front so the build fails before the expensive compile/merge.
@@ -183,51 +190,90 @@ buildCmd cliRoot binaryenBinDir args = do
   -- directory would be misleading.
   let bundleDir = args.outDir
   mkdirP bundleDir
-  -- `--dump-mir <Module>`: dump that module's MIR at the optimizer's snapshot points (specialized
-  -- input, per-module optimized, post-inline specialization) to `<output>/<Module>.mir.txt`
-  -- (debugging the optimizer; supersedes the old dump-mir/dump-opt scripts, which only saw the
-  -- fixtures you hand-linked — this sees the real reachable closure).
-  case args.dumpMir of
-    Nothing -> pure unit
-    Just target -> do
-      mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
-      writeText mirPath (mirTrace opts modules allSigs target)
-      info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
+  -- `--cache` (ADR 0034): reuse unchanged modules from `<output>/_build`, decoding only the modules
+  -- the cache cannot reuse. Enabled only when optimizing MIR and not dumping the MIR trace (which
+  -- needs every module decoded). Disabled → decode every module, exactly as before.
+  let useCache = args.cache && opts.optimizeMir && isNothing args.dumpMir
+  cacheDir <- joinPath [ args.outDir, "_build" ]
+  -- The qualified CoreFn-declared foreign names for lowering's opaque-import fallback (ADR 0016),
+  -- from the cheap extraction — available for every module without decoding.
+  let foreignNames = Set.fromFoldable (srcInfos >>= \i -> map (\base -> i.name <> "." <> base) i.foreignNames)
   -- The generated module imports the shared runtime (`$rt.*`, ADR 0010). Compile it, then merge
   -- `runtime.wasm` + foreign providers with `wasm-merge` into one self-contained wasm.
   appPath <- joinPath [ bundleDir, "app.wasm" ]
   wasmPath <- joinPath [ bundleDir, "index.wasm" ]
-  -- `--cache` (ADR 0032 phase 4): reuse unchanged modules' optimized MIR from `<output>/_build`.
-  -- A module hits iff its source hash and consumed dependency-summary hashes are unchanged; a
-  -- corrupt or stale `.pmo` simply fails to decode and is treated as a miss. Off → an empty
-  -- `CacheInput`, so every module is recomputed exactly as before (byte-identical).
-  cacheDir <- joinPath [ args.outDir, "_build" ]
-  loaded <-
-    if args.cache then map (Map.fromFoldable <<< Array.catMaybes) $ for modules \m -> do
-      let name = joinWith "." m.name
-      pmiPath <- joinPath [ cacheDir, name <> ".pmi" ]
-      pmoPath <- joinPath [ cacheDir, name <> ".pmo" ]
-      mPmi <- readBinary pmiPath
-      mPmo <- readBinary pmoPath
-      -- Both halves must be present and parse, else the module is a miss (ADR 0034).
-      pure do
-        pmi <- hush <<< decodePmi =<< mPmi
-        finalMod <- hush <<< decodePmo =<< mPmo
-        pure (Tuple name { key: pmi.key, finalMod, summary: pmi.summary })
-    else pure Map.empty
-  let cacheInput = if args.cache then { sourceHashes, loaded } else { sourceHashes: Map.empty, loaded: Map.empty }
-  info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length modules })
-  liftEffect (linkModule opts roots modules externs allSigs cacheInput) >>= case _ of
+  info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
+  linkResult <-
+    if useCache then do
+      -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load.
+      cachedMap <- map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i -> do
+        pmiPath <- joinPath [ cacheDir, i.name <> ".pmi" ]
+        pmoPath <- joinPath [ cacheDir, i.name <> ".pmo" ]
+        mPmi <- readBinary pmiPath
+        mPmo <- readBinary pmoPath
+        pure do
+          pmi <- hush <<< decodePmi =<< mPmi
+          finalMod <- hush <<< decodePmo =<< mPmo
+          pure (Tuple i.name { sourceHash: pmi.sourceHash, key: pmi.key, deps: pmi.deps, summary: pmi.summary, finalMod })
+      -- Coarse decode-skip pre-pass (ADR 0034): a module need not be decoded at all iff its source
+      -- AND every transitive dependency's source are unchanged (a guaranteed cache hit). The precise
+      -- per-module key inside the optimizer still decides reuse for the modules that are decoded.
+      let
+        ownUnchanged name = case Map.lookup name cachedMap of
+          Just c -> Map.lookup name sourceHashes == Just c.sourceHash
+          Nothing -> false
+        cachedDeps name = maybe [] _.deps (Map.lookup name cachedMap)
+        shrink s =
+          let
+            s' = Set.filter (\n -> Array.all (\d -> Set.member d s) (cachedDeps n)) s
+          in
+            if Set.size s' == Set.size s then s else shrink s'
+        skippable = shrink (Set.filter ownUnchanged (Set.fromFoldable (map _.name srcInfos)))
+      -- Decode (and version-check) only the modules that are not guaranteed hits.
+      decoded <- map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i ->
+        if Set.member i.name skippable then pure Nothing
+        else case parseModule i.src of
+          Left err -> logAndThrow (i.name <> ": " <> err)
+          Right m -> pure (Just (Tuple i.name m))
+      let decodedModules = Array.fromFoldable (Map.values decoded)
+      either logAndThrow pure (checkWasmBaseCompat decodedModules)
+      either logAndThrow pure (checkCorefnVersions decodedModules)
+      let
+        inputs = srcInfos <#> \i ->
+          { name: i.name
+          , imports: i.imports
+          , sourceHash: i.sourceHash
+          , cached: Map.lookup i.name cachedMap <#> \c -> { key: c.key, deps: c.deps, summary: c.summary, finalMod: c.finalMod }
+          , lift: case Map.lookup i.name decoded of
+              Just m -> \_ -> liftModule m
+              Nothing -> \_ -> unsafeCrashWith ("internal: cache hit forced lift for " <> i.name)
+          }
+      liftEffect (linkModuleIncremental opts roots inputs foreignNames externs allSigs)
+    else do
+      -- Cold / `--no-opt` / `--dump-mir`: decode every module (no decode-free reuse).
+      decodedModules <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
+        Left err -> logAndThrow (i.name <> ": " <> err)
+        Right m -> pure (Just m)
+      either logAndThrow pure (checkWasmBaseCompat decodedModules)
+      either logAndThrow pure (checkCorefnVersions decodedModules)
+      case args.dumpMir of
+        Nothing -> pure unit
+        Just target -> do
+          mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
+          writeText mirPath (mirTrace opts decodedModules allSigs target)
+          info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
+      liftEffect (linkModule opts roots decodedModules externs allSigs noCache)
+  case linkResult of
     Left err -> logAndThrow err
     Right built -> do
-      -- Persist cache misses (ADR 0032 phase 4) before the merge, so a later failure still leaves
-      -- a usable cache. Each entry's filename is its dotted module name (`Data.Maybe.pmo`).
-      when args.cache do
+      -- Persist cache misses (ADR 0034) before the merge, so a later failure still leaves a usable
+      -- cache. `cacheWrites` is empty unless this was a `--cache` build.
+      when (not (Array.null built.cacheWrites)) do
         mkdirP cacheDir
         for_ built.cacheWrites \w -> do
           pmiPath <- joinPath [ cacheDir, w.name <> ".pmi" ]
           pmoPath <- joinPath [ cacheDir, w.name <> ".pmo" ]
-          writeBinary pmiPath (encodePmi { key: w.entry.key, deps: w.deps, summary: w.entry.summary })
+          writeBinary pmiPath (encodePmi { sourceHash: w.sourceHash, key: w.entry.key, deps: w.deps, summary: w.entry.summary })
           writeBinary pmoPath (encodePmo w.entry.finalMod)
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader. `foreignModules` is

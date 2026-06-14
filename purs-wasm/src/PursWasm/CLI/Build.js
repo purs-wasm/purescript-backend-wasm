@@ -10,5 +10,17 @@ export const corefnImportsImpl = (json) => {
   }
 };
 
+// The bare foreign-import names a corefn.json declares (its "foreign" list), via the same cheap
+// transient parse — so the incremental (`--cache`) path can build lowering's qualified foreign set
+// without a full decode of a cache-hit module (ADR 0034).
+export const corefnForeignNamesImpl = (json) => {
+  try {
+    const j = JSON.parse(json);
+    return j.foreign || [];
+  } catch {
+    return [];
+  }
+};
+
 // A monotonic clock in milliseconds, for the build's elapsed-time report.
 export const nowMsImpl = () => performance.now();

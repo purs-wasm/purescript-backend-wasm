@@ -4,6 +4,9 @@
 -- | translating the corefn — to build the dependency graph, decide a hit, and supply a
 -- | dependent's optimization context:
 -- |
+-- |  - `sourceHash` — the module's `corefn.json` digest, for the coarse decode-skip pre-pass
+-- |                   (a module + all its transitive deps source-unchanged ⇒ a guaranteed hit,
+-- |                   so it need not be decoded at all);
 -- |  - `key`     — the cache key (source hash ⊕ consumed dependency-summary hashes);
 -- |  - `deps`    — the precise dependency module names (`declRefs`-level, recorded when the
 -- |                module was optimized), so the graph/key need no re-translation;
@@ -32,9 +35,9 @@ import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Serialize (decode, encode)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Bytes (finish, getBytes, getInt, getString, getU8, newReader, newWriter, putBytes, putInt, putString, putU8)
 
--- | A cache interface entry: validation key, precise dependency module names, and the
--- | pruned summary dependents consume.
-type PmiEntry = { key :: String, deps :: Array String, summary :: M.Module }
+-- | A cache interface entry: source hash, validation key, precise dependency module names, and
+-- | the pruned summary dependents consume.
+type PmiEntry = { sourceHash :: String, key :: String, deps :: Array String, summary :: M.Module }
 
 -- | ASCII "PWPMI".
 magic :: Array Int
@@ -49,6 +52,7 @@ encodePmi entry = unsafePerformEffect do
   w <- newWriter
   traverse_ (putU8 w) magic
   putU8 w formatVersion
+  putString w entry.sourceHash
   putString w entry.key
   putInt w (Array.length entry.deps)
   traverse_ (putString w) entry.deps
@@ -65,12 +69,13 @@ decodePmi bytes = unsafePerformEffect $ map (lmap message) $ try do
   v <- getU8 r
   when (read /= magic) (fail "not a .pmi file (bad magic)")
   when (v /= formatVersion) (fail ("unsupported .pmi version: " <> show v))
+  sourceHash <- getString r
   key <- getString r
   n <- getInt r
   deps <- if n <= 0 then pure [] else traverse (\_ -> getString r) (Array.range 1 n)
   summaryBytes <- getBytes r
   summary <- either fail pure (decode summaryBytes)
-  pure { key, deps, summary }
+  pure { sourceHash, key, deps, summary }
 
 fail :: forall a. String -> Effect a
 fail = throwException <<< error

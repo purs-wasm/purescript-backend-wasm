@@ -18,7 +18,7 @@ summaryMod :: M.Module
 summaryMod = { name: [ "Data", "Demo" ], decls: [ M.NonRec Nothing "go" (M.Var (Qualified Nothing "x")) ] }
 
 entry :: PmiEntry
-entry = { key: "deadbeefcafef00d", deps: [ "Data.Dep.A", "Data.Dep.B" ], summary: summaryMod }
+entry = { sourceHash: "0011223344556677", key: "deadbeefcafef00d", deps: [ "Data.Dep.A", "Data.Dep.B" ], summary: summaryMod }
 
 spec :: Spec Unit
 spec = describe "PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile" do

@@ -6,6 +6,7 @@ module PureScript.Backend.Wasm.Compiler
   , CompiledModule
   , parseModule
   , linkModule
+  , linkModuleIncremental
   , compileModules
   , compileModulesText
   , mirTrace
@@ -30,7 +31,8 @@ import PureScript.Backend.Wasm.Codegen (buildModule)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
-import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
+import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, IncInput, noCache, optimizeIncremental, optimizeProgramCached, optimizeProgramTrace)
+import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn (Module, ModuleName)
 import PureScript.CoreFn.FromJSON (decodeModule)
 import PureScript.ExternsFile (ExternsFile)
@@ -85,17 +87,7 @@ linkModule
   -> CacheInput
   -> Effect (Either String CompiledModule)
 linkModule opts roots modules externs foreignSigs' cache =
-  case lowered of
-    Left err -> pure (Left ("linking failed: " <> show err))
-    Right program -> do
-      built <- buildModule program
-      when opts.optimize (B.optimize built.mod)
-      ok <- B.validate built.mod
-      if not ok then do
-        wat <- B.emitText built.mod
-        B.dispose built.mod
-        pure (Left ("emitted module failed validation:\n" <> wat))
-      else pure (Right { mod: built.mod, foreignModules: built.foreignModules, cafInit: built.cafInit, cacheWrites: optimized.writes })
+  finishLink opts roots foreignSigs' foreignNames externs optimized.modules optimized.writes
   where
   -- Prune to the modules transitively imported by the entry roots BEFORE optimizing — the
   -- input dir holds the whole dependency build (often hundreds of modules), but optimizing
@@ -110,7 +102,51 @@ linkModule opts roots modules externs foreignSigs' cache =
   effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
   effArities = effectfulForeignAritiesFromSigs foreignSigs'
   optimized = optimizeProgramCached opts.optimizeMir effSet effArities cache reachable
-  lowered = lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimized.modules
+
+-- | Like `linkModule`, but **decode-free** for cache hits (ADR 0034): it takes lazy per-module
+-- | inputs (whose `lift` decodes + translates only on a miss) instead of fully-decoded modules,
+-- | and the qualified foreign-name set computed by the caller (which has the corefn but does not
+-- | decode hits). The caller has already pruned to the reachable set. Used for `--cache` builds;
+-- | `linkModule` remains the whole-program (cold / `--no-opt`) path.
+linkModuleIncremental
+  :: CompileOptions
+  -> Array ModuleName
+  -> Array IncInput
+  -> Set String
+  -> Array ExternsFile
+  -> Object ForeignSig
+  -> Effect (Either String CompiledModule)
+linkModuleIncremental opts roots inputs foreignNames externs foreignSigs' =
+  finishLink opts roots foreignSigs' foreignNames externs optimized.modules optimized.writes
+  where
+  effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
+  effArities = effectfulForeignAritiesFromSigs foreignSigs'
+  optimized = optimizeIncremental effSet effArities inputs
+
+-- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
+-- | module, and package it with the cache misses to persist. `foreignNames` is the qualified
+-- | CoreFn-declared foreign set (for lowering's opaque-import fallback, ADR 0016).
+finishLink
+  :: CompileOptions
+  -> Array ModuleName
+  -> Object ForeignSig
+  -> Set String
+  -> Array ExternsFile
+  -> Array M.Module
+  -> Array CacheWrite
+  -> Effect (Either String CompiledModule)
+finishLink opts roots foreignSigs' foreignNames externs optimizedModules cacheWrites =
+  case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right program -> do
+      built <- buildModule program
+      when opts.optimize (B.optimize built.mod)
+      ok <- B.validate built.mod
+      if not ok then do
+        wat <- B.emitText built.mod
+        B.dispose built.mod
+        pure (Left ("emitted module failed validation:\n" <> wat))
+      else pure (Right { mod: built.mod, foreignModules: built.foreignModules, cafInit: built.cafInit, cacheWrites })
 
 -- | The modules transitively reachable from `roots` through CoreFn imports (a fixpoint over
 -- | each kept module's import list). Used to drop unreached dependency modules before the

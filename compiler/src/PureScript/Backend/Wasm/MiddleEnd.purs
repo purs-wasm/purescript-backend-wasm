@@ -16,6 +16,7 @@ module PureScript.Backend.Wasm.MiddleEnd
   , optimizeIncremental
   , optimizeProgramTrace
   , optimizeModule
+  , liftModule
   , CacheInput
   , CacheEntry
   , CacheWrite
@@ -114,6 +115,12 @@ optimizeProgramCached
   -> { modules :: Array M.Module, writes :: Array CacheWrite }
 optimizeProgramCached dictElim eff arities cache modules =
   let r = runOpt dictElim eff arities cache Nothing modules in { modules: r.modules, writes: r.writes }
+
+-- | Translate a CoreFn module to MIR and lambda-lift it — the per-module front the incremental
+-- | driver (`optimizeIncremental`) runs lazily for a cache miss; `runOpt` does it for every module
+-- | up front. Exposed so the CLI can build each `IncInput`'s `lift` thunk.
+liftModule :: Module -> M.Module
+liftModule m = lambdaLiftModule { name: m.name, decls: map translBind m.decls }
 
 -- | One module's input to the **decode-free** incremental optimizer (ADR 0034). `lift` produces
 -- | the translated + lambda-lifted MIR on demand — called only for a cache *miss*, so an unchanged
