@@ -81,7 +81,7 @@ language and are kept out of version control.)
 | 0031 | [ulib as a single library-module layer: last-wins artifact merge, retiring the shadow/wat duality](0031-ulib-unified-library-modules.md) | Accepted |
 | 0032 | [Caller-homed specialization for per-module, incremental builds](0032-caller-homed-specialization-for-incremental-builds.md) | Accepted |
 | 0033 | [Shipping `ulib` as precompiled MIR (`.pmo`) artifacts](0033-precompiled-ulib-pmo-artifacts.md) | Proposed |
-| 0034 | [Split the module cache into `.pmi` interface and `.pmo` object](0034-pmi-interface-pmo-object-split.md) | Proposed |
+| 0034 | [Split the module cache into `.pmi` interface and `.pmo` object](0034-pmi-interface-pmo-object-split.md) | Accepted |
 
 ## Scope
 
@@ -96,7 +96,9 @@ runs on wasm. See [`docs/developers-guide/supported-features.md`](../developers-
 [`docs/developers-guide/optimizations.md`](../developers-guide/optimizations.md) for the authoritative, up-to-date status.
 
 Current frontiers, tracked by the records above: streaming / incremental codegen (ADR 0021
-Phase 2 — reachability pruning and dependency-ordered single-pass optimization have already
-shipped); the reduction-aware inline-or-share selection (ADR 0020 — the NbE core is implemented,
-the reduction-driven decision is not); `wasi` packaging and the browser runtime/app split (ADR 0025
-— `node` / `browser` / `standalone` packaging and `-E` have shipped); and monomorphization.
+Phase 2 — reachability pruning and dependency-ordered single-pass optimization shipped; the
+**`.pmi`/`.pmo` incremental build cache** — default-on, decode-free for unchanged modules —
+shipped too, ADR 0032 phase 4 / ADR 0034); the reduction-aware inline-or-share selection
+(ADR 0020 — the NbE core is implemented, the reduction-driven decision is not); `wasi` packaging
+and the browser runtime/app split (ADR 0025 — `node` / `browser` / `standalone` packaging and `-E`
+have shipped); precompiled-`ulib` distribution (ADR 0033); and monomorphization.

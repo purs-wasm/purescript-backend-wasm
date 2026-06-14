@@ -1,7 +1,15 @@
 # 0033. Shipping `ulib` as precompiled MIR (`.pmo`) artifacts
 
-- Status: Proposed _(sequenced after [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) phase 4 — it builds on the `.pmo` codec and cache layer)_
+- Status: Proposed _(sequenced after [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) phase 4 — it builds on the cache codec and layer)_
 - Date: 2026-06-15
+
+> **Note (2026-06-15):** Phase 4 shipped as a **`.pmi` interface + `.pmo` object** pair
+> ([ADR 0034](0034-pmi-interface-pmo-object-split.md)), not the single `.pmo` this record assumes.
+> When this is implemented, shipped `ulib` artifacts use that same pair (the `.pmi` carrying the
+> version-stamp key in place of a source hash); read "`.pmo`" below as "the `.pmi`/`.pmo` pair".
+> The local incremental cache (ADR 0034) already reuses unchanged `ulib` modules on a warm build;
+> what this record still adds is precompiled distribution so the **first / cold** build skips
+> `ulib` too.
 
 ## Context
 

@@ -10,6 +10,7 @@ module PureScript.Backend.Wasm.Compiler
   , compileModules
   , compileModulesText
   , mirTrace
+  , printMir
   ) where
 
 import Prelude
@@ -33,6 +34,7 @@ import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
 import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, IncInput, noCache, optimizeIncremental, optimizeProgramCached, optimizeProgramTrace)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.CoreFn (Module, ModuleName)
 import PureScript.CoreFn.FromJSON (decodeModule)
 import PureScript.ExternsFile (ExternsFile)
@@ -202,3 +204,9 @@ mirTrace opts modules foreignSigs' target =
   where
   effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
   effArities = effectfulForeignAritiesFromSigs foreignSigs'
+
+-- | Pretty-print a module's optimized MIR (the form held in a `.pmo`), for the `--dump-mir`
+-- | companion on a cached build: the cache has only the *final* optimized module (not the
+-- | per-stage trace `mirTrace` produces), so this dumps that, decoded from the `.pmo`.
+printMir :: M.Module -> String
+printMir = printModule

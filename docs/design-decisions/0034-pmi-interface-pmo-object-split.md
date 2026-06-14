@@ -1,7 +1,38 @@
 # 0034. Split the module cache into `.pmi` interface and `.pmo` object
 
-- Status: Proposed _(refines [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) phase 4: the single-file `.pmo` cache landed there; this splits it so warm builds skip decode/translate, not just optimize)_
+- Status: ~~Proposed~~ **Accepted** _(2026-06-15: implemented — `.pmi`/`.pmo` split, `optimizeIncremental`, and the `--cache` decode-free CLI path. Refines [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) phase 4: the single-file `.pmo` cache landed there; this splits it so warm builds skip decode/translate, not just optimize.)_
 - Date: 2026-06-15
+
+> **Update (2026-06-15): shipped.** The incremental cache is **on by default** (`-f`/`--force`
+> ignores the existing cache and rebuilds from scratch, refreshing it). A build reads each module's
+> source/hash/imports/foreign-names cheaply, loads `.pmi` + `.pmo`, and via a **coarse transitive
+> source-unchanged pre-pass** decodes *only* the modules the cache cannot reuse; the rest flow
+> through `MiddleEnd.optimizeIncremental` (lazy per-module `lift`, forced only on a miss). A cache
+> hit therefore skips decode / translate / lambda-lift / optimize entirely. `--dump-mir` does not
+> disable the cache — on a cached build the target's optimized MIR is pretty-printed straight from
+> its `.pmo`; `--no-opt` (no optimized MIR to cache) takes the whole-program path.
+>
+> **Acceptance criteria, refined.** The original bar was byte-identical output. We **dropped strict
+> byte-identity** (there is no basis for treating the current bytes as the most-correct ones) in
+> favour of two guarantees that actually matter: **build determinism** (an input that should build
+> always builds, producing a correct program) and **no benchmark regression**. In practice, on
+> `metatheory` a fully-warm build was still byte-identical to cold and to a non-cached build, so the
+> approximations (per-module-local `summaryInlineKeys` over the available view; coarse decode-skip)
+> did not perturb output there. Gates met: unit + e2e green, and no regression across the
+> 10-benchmark baseline (including the fragile `countEffect` / `curry` / `mapFoldArray`).
+>
+> **Result (`metatheory`, 133 modules).** Warm ≈ 6.2 s vs ≈ 8 s non-cached (~1.8 s, the corefn
+> decode, skipped). This is short of purs-backend-es class (~2.7 s) by construction: the
+> whole-program back half runs every build — `.pmo` finalized-MIR load (~0.9 s, 11.8 MB), Binaryen
+> `-O` (~1.4 s) and `wasm-merge` (~0.5 s) (single wasm, [ADR 0009](0009-build-and-linking-model.md)) —
+> and purs-backend-es emits JS with none of that.
+>
+> **Deferred, with measurements.** (a) Loading `.pmi` summaries lazily (skipping them on a full-warm
+> build) saves only ~150 ms — the summary set is small (1.46 MB / 149 ms) while the finalized MIR
+> (`.pmo`, 11.8 MB / 882 ms) is required for codegen regardless — so it was not worth the lazy-body
+> machinery. (b) A larger, *cache-independent* lever remains: the import-closure pass `JSON.parse`s
+> every `corefn.json` in the input dir (804 files, ~500 ms) on **every** build; a scoped
+> imports-only extractor would reclaim most of that for cold and warm alike. Tracked separately.
 
 ## Context
 

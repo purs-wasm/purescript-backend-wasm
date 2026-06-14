@@ -14,6 +14,16 @@
 > `metatheory`); correctness-neutral, and the global use-count it approximates is a knob a future
 > reduction-aware inliner removes (ADR 0020). This is recorded in [ADR 0021](0021-streaming-dependency-ordered-wpo.md) too.
 
+> **Update (2026-06-15): phase 4 shipped, refined by [ADR 0034](0034-pmi-interface-pmo-object-split.md).**
+> The summary-hash cache (phase 4) is implemented and on by default (`-f`/`--force` to bypass). The
+> single-file `.pmo` sketched here was split into a `.pmi` interface (key + precise deps + summary)
+> and a `.pmo` object (finalized MIR) so a warm build skips **decode/translate**, not just optimize:
+> the cache key + dependency graph are read from `.pmi` (and the corefn import list) without decoding
+> a hit. The acceptance bar was relaxed from byte-identity to **build determinism + no benchmark
+> regression** (no basis for treating today's bytes as canonical), though `metatheory` happened to
+> stay byte-identical cold==warm==non-cached. See [ADR 0034](0034-pmi-interface-pmo-object-split.md)
+> for the result (~1.8 s decode saved on a `metatheory` warm build) and the deferred levers.
+
 ## Context
 
 The driver consumes a directory of `corefn.json` (one per PureScript module, emitted by

@@ -152,8 +152,13 @@ details.
 - `-t | --text` — emit the WebAssembly text format (`.wat`) instead of a binary `.wasm`.
 - `-g | --debug` — debug build: skip the Binaryen optimizer (keeps the wasm close to the
   emitted IR).
+- `-f | --force` — ignore the incremental build cache and rebuild every module from scratch
+  (refreshing it). Builds are **incremental by default**: unchanged modules are reused from the
+  per-module cache under `<output>/_build` (`.pmi` / `.pmo`), so a rebuild skips re-decoding and
+  re-optimizing them. Use `--force` if you suspect a stale cache.
 - `--no-opt` — skip the middle-end optimization (dictionary elimination); lambda lifting
-  still runs. Useful for an unoptimized benchmark baseline.
+  still runs. Useful for an unoptimized benchmark baseline. (Disables the incremental cache,
+  since there is no optimized MIR to reuse.)
 - `--no-js-fallback` — fail the build instead of falling back to a `foreign.js` for a
   foreign import that has no `foreign.wat` provider.
 - `--no-chunks` — emit a single wasm instead of code-split chunks (browser only). Chunking is
