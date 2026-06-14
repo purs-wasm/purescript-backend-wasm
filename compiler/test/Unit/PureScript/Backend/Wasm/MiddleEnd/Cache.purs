@@ -15,11 +15,10 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set as Set
-import Data.Tuple (Tuple(..), fst)
+import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.MiddleEnd (CacheInput, optimizeProgramCached)
+import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, optimizeProgramCached)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (PmoEntry)
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
@@ -58,16 +57,16 @@ program = [ depMod, mainMod ]
 sourceHashes :: Map String String
 sourceHashes = Map.fromFoldable [ Tuple "Dep" "hDep", Tuple "Main" "hMain" ]
 
-run :: CacheInput -> { modules :: Array M.Module, writes :: Array (Tuple String PmoEntry) }
+run :: CacheInput -> { modules :: Array M.Module, writes :: Array CacheWrite }
 run cache = optimizeProgramCached true Set.empty Map.empty cache program
 
 spec :: Spec Unit
 spec = describe "PureScript.Backend.Wasm.MiddleEnd (incremental cache)" do
   let cold = run { sourceHashes, loaded: Map.empty }
-  let loaded = Map.fromFoldable cold.writes
+  let loaded = Map.fromFoldable (map (\w -> Tuple w.name w.entry) cold.writes)
 
   it "writes one cache entry per cacheable module on a cold build" do
-    map fst cold.writes `shouldEqual` [ "Dep", "Main" ]
+    map _.name cold.writes `shouldEqual` [ "Dep", "Main" ]
 
   it "reproduces identical finalized MIR from a fully warm cache" do
     let warm = run { sourceHashes, loaded }
@@ -80,5 +79,5 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd (incremental cache)" do
   it "re-optimizes only the module whose source changed (dependency still hits)" do
     let changed = Map.insert "Main" "hMain-v2" sourceHashes
     let warm = run { sourceHashes: changed, loaded }
-    map fst warm.writes `shouldEqual` [ "Main" ]
+    map _.name warm.writes `shouldEqual` [ "Main" ]
     warm.modules `shouldEqual` cold.modules

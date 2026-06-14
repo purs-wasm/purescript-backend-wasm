@@ -24,15 +24,13 @@ import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.Traversable (traverse)
-import Data.Tuple (Tuple)
 import Effect (Effect)
 import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
-import PureScript.Backend.Wasm.MiddleEnd (CacheInput, noCache, optimizeProgramCached, optimizeProgramTrace)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (PmoEntry)
+import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
 import PureScript.CoreFn (Module, ModuleName)
 import PureScript.CoreFn.FromJSON (decodeModule)
 import PureScript.ExternsFile (ExternsFile)
@@ -62,10 +60,10 @@ type CompiledModule =
   { mod :: B.Module
   , foreignModules :: Array String
   , cafInit :: Maybe B.Function
-  -- The incremental-cache misses produced by this link (ADR 0032 phase 4), each paired
-  -- with its dotted module name, for the caller to persist as `.pmo`. Empty unless a
-  -- `CacheInput` with module source hashes was supplied; the caller owns the filesystem.
-  , cacheWrites :: Array (Tuple String PmoEntry)
+  -- The incremental-cache misses produced by this link (ADR 0032 phase 4 / ADR 0034), for
+  -- the caller to persist as `.pmi` + `.pmo` pairs. Empty unless a `CacheInput` with module
+  -- source hashes was supplied; the caller owns the filesystem.
+  , cacheWrites :: Array CacheWrite
   }
 
 -- | Link the given modules into one validated Binaryen module and return the **live**

@@ -10,7 +10,7 @@ import Prelude
 
 import Binaryen as B
 import Data.Array as Array
-import Data.Either (Either(..), either)
+import Data.Either (Either(..), either, hush)
 import Data.Foldable (for_)
 import Data.Int (toNumber)
 import Data.Map as Map
@@ -27,6 +27,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Compiler (linkModule, mirTrace, parseModule)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
 import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
@@ -204,10 +205,15 @@ buildCmd cliRoot binaryenBinDir args = do
   loaded <-
     if args.cache then map (Map.fromFoldable <<< Array.catMaybes) $ for modules \m -> do
       let name = joinWith "." m.name
-      p <- joinPath [ cacheDir, name <> ".pmo" ]
-      readBinary p <#> \mb -> mb >>= \bytes -> case decodePmo bytes of
-        Right entry -> Just (Tuple name entry)
-        Left _ -> Nothing
+      pmiPath <- joinPath [ cacheDir, name <> ".pmi" ]
+      pmoPath <- joinPath [ cacheDir, name <> ".pmo" ]
+      mPmi <- readBinary pmiPath
+      mPmo <- readBinary pmoPath
+      -- Both halves must be present and parse, else the module is a miss (ADR 0034).
+      pure do
+        pmi <- hush <<< decodePmi =<< mPmi
+        finalMod <- hush <<< decodePmo =<< mPmo
+        pure (Tuple name { key: pmi.key, finalMod, summary: pmi.summary })
     else pure Map.empty
   let cacheInput = if args.cache then { sourceHashes, loaded } else { sourceHashes: Map.empty, loaded: Map.empty }
   info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length modules })
@@ -218,9 +224,11 @@ buildCmd cliRoot binaryenBinDir args = do
       -- a usable cache. Each entry's filename is its dotted module name (`Data.Maybe.pmo`).
       when args.cache do
         mkdirP cacheDir
-        for_ built.cacheWrites \(Tuple name entry) -> do
-          p <- joinPath [ cacheDir, name <> ".pmo" ]
-          writeBinary p (encodePmo entry)
+        for_ built.cacheWrites \w -> do
+          pmiPath <- joinPath [ cacheDir, w.name <> ".pmi" ]
+          pmoPath <- joinPath [ cacheDir, w.name <> ".pmo" ]
+          writeBinary pmiPath (encodePmi { key: w.entry.key, deps: w.deps, summary: w.entry.summary })
+          writeBinary pmoPath (encodePmo w.entry.finalMod)
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader. `foreignModules` is
       -- the precise set the codegen emitted imports for (no byte re-parse).

@@ -16,6 +16,8 @@ module PureScript.Backend.Wasm.MiddleEnd
   , optimizeProgramTrace
   , optimizeModule
   , CacheInput
+  , CacheEntry
+  , CacheWrite
   , noCache
   ) where
 
@@ -41,7 +43,6 @@ import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeModule, 
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize (encode)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (cacheKey, hashBytes)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (PmoEntry)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
 
@@ -80,7 +81,17 @@ optimizeProgram dictElim eff arities modules = (runOpt dictElim eff arities noCa
 -- | entry, and that entry's key equals the freshly computed cache key (source hash ⊕ the
 -- | hashes of the dependency summaries it consumed). The filesystem is the caller's
 -- | concern — this layer is pure: it consumes loaded entries and reports which to persist.
-type CacheInput = { sourceHashes :: Map String String, loaded :: Map String PmoEntry }
+type CacheInput = { sourceHashes :: Map String String, loaded :: Map String CacheEntry }
+
+-- | A cached module, in memory: the validation key, the finalized MIR (for codegen), and
+-- | the pruned summary (for dependents' optimization context). On disk these are split into
+-- | `.pmi` (key + deps + summary) and `.pmo` (finalized MIR) — ADR 0034 — but the optimizer
+-- | works with the combined record; the file split is the caller's (CLI's) concern.
+type CacheEntry = { key :: String, finalMod :: M.Module, summary :: M.Module }
+
+-- | A cache miss to persist: the module's dotted name, its precise dependency names (for the
+-- | `.pmi`), and the entry itself.
+type CacheWrite = { name :: String, deps :: Array String, entry :: CacheEntry }
 
 noCache :: CacheInput
 noCache = { sourceHashes: Map.empty, loaded: Map.empty }
@@ -96,7 +107,7 @@ optimizeProgramCached
   -> Map String Int
   -> CacheInput
   -> Array Module
-  -> { modules :: Array M.Module, writes :: Array (Tuple String PmoEntry) }
+  -> { modules :: Array M.Module, writes :: Array CacheWrite }
 optimizeProgramCached dictElim eff arities cache modules =
   let r = runOpt dictElim eff arities cache Nothing modules in { modules: r.modules, writes: r.writes }
 
@@ -109,7 +120,7 @@ optimizeProgramTrace dictElim eff arities target modules = (runOpt dictElim eff 
 
 -- | The whole-program optimizer core. `traceTarget` (a dotted module name) enables the MIR
 -- | trace; when `Nothing` the trace stays empty and costs nothing.
-runOpt :: Boolean -> Set String -> Map String Int -> CacheInput -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String, writes :: Array (Tuple String PmoEntry) }
+runOpt :: Boolean -> Set String -> Map String Int -> CacheInput -> Maybe String -> Array Module -> { modules :: Array M.Module, trace :: Array String, writes :: Array CacheWrite }
 runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
   if dictElim then { modules: result.finalized, trace: result.trace <> snap "after post-inline specialization" result.finalized, writes: result.writes }
   else { modules: lifted, trace: snap "initial (translated + lifted)" lifted, writes: [] }
@@ -124,11 +135,13 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
   keyModL :: Map String String
   keyModL = Map.fromFoldable (lifted >>= \m -> map (\k -> Tuple k (modName m)) (declKeys m))
 
-  cacheKeyFor :: String -> M.Module -> Map String String -> Maybe String
-  cacheKeyFor name m summaryHashes = do
+  -- A module's cache key and the precise dependency names it was keyed against (recorded in
+  -- the `.pmi`, ADR 0034). `Nothing` when the module has no source hash, i.e. is uncacheable.
+  keyAndDeps :: String -> M.Module -> Map String String -> Maybe { key :: String, deps :: Array String }
+  keyAndDeps name m summaryHashes = do
     src <- Map.lookup name cache.sourceHashes
     let deps = Array.filter (_ /= name) (Array.nub (Array.mapMaybe (\k -> Map.lookup k keyModL) (declRefs m)))
-    pure (cacheKey src (Array.mapMaybe (\d -> Map.lookup d summaryHashes) deps))
+    pure { key: cacheKey src (Array.mapMaybe (\d -> Map.lookup d summaryHashes) deps), deps }
   -- Higher-order specialization is now per module, inside the loop (`step`), against the
   -- dependency summaries (ADR 0032 caller-homed): the pre-loop whole-program pass is gone.
   -- `topoOrder` is over `lifted` — it counts only non-`$spec` references (a spec imposes no
@@ -234,9 +247,9 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
   -- cacheable) records the entry to persist. With no source hash the `Just` guard fails, so
   -- `noCache` takes the miss path for every module — byte-identical to the non-cached build.
   step acc m =
-    case cacheKeyFor (modName m) m acc.summaryHashes of
-      Just k | Just entry <- Map.lookup (modName m) cache.loaded, entry.key == k -> hitStep acc m entry
-      mKey -> missStep acc m mKey
+    case keyAndDeps (modName m) m acc.summaryHashes of
+      Just kd | Just entry <- Map.lookup (modName m) cache.loaded, entry.key == kd.key -> hitStep acc m entry
+      mkd -> missStep acc m mkd
 
   hitStep acc m entry =
     let
@@ -256,7 +269,7 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
       , writes: acc.writes
       }
 
-  missStep acc m mKey =
+  missStep acc m mkd =
     let
       speced = specializeModule acc.summaries m
       r = localOpt acc.accCtx acc.impure acc.memEff speced
@@ -278,8 +291,8 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
       -- Persist a cacheable miss (one with a source hash, hence a key). The summary hash a
       -- dependent will key against is the same digest whether this module hit or missed.
       , summaryHashes: Map.insert (modName m) (hashBytes (encode summary)) acc.summaryHashes
-      , writes: case mKey of
-          Just k -> Array.snoc acc.writes (Tuple (modName m) { key: k, finalMod, summary })
+      , writes: case mkd of
+          Just kd -> Array.snoc acc.writes { name: modName m, deps: kd.deps, entry: { key: kd.key, finalMod, summary } }
           Nothing -> acc.writes
       }
 
