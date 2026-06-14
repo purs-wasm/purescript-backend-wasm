@@ -69,6 +69,15 @@ export const putString = (w) => (s) => () => {
   w.len += bytes.length;
 };
 
+// A length-prefixed raw byte blob — lets a container (the `.pmo` file) embed an
+// already-encoded sub-document (a module body) and split it back out on read.
+export const putBytes = (w) => (u8) => () => {
+  putVarU(w, u8.length);
+  ensure(w, u8.length);
+  w.buf.set(u8, w.len);
+  w.len += u8.length;
+};
+
 export const finish = (w) => () => w.buf.slice(0, w.len);
 
 export const newReader = (u8) => () => ({ buf: u8, pos: 0 });
@@ -92,6 +101,14 @@ export const getString = (r) => () => {
   const slice = r.buf.subarray(r.pos, r.pos + len);
   r.pos += len;
   return textDecoder.decode(slice);
+};
+
+export const getBytes = (r) => () => {
+  const len = getVarU(r);
+  // Copy out, so the returned blob is independent of the reader's backing buffer.
+  const slice = r.buf.slice(r.pos, r.pos + len);
+  r.pos += len;
+  return slice;
 };
 
 export const atEnd = (r) => () => r.pos >= r.buf.length;

@@ -17,12 +17,14 @@ module PureScript.Backend.Wasm.MiddleEnd.Serialize.Bytes
   , putInt
   , putNumber
   , putString
+  , putBytes
   , finish
   , newReader
   , getU8
   , getInt
   , getNumber
   , getString
+  , getBytes
   , atEnd
   ) where
 
@@ -39,6 +41,7 @@ foreign import putU8 :: Writer -> Int -> Effect Unit
 foreign import putInt :: Writer -> Int -> Effect Unit
 foreign import putNumber :: Writer -> Number -> Effect Unit
 foreign import putString :: Writer -> String -> Effect Unit
+foreign import putBytes :: Writer -> Uint8Array -> Effect Unit
 foreign import finish :: Writer -> Effect Uint8Array
 
 foreign import newReader :: Uint8Array -> Effect Reader
@@ -46,4 +49,5 @@ foreign import getU8 :: Reader -> Effect Int
 foreign import getInt :: Reader -> Effect Int
 foreign import getNumber :: Reader -> Effect Number
 foreign import getString :: Reader -> Effect String
+foreign import getBytes :: Reader -> Effect Uint8Array
 foreign import atEnd :: Reader -> Effect Boolean
