@@ -178,68 +178,6 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
     { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, trace: [], summaryHashes: Map.empty, writes: [] }
     ordered
 
-  -- The inline / constructor / instance-field contributions of one finalized dependency summary,
-  -- computed in O(|m|): the dictionary machinery + general inline candidates of *that summary alone*
-  -- (`DictElim.buildCtx [m]` ∪ `Inline.inlineCandidates [m]`), unioned into the running `accCtx`.
-  -- This replaces rebuilding the context over every accumulated summary each step (the O(N²) cost).
-  -- Candidacy is thus per-summary-local rather than over the whole accumulated set, so the inline
-  -- decision is an approximation of the old per-step whole-program recompute — acceptable here (it
-  -- only changes *which* small/single-use bodies inline, never correctness; the global use-count is a
-  -- knob a future reduction-aware inliner removes, ADR 0020). Guarded by e2e/unit + bench checksums.
-  moduleContribs :: M.Module -> AccumCtx
-  moduleContribs m =
-    let
-      bc = DictElim.buildCtx [ m ]
-    in
-      { inline: Map.union bc.inline (Inline.inlineCandidates [ m ])
-      , newtypeCtors: Set.union bc.newtypeCtors (Inline.newtypeCtorNames [ m ])
-      , dataCtors: bc.dataCtors
-      , instanceFields: bc.instanceFields
-      }
-
-  mergeAccum :: AccumCtx -> AccumCtx -> AccumCtx
-  mergeAccum a b =
-    { inline: Map.union a.inline b.inline
-    , newtypeCtors: Set.union a.newtypeCtors b.newtypeCtors
-    , dataCtors: Set.union a.dataCtors b.dataCtors
-    , instanceFields: Map.union a.instanceFields b.instanceFields
-    }
-
-  -- The full simplifier `Ctx` for optimizing `m`: the accumulated dependency context (`accCtx`,
-  -- whose inline set is the global `summaryInlineKeys` candidates of finalized deps) merged with
-  -- `m`'s *own* context built over `[m]` alone. The own-context uses `buildContext [m]` rather than
-  -- the `summaryInlineKeys` slice so it also picks up `m`'s **local** candidates — chiefly its
-  -- caller-homed `$specN` bindings (single-use within `m`, not present in the lifted-program
-  -- `summaryInlineKeys`) — which must inline intra-module or they would survive as extra functions.
-  -- Purity is computed incrementally (fixpoint over just `m`, seeded by the dependencies' purity).
-  ctxFromAccum :: AccumCtx -> Set String -> Set String -> M.Module -> Ctx
-  ctxFromAccum accCtx seedImpure seedMemEff m =
-    let
-      own = buildContext effectfulForeigns Set.empty Set.empty [ m ]
-    in
-      { newtypeCtors: Set.union accCtx.newtypeCtors own.newtypeCtors
-      , dataCtors: Set.union accCtx.dataCtors own.dataCtors
-      , inline: Map.union accCtx.inline own.inline
-      , instanceFields: Map.union accCtx.instanceFields own.instanceFields
-      , effectfulForeigns: effectfulForeigns
-      , impureBindings: Purity.impureKeys effectfulForeigns seedImpure [ m ]
-      , memEffBindings: Purity.memEffKeys seedMemEff [ m ]
-      }
-
-  -- Post-inline specialization (ADR 0027), per module (ADR 0032). `localOpt` inlines the
-  -- `where`-worker forwarder so the literal lambda lands at the worker's call site, where a second
-  -- specialization fuses it. The worker may be a *library* `$liftN` in a dependency, but the summary
-  -- retains its body (`specializationCalleeKeys`) and the spec is caller-homed in `m`, so the
-  -- cross-module case is caught without a whole-program pass. A β/reduce-only simplify (empty inline
-  -- set) then collapses the residual redexes; purity is recomputed incrementally so a new effectful
-  -- spec's discarded effect is not dropped.
-  finalizeModule accCtx deps seedImpure seedMemEff m =
-    let
-      respec = specializeModule deps m
-      ctx = ctxFromAccum accCtx seedImpure seedMemEff respec
-    in
-      DictElim.simplifyModule (ctx { inline = Map.empty }) respec
-
   -- A module is a cache hit iff it has a source hash, a loaded `.pmo`, and that entry's
   -- key equals the freshly computed one (source hash ⊕ consumed dependency-summary hashes,
   -- ADR 0032 phase 4). A hit reuses the finalized + summary MIR and skips the expensive
@@ -272,8 +210,8 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
   missStep acc m mkd =
     let
       speced = specializeModule acc.summaries m
-      r = localOpt acc.accCtx acc.impure acc.memEff speced
-      finalMod = finalizeModule acc.accCtx acc.summaries r.impure r.memEff r.mod
+      r = localOpt effectfulForeigns effArities acc.accCtx acc.impure acc.memEff speced
+      finalMod = finalizeModule effectfulForeigns acc.accCtx acc.summaries r.impure r.memEff r.mod
       summary = DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod
     in
       { finalized: Array.snoc acc.finalized finalMod
@@ -296,29 +234,6 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
           Nothing -> acc.writes
       }
 
-  -- One module, optimized once against its finalized dependencies (the accumulated `accCtx`, ADR
-  -- 0021 b1) plus itself: simplify (inline + reduce) → impurify (Effect glue → thunks) → simplify
-  -- again (empty inline set, to collapse the impurify thunks without re-inlining).
-  localOpt
-    :: AccumCtx
-    -> Set String
-    -> Set String
-    -> M.Module
-    -> { mod :: M.Module, impure :: Set String, memEff :: Set String }
-  localOpt accCtx seedImpure seedMemEff m =
-    let
-      ctx = ctxFromAccum accCtx seedImpure seedMemEff m
-      simplified = DictElim.simplifyModule ctx m
-      impured = fromMaybe simplified (Array.head (impurifyProgram effArities [ simplified ]))
-    in
-      { mod: DictElim.simplifyModule (ctx { inline = Map.empty }) impured
-      , impure: ctx.impureBindings
-      , memEff: ctx.memEffBindings
-      }
-
-  emptyAccum :: AccumCtx
-  emptyAccum = { inline: Map.empty, newtypeCtors: Set.empty, dataCtors: Set.empty, instanceFields: Map.empty }
-
 -- | Build the simplifier context (dictionary elimination + general inlining + purity)
 -- | from a set of modules — the finalized dependencies plus the module being optimized.
 -- | `seedImpure` / `seedMemEff` are the purity sets already established by finalized dependencies
@@ -337,6 +252,88 @@ buildContext eff seedImpure seedMemEff prog =
       , impureBindings = Purity.impureKeys eff seedImpure prog
       , memEffBindings = Purity.memEffKeys seedMemEff prog
       }
+
+emptyAccum :: AccumCtx
+emptyAccum = { inline: Map.empty, newtypeCtors: Set.empty, dataCtors: Set.empty, instanceFields: Map.empty }
+
+-- | The inline / constructor / instance-field contributions of one finalized dependency
+-- | summary, computed in O(|m|) over *that summary alone* (`DictElim.buildCtx [m]` ∪
+-- | `Inline.inlineCandidates [m]`). Per-summary-local — an approximation of the old per-step
+-- | whole-program recompute that avoids the O(N²) cost (see the `runOpt` note); correctness-
+-- | neutral (only changes *which* small/single-use bodies inline; the global use-count is a knob
+-- | a future reduction-aware inliner removes, ADR 0020).
+moduleContribs :: M.Module -> AccumCtx
+moduleContribs m =
+  let
+    bc = DictElim.buildCtx [ m ]
+  in
+    { inline: Map.union bc.inline (Inline.inlineCandidates [ m ])
+    , newtypeCtors: Set.union bc.newtypeCtors (Inline.newtypeCtorNames [ m ])
+    , dataCtors: bc.dataCtors
+    , instanceFields: bc.instanceFields
+    }
+
+mergeAccum :: AccumCtx -> AccumCtx -> AccumCtx
+mergeAccum a b =
+  { inline: Map.union a.inline b.inline
+  , newtypeCtors: Set.union a.newtypeCtors b.newtypeCtors
+  , dataCtors: Set.union a.dataCtors b.dataCtors
+  , instanceFields: Map.union a.instanceFields b.instanceFields
+  }
+
+-- | The full simplifier `Ctx` for optimizing `m`: the accumulated dependency context (`accCtx`)
+-- | merged with `m`'s *own* context built over `[m]` alone. The own-context uses `buildContext [m]`
+-- | rather than the accumulated inline slice so it also picks up `m`'s **local** candidates —
+-- | chiefly its caller-homed `$specN` bindings (single-use within `m`) — which must inline
+-- | intra-module or they would survive as extra functions. Purity is computed incrementally
+-- | (fixpoint over just `m`, seeded by the dependencies' purity).
+ctxFromAccum :: Set String -> AccumCtx -> Set String -> Set String -> M.Module -> Ctx
+ctxFromAccum eff accCtx seedImpure seedMemEff m =
+  let
+    own = buildContext eff Set.empty Set.empty [ m ]
+  in
+    { newtypeCtors: Set.union accCtx.newtypeCtors own.newtypeCtors
+    , dataCtors: Set.union accCtx.dataCtors own.dataCtors
+    , inline: Map.union accCtx.inline own.inline
+    , instanceFields: Map.union accCtx.instanceFields own.instanceFields
+    , effectfulForeigns: eff
+    , impureBindings: Purity.impureKeys eff seedImpure [ m ]
+    , memEffBindings: Purity.memEffKeys seedMemEff [ m ]
+    }
+
+-- | One module, optimized once against its finalized dependencies (`accCtx`) plus itself:
+-- | simplify (inline + reduce) → impurify (Effect glue → thunks) → simplify again (empty inline
+-- | set, to collapse the impurify thunks without re-inlining).
+localOpt
+  :: Set String
+  -> Map String Int
+  -> AccumCtx
+  -> Set String
+  -> Set String
+  -> M.Module
+  -> { mod :: M.Module, impure :: Set String, memEff :: Set String }
+localOpt eff arities accCtx seedImpure seedMemEff m =
+  let
+    ctx = ctxFromAccum eff accCtx seedImpure seedMemEff m
+    simplified = DictElim.simplifyModule ctx m
+    impured = fromMaybe simplified (Array.head (impurifyProgram arities [ simplified ]))
+  in
+    { mod: DictElim.simplifyModule (ctx { inline = Map.empty }) impured
+    , impure: ctx.impureBindings
+    , memEff: ctx.memEffBindings
+    }
+
+-- | Post-inline specialization (ADR 0027), per module (ADR 0032): re-specialize against the
+-- | dependency summaries (catching the `where`-worker forwarder that `localOpt` inlined), then a
+-- | β/reduce-only simplify (empty inline set) to collapse the residual redexes. Purity is
+-- | recomputed incrementally so a new effectful spec's discarded effect is not dropped.
+finalizeModule :: Set String -> AccumCtx -> Array M.Module -> Set String -> Set String -> M.Module -> M.Module
+finalizeModule eff accCtx deps seedImpure seedMemEff m =
+  let
+    respec = specializeModule deps m
+    ctx = ctxFromAccum eff accCtx seedImpure seedMemEff respec
+  in
+    DictElim.simplifyModule (ctx { inline = Map.empty }) respec
 
 -- | Order modules so every module comes after the modules it references (a dependency is
 -- | finalized before its dependents). Dependencies are taken from actual cross-module
