@@ -22,48 +22,74 @@ import PureScript.CoreFn (Binder(..), Literal(..), Qualified(..))
 -- | `Qualified Nothing` not bound by an enclosing lambda, `let`, or case binder.
 -- | Order is first-appearance, deduplicated — it indexes a closure's captures, so
 -- | it must be deterministic.
+-- |
+-- | Computed as the *scope-independent* free set (`rawFreeVars`) minus the given
+-- | `bound`. The raw set is the same for every caller of a given node regardless of
+-- | their `bound`, so memoizing it (below) lets lowering re-query a nested lambda's
+-- | body without re-walking it once per enclosing lambda — the difference between
+-- | O(n²) and O(n) on the deeply-nested bodies large modules produce.
 freeVars :: Array String -> M.Expr -> Array String
--- The in-scope set is threaded as a `Set` (not an `Array`): membership and extension
--- happen at every node and every binder, so an `Array` `elem`/`<>` makes the walk
--- O(nodes × scope-size) — quadratic on the deeply-nested bodies large modules produce.
-freeVars bound = Array.nub <<< goExpr (Set.fromFoldable bound)
+freeVars bound = case Array.null bound of
+  true -> rawFreeVars
+  false ->
+    let
+      boundSet = Set.fromFoldable bound
+    in
+      Array.filter (\x -> not (Set.member x boundSet)) <<< rawFreeVars
+
+-- | The free variables of an expression with *nothing* externally bound, in
+-- | first-appearance order with duplicates removed at every node (so the result is
+-- | small and the global first-appearance order is preserved). Memoized by node
+-- | identity (`unsafeMemoExpr`): a shared MIR subtree — e.g. a lambda body that the
+-- | enclosing lambda's analysis already visited — is computed at most once.
+rawFreeVars :: M.Expr -> Array String
+rawFreeVars = unsafeMemoExpr go
   where
-  goExpr bnd = case _ of
-    M.Var (Qualified Nothing x) -> if Set.member x bnd then [] else [ x ]
+  dedup = Array.nub
+  go = case _ of
+    M.Var (Qualified Nothing x) -> [ x ]
     M.Var _ -> []
-    M.Lit lit -> goLit bnd lit
+    M.Lit lit -> goLit lit
     M.Constructor _ _ _ -> []
-    M.Accessor _ e -> goExpr bnd e
-    M.Update e _ updates -> goExpr bnd e <> (updates >>= \(Tuple _ v) -> goExpr bnd v)
-    M.Abs params e -> goExpr (Set.union bnd (Set.fromFoldable params)) e
-    M.App head args -> goExpr bnd head <> (args >>= goExpr bnd)
-    M.Perform e -> goExpr bnd e
-    M.Case scruts alts -> (scruts >>= goExpr bnd) <> (alts >>= goAlt bnd)
+    M.Accessor _ e -> rawFreeVars e
+    M.Update e _ updates -> dedup (rawFreeVars e <> (updates >>= \(Tuple _ v) -> rawFreeVars v))
+    M.Abs params e -> Array.filter (\x -> not (Array.elem x params)) (rawFreeVars e)
+    M.App head args -> dedup (rawFreeVars head <> (args >>= rawFreeVars))
+    M.Perform e -> rawFreeVars e
+    M.Case scruts alts -> dedup ((scruts >>= rawFreeVars) <> (alts >>= goAlt))
     M.Let binds body ->
       -- Conservative scoping: every let-bound name is in scope for both the
       -- right-hand sides and the body (exact for recursive `let`, a safe
       -- over-approximation otherwise).
       let
-        bnd' = Set.union bnd (Set.fromFoldable (binds >>= bindNames))
+        names = binds >>= bindNames
       in
-        (binds >>= bindExprs >>= goExpr bnd') <> goExpr bnd' body
-  goLit bnd = case _ of
-    LitArray es -> es >>= goExpr bnd
-    LitObject kvs -> kvs >>= \(Tuple _ v) -> goExpr bnd v
+        Array.filter (\x -> not (Array.elem x names))
+          (dedup ((binds >>= bindExprs >>= rawFreeVars) <> rawFreeVars body))
+  goLit = case _ of
+    LitArray es -> dedup (es >>= rawFreeVars)
+    LitObject kvs -> dedup (kvs >>= \(Tuple _ v) -> rawFreeVars v)
     _ -> []
-  goAlt bnd alt =
+  goAlt alt =
     let
-      bnd' = Set.union bnd (Set.fromFoldable (alt.binders >>= binderVars))
+      names = alt.binders >>= binderVars
     in
-      case alt.result of
-        Right e -> goExpr bnd' e
-        Left guards -> guards >>= \g -> goExpr bnd' g.guard <> goExpr bnd' g.expression
+      Array.filter (\x -> not (Array.elem x names))
+        ( case alt.result of
+            Right e -> rawFreeVars e
+            Left guards -> dedup (guards >>= \g -> rawFreeVars g.guard <> rawFreeVars g.expression)
+        )
   bindNames = case _ of
     M.NonRec _ n _ -> [ n ]
     M.Rec rs -> map _.ident rs
   bindExprs = case _ of
     M.NonRec _ _ e -> [ e ]
     M.Rec rs -> map _.expr rs
+
+-- | Memoize a function of an `M.Expr` by reference identity. Observationally pure
+-- | (the MIR is immutable and the function is pure), so it is wrapped and never
+-- | exported; only the pure `freeVars` is.
+foreign import unsafeMemoExpr :: (M.Expr -> Array String) -> M.Expr -> Array String
 
 -- | The variables a binder brings into scope.
 binderVars :: Binder -> Array String
