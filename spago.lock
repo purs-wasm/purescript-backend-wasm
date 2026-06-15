@@ -60,6 +60,7 @@
             "foldable-traversable",
             "foreign",
             "foreign-object",
+            "free",
             "functions",
             "identity",
             "integers",
