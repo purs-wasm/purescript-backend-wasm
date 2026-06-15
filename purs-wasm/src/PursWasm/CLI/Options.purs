@@ -90,6 +90,11 @@ buildOptionsParser =
           \`main :: Effect Unit`): the JS loader calls it on load. Requires --platform=node\n\
           \or browser (not valid with standalone)."
           # ArgParser.boolean
+    , force:
+        ArgParser.flag [ "-f", "--force" ]
+          "Ignore the incremental cache under <output>/_build (rebuild every module from\n\
+          \scratch) and refresh it. By default a build reuses unchanged modules from the cache."
+          # ArgParser.boolean
     , dumpMir:
         ArgParser.argument [ "--dump-mir" ]
           "Dump the given module's middle IR (MIR) at the optimizer's snapshot points\n\

@@ -3,10 +3,15 @@
 -- | the Argonaut / Binaryen / IR details — it only does file I/O and calls these.
 module PureScript.Backend.Wasm.Compiler
   ( CompileOptions
+  , CompiledModule
   , parseModule
+  , linkModule
+  , finishLink
+  , effectfulForeigns
   , compileModules
   , compileModulesText
   , mirTrace
+  , printMir
   ) where
 
 import Prelude
@@ -17,16 +22,21 @@ import Data.Argonaut.Parser (jsonParser)
 import Data.Array as Array
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
+import Data.Map (Map)
+import Data.Maybe (Maybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
+import Data.Traversable (traverse)
 import Effect (Effect)
 import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
-import PureScript.Backend.Wasm.MiddleEnd (optimizeProgram, optimizeProgramTrace)
+import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
+import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.CoreFn (Module, ModuleName)
 import PureScript.CoreFn.FromJSON (decodeModule)
 import PureScript.ExternsFile (ExternsFile)
@@ -48,37 +58,40 @@ parseModule source = case jsonParser source of
 -- | (lambda lifting still runs, since it is needed for constant-stack tail recursion).
 type CompileOptions = { optimize :: Boolean, optimizeMir :: Boolean }
 
--- | Link the given modules into one validated wasm and run `emit` on it (e.g.
--- | `emitBinary` or `emitText`). `roots` are the entry modules whose functions
--- | stay exported; everything else is internal and so removed by the optimizer's
--- | DCE (ADR 0009). Linking or validation failures come back as a message.
--- | `foreignSigs` is the foreign-import calling conventions to resolve against — the
--- | caller merges any source-reconstructed signatures (ADR 0016) over the externs-derived
--- | ones, so private foreigns are covered. `externs` still supplies constructor field reps.
-withCompiledModule
-  :: forall a
-   . CompileOptions
-  -> (B.Module -> Effect a)
+-- | The live result of `linkModule` (the "link" half of link/emit, ADR 0021): the built
+-- | Binaryen module, the distinct user-foreign source modules to resolve (ADR 0014), and the
+-- | CAF-init function (`Nothing` if none) whose run trigger — loader call vs wasm `start` — is
+-- | the caller's packaging decision (ADR 0006). The caller emits and disposes `mod`.
+type CompiledModule =
+  { mod :: B.Module
+  , foreignModules :: Array String
+  , cafInit :: Maybe B.Function
+  -- The incremental-cache misses produced by this link (ADR 0032 phase 4 / ADR 0034), for
+  -- the caller to persist as `.pmi` + `.pmo` pairs. Empty unless a `CacheInput` with module
+  -- source hashes was supplied; the caller owns the filesystem.
+  , cacheWrites :: Array CacheWrite
+  }
+
+-- | Link the given modules into one validated Binaryen module and return the **live**
+-- | artifact (the module, the foreign sources to resolve, the CAF-init function) — the
+-- | "link" half of the link/emit split (ADR 0021). The caller owns packaging (resolve
+-- | foreigns, decide the CAF-init trigger, `setStart`) and then **emits and disposes** the
+-- | module. `roots` are the entry modules whose functions stay exported; everything else is
+-- | internal and so removed by the optimizer's DCE (ADR 0009). Linking or validation
+-- | failures come back as a message (and dispose the module). `foreignSigs` is the
+-- | foreign-import calling conventions to resolve against — the caller merges any
+-- | source-reconstructed signatures (ADR 0016) over the externs-derived ones, so private
+-- | foreigns are covered. `externs` still supplies constructor field reps.
+linkModule
+  :: CompileOptions
   -> Array ModuleName
   -> Array Module
   -> Array ExternsFile
   -> Object ForeignSig
-  -> Effect (Either String a)
-withCompiledModule opts emit roots modules externs foreignSigs' =
-  case lowered of
-    Left err -> pure (Left ("linking failed: " <> show err))
-    Right program -> do
-      mod <- buildModule program
-      when opts.optimize (B.optimize mod)
-      ok <- B.validate mod
-      if not ok then do
-        wat <- B.emitText mod
-        B.dispose mod
-        pure (Left ("emitted module failed validation:\n" <> wat))
-      else do
-        result <- emit mod
-        B.dispose mod
-        pure (Right result)
+  -> CacheInput
+  -> Effect (Either String CompiledModule)
+linkModule opts roots modules externs foreignSigs' cache =
+  finishLink opts roots foreignSigs' foreignNames externs optimized.modules optimized.writes
   where
   -- Prune to the modules transitively imported by the entry roots BEFORE optimizing — the
   -- input dir holds the whole dependency build (often hundreds of modules), but optimizing
@@ -92,8 +105,41 @@ withCompiledModule opts emit roots modules externs foreignSigs' =
   -- optimizer must preserve `Perform`s for; the same pair `mirTrace` uses (ADR 0015).
   effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
   effArities = effectfulForeignAritiesFromSigs foreignSigs'
-  optimized = optimizeProgram opts.optimizeMir effSet effArities reachable
-  lowered = lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimized
+  optimized = optimizeProgramCached opts.optimizeMir effSet effArities cache reachable
+
+-- | The effectful-foreign set and arities (intrinsics ∪ those the signatures declare) that the
+-- | optimizer must preserve `Perform`s for (ADR 0015) — exposed so the CLI can drive the per-module
+-- | incremental loop (`MiddleEnd.optimizeIncrementalM`) itself, for live progress, then `finishLink`.
+effectfulForeigns :: Object ForeignSig -> { names :: Set String, arities :: Map String Int }
+effectfulForeigns foreignSigs' =
+  { names: Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
+  , arities: effectfulForeignAritiesFromSigs foreignSigs'
+  }
+
+-- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
+-- | module, and package it with the cache misses to persist. `foreignNames` is the qualified
+-- | CoreFn-declared foreign set (for lowering's opaque-import fallback, ADR 0016).
+finishLink
+  :: CompileOptions
+  -> Array ModuleName
+  -> Object ForeignSig
+  -> Set String
+  -> Array ExternsFile
+  -> Array M.Module
+  -> Array CacheWrite
+  -> Effect (Either String CompiledModule)
+finishLink opts roots foreignSigs' foreignNames externs optimizedModules cacheWrites =
+  case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right program -> do
+      built <- buildModule program
+      when opts.optimize (B.optimize built.mod)
+      ok <- B.validate built.mod
+      if not ok then do
+        wat <- B.emitText built.mod
+        B.dispose built.mod
+        pure (Left ("emitted module failed validation:\n" <> wat))
+      else pure (Right { mod: built.mod, foreignModules: built.foreignModules, cafInit: built.cafInit, cacheWrites })
 
 -- | The modules transitively reachable from `roots` through CoreFn imports (a fixpoint over
 -- | each kept module's import list). Used to drop unreached dependency modules before the
@@ -116,13 +162,28 @@ reachableModules roots modules = Array.filter (\m -> Set.member (joinWith "." m.
 
 -- | Link the given modules into one wasm and return its binary bytes. `externs`
 -- | supplies type information for type-directed lowering (front B); pass `[]` to
--- | build without it (everything stays boxed).
+-- | build without it (everything stays boxed). This is the whole-program convenience that
+-- | runs CAF init via the wasm `start` section (suitable for a self-contained build with no
+-- | re-entrant JS foreigns); the CLI uses `linkModule` directly so packaging can decide the
+-- | CAF-init trigger (ADR 0006 / 0021).
 compileModules :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Object ForeignSig -> Effect (Either String Uint8Array)
-compileModules opts = withCompiledModule opts B.emitBinary
+compileModules opts roots modules externs sigs =
+  linkModule opts roots modules externs sigs noCache >>= traverse (emitAndDispose B.emitBinary)
 
 -- | Link the given modules into one wasm and return its WAT (text) form.
 compileModulesText :: CompileOptions -> Array ModuleName -> Array Module -> Array ExternsFile -> Object ForeignSig -> Effect (Either String String)
-compileModulesText opts = withCompiledModule opts B.emitText
+compileModulesText opts roots modules externs sigs =
+  linkModule opts roots modules externs sigs noCache >>= traverse (emitAndDispose B.emitText)
+
+-- | Run CAF init via the wasm `start` section, then emit and dispose the module — the
+-- | self-contained path (`compileModules`/`compileModulesText`). The CLI instead emits via
+-- | `linkModule` so it can route CAF init through the loader (ADR 0006 / 0021).
+emitAndDispose :: forall a. (B.Module -> Effect a) -> CompiledModule -> Effect a
+emitAndDispose emit built = do
+  maybe (pure unit) (B.setStart built.mod) built.cafInit
+  out <- emit built.mod
+  B.dispose built.mod
+  pure out
 
 -- | Trace the named module's middle IR (MIR) — its form after specialization and after it
 -- | is optimized (simplify → impurify → simplify) — the `--dump-mir` companion to the
@@ -134,3 +195,9 @@ mirTrace opts modules foreignSigs' target =
   where
   effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
   effArities = effectfulForeignAritiesFromSigs foreignSigs'
+
+-- | Pretty-print a module's optimized MIR (the form held in a `.pmo`), for the `--dump-mir`
+-- | companion on a cached build: the cache has only the *final* optimized module (not the
+-- | per-stage trace `mirTrace` produces), so this dumps that, decoded from the `.pmo`.
+printMir :: M.Module -> String
+printMir = printModule

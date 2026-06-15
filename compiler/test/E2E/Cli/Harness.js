@@ -6,7 +6,13 @@ import { readFileSync } from "node:fs";
 // is repo-root-relative (spago test runs from the repo root, like the legacy fixture paths).
 export const cliFixture = (mod) => () => {
   const bytes = readFileSync(`compiler/test/e2e-build/${mod}/index.wasm`);
-  return new WebAssembly.Instance(new WebAssembly.Module(bytes), {});
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(bytes), {});
+  // Run CAF initialization (ADR 0006) the way a consumer does. A self-contained build runs it via
+  // the wasm `start` section; a build that expects a loader exports `caf_init` instead, for the
+  // loader to run after instantiation (ADR 0021). This raw harness has no loader, so call it here —
+  // idempotent for the start-section case (pure CAFs recompute to the same values).
+  instance.exports.caf_init?.();
+  return instance;
 };
 
 export const callI32x0 = (inst) => (name) => () => inst.exports[name]();

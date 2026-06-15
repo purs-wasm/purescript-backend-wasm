@@ -16,17 +16,33 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
-const wasmPath = fileURLToPath(new URL("./output-wasm/index.wasm", import.meta.url));
-const bytes = readFileSync(wasmPath);
+// The benchmark wasm bundles. `Bench.Main` is the shared algorithmic suite; the
+// Effect-monad (CountEffect) and curry-dispatch (BenchCurry) benchmarks are separate
+// entries (their own bundles) but baselined here too — their optimizations (Effect
+// collapse, curried-call cost) are fragile and must be caught by a regression check.
+const bundleUrls = {
+  main: new URL("./output-wasm/index.wasm", import.meta.url),
+  countEffect: new URL("./output-wasm-count-effect/index.wasm", import.meta.url),
+  curry: new URL("./output-wasm-curry/index.wasm", import.meta.url),
+};
+const bundleBytes = {};
+for (const [k, url] of Object.entries(bundleUrls)) {
+  try {
+    bundleBytes[k] = readFileSync(fileURLToPath(url));
+  } catch {
+    bundleBytes[k] = null;
+  }
+}
+const bytes = bundleBytes.main;
 
 // A fresh instance (and so a fresh wasm-GC managed heap) per measurement, so the
 // benchmarks do not share memory. Otherwise a fast, allocation-light benchmark that
 // the adaptive timer runs very many times grows/loads the shared heap and skews a
 // later allocation-heavy one — which made the numbers unreliable (an isolated
 // benchmark measured very differently from the same one in the shared run).
-async function freshFn(name) {
-  const { instance } = await WebAssembly.instantiate(bytes, {});
-  return instance.exports[name];
+async function freshFn(b) {
+  const { instance } = await WebAssembly.instantiate(bundleBytes[b.bundle ?? "main"], {});
+  return instance.exports[b.fn ?? b.name];
 }
 
 // The baseline (set by `npm run base`), if any: a `name -> size -> ms` lookup that
@@ -53,6 +69,9 @@ const benches = [
   { name: "bintreeDfs", sizes: [12, 13, 14, 15, 16, 17], desc: "DFS over a balanced tree" },
   { name: "bintreeBfs", sizes: [8, 9, 10, 11, 12], desc: "BFS (list queue) over a tree" },
   { name: "mapFold", sizes: [100, 200, 300, 400, 500], desc: "map/foldl over a list; closure args" },
+  { name: "mapFoldArray", sizes: [100, 200, 300, 400, 500], desc: "map/foldl over a Data.Array (ulib HOFs)" },
+  { name: "countEffect", bundle: "countEffect", fn: "countTo", sizes: [1000, 2000, 4000, 8000, 16000, 32000, 64000], desc: "Effect monad: cyclic instance dicts → constant-stack loop" },
+  { name: "curry", bundle: "curry", fn: "curryDispatch", sizes: [50_000, 100_000, 200_000, 400_000, 800_000], desc: "curried Int->Int->Int dispatch (closure-alloc)" },
 ];
 
 // Adaptive timing: warm up, calibrate the repetition count so a timed batch runs
@@ -83,9 +102,13 @@ console.log(`wasm: ${bytes.length} bytes  (Bench.Main bundle)\n`);
 
 const results = [];
 for (const b of benches) {
+  if (!bundleBytes[b.bundle ?? "main"]) {
+    console.log(`${b.name.padEnd(11)} (skipped: ${b.bundle ?? "main"} bundle not built)`);
+    continue;
+  }
   const points = [];
   for (const size of b.sizes) {
-    const fn = await freshFn(b.name);
+    const fn = await freshFn(b);
     const result = fn(size);
     const ns = nsPerOp(fn, size);
     points.push({ size, nsPerOp: Math.round(ns), ms: Number((ns / 1e6).toFixed(4)), result });

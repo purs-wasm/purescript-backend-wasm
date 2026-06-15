@@ -8,9 +8,10 @@ module PursWasm.CLI.Build
 
 import Prelude
 
+import Ansi.Codes as Ansi
+import Binaryen as B
 import Data.Array as Array
-import Data.ArrayBuffer.Types (Uint8Array)
-import Data.Either (Either(..), either)
+import Data.Either (Either(..), either, hush)
 import Data.Foldable (for_)
 import Data.Int (toNumber)
 import Data.Map as Map
@@ -19,24 +20,30 @@ import Data.Number.Format (fixed, toStringWith)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.String as Str
+import Data.String.Utils (padStart)
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Compiler (compileModules, mirTrace, parseModule)
+import Partial.Unsafe (unsafeCrashWith)
+import PureScript.Backend.Wasm.Compiler (effectfulForeigns, finishLink, linkModule, mirTrace, parseModule, printMir)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
+import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache, optimizeIncrementalM)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
 import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
-import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readDir, readText, unlink, warn, writeBinary, writeText)
-import PursWasm.CLI.Lib (resolveLibPath)
+import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PursWasm.CLI.Effect.Log (br)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
+import PursWasm.CLI.Lib (resolveLibPath)
 import PursWasm.CLI.Module (entryRoot, printModname)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
 import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, resolveModuleSet, ulibManifestFile)
@@ -49,12 +56,17 @@ import Type.Row (type (+))
 -- | file-level reachability pruning.
 foreign import corefnImportsImpl :: String -> Array String
 
--- | The host-import module names a wasm binary declares (the user `foreign import` modules a JS
--- | loader must satisfy; ADR 0014).
-foreign import importModulesImpl :: Uint8Array -> Effect (Array String)
+-- | The bare foreign-import names a `corefn.json` declares, extracted cheaply (no full decode), so
+-- | the incremental path can resolve foreign signatures without decoding a cache hit.
+foreign import corefnForeignNamesImpl :: String -> Array String
+
+-- | A transient one-line progress indicator (overwritten in place on a TTY); `progressEnd` finishes
+-- | the line. Bypasses the `LOG` effect because it is a live UI element, not a recorded message.
 
 -- | A monotonic clock in milliseconds, for the elapsed-time report.
 foreign import nowMsImpl :: Effect Number
+
+foreign import stdoutIsTTY :: Boolean
 
 -- | A byte count as a human-readable size (`B` / `KB` / `MB`).
 humanSize :: Int -> String
@@ -133,26 +145,31 @@ buildCmd cliRoot binaryenBinDir args = do
         , total: Array.length allMods
         , extra: if Array.null injected then "" else Fmt.fmt @" (+{k} ulib internal)" { k: Array.length injected }
         }
-    ) *> br
+    )
   -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
   -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
   -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
-  modules <- map Array.catMaybes $ for modNames \name -> do
+  -- Read each module's corefn source and the cheap metadata derived from it WITHOUT a full decode
+  -- (ADR 0034): the source hash (the cache key's source input), the import names (for dependency
+  -- order), and the foreign-import names (lowering's opaque-import fallback + foreign-sig
+  -- resolution). A registry module's corefn comes from the lib (ADR 0031 §6); a name resolving to no
+  -- corefn is skipped. The corefn is *decoded* later only for modules the cache cannot reuse.
+  srcInfos <- map Array.catMaybes $ for modNames \name -> do
     mLibSrc <-
       if Set.member name libSourced then maybe (pure Nothing) readText (Map.lookup name shadows <#> _.corefn)
       else pure Nothing
     mSrc <- case mLibSrc of
       Just s -> pure (Just s)
       Nothing -> readText =<< joinPath [ args.input, name, "corefn.json" ]
-    case mSrc of
-      Nothing -> pure Nothing
-      Just src -> case parseModule src of
-        Left err -> logAndThrow (name <> ": " <> err)
-        Right m -> pure (Just m)
-  -- Fail early on a `wasm-base` incompatible with this backend (ADR 0026) / CoreFn from an
-  -- unsupported purs (ADR 0029).
-  either logAndThrow pure (checkWasmBaseCompat modules)
-  either logAndThrow pure (checkCorefnVersions modules)
+    pure $ mSrc <#> \src ->
+      { name
+      , mn: Str.split (Str.Pattern ".") name
+      , src
+      , sourceHash: hashString src
+      , imports: corefnImportsImpl src
+      , foreignNames: corefnForeignNamesImpl src
+      }
+  let sourceHashes = Map.fromFoldable (map (\i -> Tuple i.name i.sourceHash) srcInfos)
   -- Each module's `externs.cbor` carries the top-level type info CoreFn erased (front B); a module
   -- without readable/decodable externs is simply skipped — its constructors fall back to boxed. A
   -- registry module's externs come from the user output (interface-compatible with the shadow, per
@@ -160,7 +177,7 @@ buildCmd cliRoot binaryenBinDir args = do
   externs <- map Array.catMaybes $ for modNames \name ->
     if Set.member name allModNames then readExterns =<< joinPath [ args.input, name, "externs.cbor" ]
     else readExterns =<< joinPath [ libPath, name, "externs.cbor" ]
-  allSigs <- buildForeignSigs args.input libPath externs modules
+  allSigs <- buildForeignSigs args.input libPath externs (map (\i -> { name: i.mn, foreignNames: i.foreignNames }) srcInfos)
   -- `-E/--executable`: produce a runnable that auto-runs the entry's `main`. v0.1 supports this for
   -- node/browser only (the JS loader calls `main` on load); `main` must be `main :: Effect Unit` (a
   -- nullary `Effect`). Validate up front so the build fails before the expensive compile/merge.
@@ -180,30 +197,140 @@ buildCmd cliRoot binaryenBinDir args = do
   -- directory would be misleading.
   let bundleDir = args.outDir
   mkdirP bundleDir
-  -- `--dump-mir <Module>`: dump that module's MIR at the optimizer's snapshot points (specialized
-  -- input, per-module optimized, post-inline specialization) to `<output>/<Module>.mir.txt`
-  -- (debugging the optimizer; supersedes the old dump-mir/dump-opt scripts, which only saw the
-  -- fixtures you hand-linked — this sees the real reachable closure).
-  case args.dumpMir of
-    Nothing -> pure unit
-    Just target -> do
-      mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
-      writeText mirPath (mirTrace opts modules allSigs target)
-      info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
+  -- Incremental cache (ADR 0034), on by default: reuse unchanged modules from `<output>/_build`,
+  -- decoding only the modules the cache cannot reuse. Active whenever MIR is optimized; `--no-opt`
+  -- (no optimized MIR to cache) takes the whole-program path. `-f/--force` keeps the cache machinery
+  -- on (so it is refreshed) but ignores the existing entries — a clean rebuild from scratch.
+  -- `--dump-mir` does NOT disable the cache: on a cached build the target's optimized MIR is
+  -- pretty-printed straight from its `.pmo` after linking (below).
+  let useCache = opts.optimizeMir
+  cacheDir <- joinPath [ args.outDir, "_build" ]
+  -- The qualified CoreFn-declared foreign names for lowering's opaque-import fallback (ADR 0016),
+  -- from the cheap extraction — available for every module without decoding.
+  let foreignNames = Set.fromFoldable (srcInfos >>= \i -> map (\base -> i.name <> "." <> base) i.foreignNames)
   -- The generated module imports the shared runtime (`$rt.*`, ADR 0010). Compile it, then merge
   -- `runtime.wasm` + foreign providers with `wasm-merge` into one self-contained wasm.
   appPath <- joinPath [ bundleDir, "app.wasm" ]
   wasmPath <- joinPath [ bundleDir, "index.wasm" ]
-  info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length modules })
-  liftEffect (compileModules opts roots modules externs allSigs) >>= case _ of
+  linkResult <-
+    if useCache then do
+      -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
+      -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.
+      cachedMap <-
+        if args.force then pure Map.empty
+        else map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i -> do
+          pmiPath <- joinPath [ cacheDir, i.name <> ".pmi" ]
+          pmoPath <- joinPath [ cacheDir, i.name <> ".pmo" ]
+          mPmi <- readBinary pmiPath
+          mPmo <- readBinary pmoPath
+          pure do
+            pmi <- hush <<< decodePmi =<< mPmi
+            finalMod <- hush <<< decodePmo =<< mPmo
+            pure (Tuple i.name { sourceHash: pmi.sourceHash, key: pmi.key, deps: pmi.deps, summary: pmi.summary, finalMod })
+      -- Coarse decode-skip pre-pass (ADR 0034): a module need not be decoded at all iff its source
+      -- AND every transitive dependency's source are unchanged (a guaranteed cache hit). The precise
+      -- per-module key inside the optimizer still decides reuse for the modules that are decoded.
+      let
+        ownUnchanged name = case Map.lookup name cachedMap of
+          Just c -> Map.lookup name sourceHashes == Just c.sourceHash
+          Nothing -> false
+        cachedDeps name = maybe [] _.deps (Map.lookup name cachedMap)
+        shrink s =
+          let
+            s' = Set.filter (\n -> Array.all (\d -> Set.member d s) (cachedDeps n)) s
+          in
+            if Set.size s' == Set.size s then s else shrink s'
+        skippable = shrink (Set.filter ownUnchanged (Set.fromFoldable (map _.name srcInfos)))
+      info (Fmt.fmt @"Compiling {count} module(s) ({cached} cached)…" { count: Array.length srcInfos, cached: Set.size skippable })
+      -- Decode (and version-check) only the modules that are not guaranteed hits.
+      decoded <- map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i ->
+        if Set.member i.name skippable then pure Nothing
+        else case parseModule i.src of
+          Left err -> logAndThrow (i.name <> ": " <> err)
+          Right m -> pure (Just (Tuple i.name m))
+      let decodedModules = Array.fromFoldable (Map.values decoded)
+      either logAndThrow pure (checkWasmBaseCompat decodedModules)
+      either logAndThrow pure (checkCorefnVersions decodedModules)
+      let
+        inputs = srcInfos <#> \i ->
+          { name: i.name
+          , imports: i.imports
+          , sourceHash: i.sourceHash
+          , cached: Map.lookup i.name cachedMap <#> \c -> { key: c.key, deps: c.deps, summary: c.summary, finalMod: c.finalMod }
+          , lift: case Map.lookup i.name decoded of
+              Just m -> \_ -> liftModule m
+              Nothing -> \_ -> unsafeCrashWith ("internal: cache hit forced lift for " <> i.name)
+          }
+      -- Drive the dependency-ordered optimizer here (not inside `Compiler`), so each module's
+      -- progress can be reported live (ADR 0034). A cache hit advances the counter quietly; a miss
+      -- names the module it is compiling. The optimizer's per-module work is forced strictly per
+      -- step, so the counter keeps pace with the actual compilation.
+      let eff = effectfulForeigns allSigs
+      optimized <- optimizeIncrementalM
+        ( \p ->
+            if p.hit then do
+              Log.debug $ Fmt.fmt @"{name} is already optmized. Skip." { name: p.name }
+            else do
+              when stdoutIsTTY do
+                Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
+                Log.info $ Ansi.escapeCodeToString (Ansi.EraseLine Ansi.Entire)
+                Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
+              Log.info $ Log.cyan $ Fmt.fmt @" >  [{i} of {n}] Compling {name}"
+                { i: padStart (Str.length $ show p.total) (show p.index)
+                , n: p.total
+                , name: p.name
+                }
+        )
+        eff.names
+        eff.arities
+        inputs
+      -- liftEffect progressEndImpl
+      br *> info (Log.blue "Linking (lower + codegen)…")
+      liftEffect (finishLink opts roots allSigs foreignNames externs optimized.modules optimized.writes)
+    else do
+      -- Cold / `--no-opt` / `--dump-mir`: decode every module (no decode-free reuse).
+      info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
+      decodedModules <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
+        Left err -> logAndThrow (i.name <> ": " <> err)
+        Right m -> pure (Just m)
+      either logAndThrow pure (checkWasmBaseCompat decodedModules)
+      either logAndThrow pure (checkCorefnVersions decodedModules)
+      case args.dumpMir of
+        Nothing -> pure unit
+        Just target -> do
+          mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
+          writeText mirPath (mirTrace opts decodedModules allSigs target)
+          info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
+      liftEffect (linkModule opts roots decodedModules externs allSigs noCache)
+  case linkResult of
     Left err -> logAndThrow err
-    Right bytes -> do
-      -- the user `foreign import` modules the wasm needs (empty for a self-contained program).
-      foreignMods <- liftEffect (importModulesImpl bytes)
-      writeBinary appPath bytes
+    Right built -> do
+      -- Persist cache misses (ADR 0034) before the merge, so a later failure still leaves a usable
+      -- cache. `cacheWrites` is empty unless this was a `--cache` build.
+      when (not (Array.null built.cacheWrites)) do
+        mkdirP cacheDir
+        for_ built.cacheWrites \w -> do
+          pmiPath <- joinPath [ cacheDir, w.name <> ".pmi" ]
+          pmoPath <- joinPath [ cacheDir, w.name <> ".pmo" ]
+          writeBinary pmiPath (encodePmi { sourceHash: w.sourceHash, key: w.entry.key, deps: w.deps, summary: w.entry.summary })
+          writeBinary pmoPath (encodePmo w.entry.finalMod)
+      -- `--dump-mir` on a cached build: the optimized MIR is in the target's `.pmo` (just written
+      -- if it was a miss, otherwise the unchanged hit), so pretty-print that — no re-optimize, no
+      -- cache disable. (`--no-opt` has no `.pmo`; it took the whole-program `mirTrace` path above.)
+      case args.dumpMir of
+        Just target | useCache -> do
+          mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
+          pmoPath <- joinPath [ cacheDir, target <> ".pmo" ]
+          readBinary pmoPath >>= case _ of
+            Just bytes -> case decodePmo bytes of
+              Right m -> writeText mirPath (printMir m) *> info (Log.blue ("✓ Wrote MIR for " <> target <> " to " <> mirPath))
+              Left e -> warn (Log.yellow ("--dump-mir: could not decode " <> target <> ".pmo: " <> e))
+            Nothing -> warn (Log.yellow ("--dump-mir: no cached .pmo for " <> target <> " (is it in the reachable set?)"))
+        _ -> pure unit
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
-      -- merged (speaks the internal ABI), else it falls back to the JS loader.
-      providers <- for foreignMods (resolveForeign binaryenBinDir shadows libPath args.input bundleDir)
+      -- merged (speaks the internal ABI), else it falls back to the JS loader. `foreignModules` is
+      -- the precise set the codegen emitted imports for (no byte re-parse).
+      providers <- for built.foreignModules (resolveForeign binaryenBinDir shadows libPath args.input bundleDir)
       let wasmProvided = Array.mapMaybe (\p -> Tuple p.name <$> p.wasm) providers
       let jsProvided = Array.mapMaybe (\p -> if isNothing p.wasm then Just p.name else Nothing) providers
       -- Policy on foreign imports with no `foreign.wat` provider (they otherwise fall back to a
@@ -212,6 +339,21 @@ buildCmd cliRoot binaryenBinDir args = do
       when (not (Array.null jsProvided)) case args.platform of
         Standalone -> logAndThrow (Fmt.fmt @"--platform=standalone needs every foreign import provided as wasm, but {n} fall back to JS: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided })
         _ -> when args.noJsFallback (logAndThrow (Fmt.fmt @"--no-js-fallback set, but {n} foreign import(s) lack a foreign.wat provider: {names}" { n: Array.length jsProvided, names: joinWith ", " jsProvided }))
+      let exportSigs = rootExportSigs roots allSigs
+      -- `-E` forces a loader (it must call `main` on load) even if nothing else needs marshalling.
+      let needLoader = args.executable || not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
+      -- Packaging decides how CAF init runs (ADR 0006 / 0021): when a loader is emitted
+      -- (node/browser + needLoader) it calls `$caf_init` AFTER instantiation, so a CAF whose init
+      -- routes through a re-entrant JS foreign reaches the bound instance; with no loader, set it as
+      -- the wasm `start` section (safe — a no-loader build has no JS foreign to re-enter). Then emit
+      -- and dispose the live module (the "emit" half of the link/emit split).
+      let loaderEmitted = args.platform /= Standalone && needLoader
+      bytes <- liftEffect do
+        when (not loaderEmitted) (maybe (pure unit) (B.setStart built.mod) built.cafInit)
+        b <- B.emitBinary built.mod
+        B.dispose built.mod
+        pure b
+      writeBinary appPath bytes
       let mergeForeigns = wasmProvided >>= \(Tuple name wp) -> [ wp, name ]
       info (Fmt.fmt @"Linking runtime + {n} foreign provider(s) with wasm-merge…\n" { n: Array.length wasmProvided })
       execFile (wasmMergeBin binaryenBinDir) ([ appPath, "app", runtimeWasm cliRoot, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
@@ -225,15 +367,11 @@ buildCmd cliRoot binaryenBinDir args = do
           info $ Log.blue (Fmt.fmt @"✓ Wrote {file}" { file: watPath })
           pure watPath
         else do
-          -- emit the JS loader when there are JS foreign imports to satisfy, or when any entry export
-          -- needs marshalling (a non-`i32`/`f64` param/result); ADR 0014.
-          let exportSigs = rootExportSigs roots allSigs
-          -- `-E` forces a loader (it must call `main` on load) even if nothing else needs marshalling.
-          let needLoader = args.executable || not (Array.null jsProvided) || Array.any exportNeedsLoader (Object.values exportSigs)
-          -- `standalone` is a self-contained wasm with no loader; node/browser emit one when needed.
-          -- node and browser share the same loader except for how it loads the wasm bytes (Node reads
-          -- the file; the browser `fetch`es it). Browser emits a single wasm — chunking, which
-          -- `--no-chunks` opts out of, is not implemented yet.
+          -- emit the JS loader (it satisfies JS foreigns, marshals non-scalar exports, and runs
+          -- `$caf_init` + `main`) when needed — ADR 0014. `standalone` is a self-contained wasm with
+          -- no loader; node/browser emit one when needed. node and browser share the same loader
+          -- except for how it loads the wasm bytes (Node reads the file; the browser `fetch`es it).
+          -- Browser emits a single wasm — chunking, which `--no-chunks` opts out of, is not yet done.
           let emit browser = emitLoader cliRoot browser args.executable bundleDir args.input jsProvided allSigs (exportManifestJson exportSigs)
           case args.platform of
             Standalone -> pure unit

@@ -15,7 +15,7 @@ For more information, please consult [the documentation site](https://purs-wasm.
 
 ## Future Enhancements
 
-- [ ] Batch compilation and incremental build
+- [x] Incremental build
 - [ ] WASI support
 - [ ] Monomorphization optimization
 

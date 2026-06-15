@@ -16,7 +16,7 @@ const run = (cmd, args) => execFileSync(cmd, args, { stdio: "inherit", cwd: repo
 
 // A DEDICATED output dir (not the shared `output/`, which accumulates the whole workspace): build
 // only purs-wasm + its deps — JS modules with their co-located `foreign.js` FFI.
-const out = join(pkg, ".build");
+const out = join(pkg, "_build");
 const bundle = join(pkg, "bundle", "index.js");
 
 // 1. Compile to the stock JS backend output (modules + their foreign.js FFI files).

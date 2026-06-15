@@ -44,6 +44,7 @@ type BuildOption =
   , noChunks :: Boolean
   , noJsFallback :: Boolean
   , executable :: Boolean
+  , force :: Boolean
   , dumpMir :: Maybe String
   }
 

@@ -17,6 +17,7 @@
 module PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim
   ( buildCtx
   , simplifyModule
+  , summarize
   ) where
 
 import Prelude
@@ -29,6 +30,7 @@ import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (exprSize, key, qkey, references)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.Inline (generalInlineCap)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Semantics (normalize)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx, simplifyExpr)
 import PureScript.CoreFn (Binder(..), Literal(LitObject), Meta(..), ModuleName, Qualified)
@@ -96,6 +98,33 @@ buildCtx modules =
       && intersects i.refs accessorKeys
 
   acceptHelper i = if intersects i.refs candidateKeys then Nothing else Just (Tuple i.key i.rhs)
+
+-- | Prune a finalized dependency module to the subset a *dependent's* optimization context needs
+-- | (ADR 0021, streaming b1). `keepKeys` is the set of binding keys whose *bodies* a dependent may
+-- | still need: the whole-program inline set (`buildCtx.inline` ∪ general inline candidates, computed
+-- | once over the specialized program — so a large single-use cross-module helper such as
+-- | `Control.Monad.ap` that the simplifier inlines to expose a `perform` is preserved) plus the
+-- | effectful / memory-effecting bindings (so impurification still sees a discarded effect, e.g. a
+-- | single-use `modify$specN`). A binding outside `keepKeys` is kept only when it is small, dict
+-- | machinery, or an instance record / constructor. Dropping the rest loses only large multi-use
+-- | *pure* cross-module bodies (never inlined anyway), so dictionary elimination and effect
+-- | preservation are exact — guarded by the cross-module `DictElim` unit test and the `StackSafe` /
+-- | `EffectPrim` (`void`) e2e fixtures.
+summarize :: Set String -> M.Module -> M.Module
+summarize keepKeys m = m { decls = Array.filter keep m.decls }
+  where
+  keep = case _ of
+    M.Rec _ -> true -- recursive instance / dictionary groups (ADR 0008), incl. effectful loops
+    M.NonRec meta ident rhs ->
+      -- a whole-program inline candidate or an effectful binding …
+      Set.member (key m.name ident) keepKeys
+        || isDictCtor meta
+        || exprSize rhs <= generalInlineCap -- a small (size) inline candidate (post-dict-elim alias)
+        || isRecordOrCtor (bodyOf rhs) -- an instance dictionary (record) or a data/dict constructor
+  isRecordOrCtor = case _ of
+    M.Lit (LitObject _) -> true
+    M.Constructor _ _ _ -> true
+    _ -> false
 
 -- | Reduce an expression. `useNbE` selects the reducer: the NbE reducer (`Semantics`,
 -- | ADR 0020) is the default (`true`); set it to `false` to fall back to the legacy

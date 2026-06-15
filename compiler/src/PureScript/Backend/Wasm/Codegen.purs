@@ -54,8 +54,29 @@ import PureScript.Backend.Wasm.Lower.Reps (primRep)
 -- | runtime type group, add every function (`eqref` calling convention; lifted
 -- | code functions take `(ref $Clo, eqref)`), then add an `i32` export wrapper
 -- | per exported function.
-buildModule :: Program -> Effect B.Module
+-- |
+-- | Structured as the three-phase codegen seam — `initCodegen` (substrate + whole-program
+-- | tables) → add each function (`addFunc`) → `finalizeCodegen` (CAF init + export wrappers) —
+-- | so streaming codegen (ADR 0021 b1) can later feed functions module-by-module and discard
+-- | each module's IR, instead of holding the whole `Program` as here.
+buildModule :: Program -> Effect CompiledModule
 buildModule prog = do
+  st <- initCodegen prog
+  traverse_ (addFunc st.ctx) prog.funcs
+  cafInit <- finalizeCodegen st prog
+  pure { mod: st.ctx.mod, foreignModules: foreignModuleNames prog, cafInit }
+
+-- | The accumulating codegen state: the live Binaryen module (in `ctx`) and the CAF plan.
+-- | Set up by `initCodegen`, fed functions via `addFunc ctx`, closed by `finalizeCodegen`.
+type CodegenState = { ctx :: Ctx, cplan :: CafPlan }
+
+-- | Phase 1 of the codegen seam: create the module, build the value/data type substrate, and
+-- | install the whole-program tables and globals (function sigs, foreign imports, the
+-- | `internStr` resolver, nullary/CAF globals, the test counter). Everything a function body
+-- | needs to exist before it is added. (Streaming b1 will derive these from a summary scan;
+-- | here they come from the whole `Program`.)
+initCodegen :: Program -> Effect CodegenState
+initCodegen prog = do
   mod <- B.createModule
   B.setFeaturesGC mod
   rt <- buildRuntimeTypes mod
@@ -69,10 +90,31 @@ buildModule prog = do
   addNullaryGlobals ctx (nullaryTags prog)
   addCafGlobals ctx cplan.globals
   when (needsCounter prog) (addCounterGlobal ctx)
-  traverse_ (addFunc ctx) prog.funcs
-  addCafInit ctx cplan
-  traverse_ (addExportWrapper ctx prog.exportSigs) prog.funcs
-  pure mod
+  pure { ctx, cplan }
+
+-- | Phase 3 of the codegen seam (after every function is added): synthesize the CAF-init
+-- | function and the host export wrappers. Returns the CAF-init function for packaging to wire
+-- | (loader call vs wasm `start`, ADR 0006).
+finalizeCodegen :: CodegenState -> Program -> Effect (Maybe B.Function)
+finalizeCodegen st prog = do
+  cafInit <- addCafInit st.ctx st.cplan
+  traverse_ (addExportWrapper st.ctx prog.exportSigs) prog.funcs
+  pure cafInit
+
+-- | The result of building a Binaryen module from the IR, with what packaging needs after:
+-- | the distinct user `foreign import` module names to resolve (ADR 0014) and the CAF-init
+-- | function (`Nothing` if none), whose run trigger — loader call vs wasm `start` — is a
+-- | packaging decision (ADR 0006 / 0021).
+type CompiledModule =
+  { mod :: B.Module
+  , foreignModules :: Array String
+  , cafInit :: Maybe B.Function
+  }
+
+-- | The distinct source modules of the user foreigns the program calls — what a JS/wasm
+-- | provider must satisfy (excludes the runtime `rt`, which `foreignImports` never collects).
+foreignModuleNames :: Program -> Array String
+foreignModuleNames prog = Array.nub (map _.moduleName (Object.values (foreignImports prog)))
 
 -- | A nullary constructor (`RMkData tag []`) is a constant `$Data` value — just its
 -- | tag, no fields — fully determined by its tag, so every construction of it is
@@ -262,19 +304,22 @@ defaultConst ctx = case _ of
   _ -> B.i32Const ctx.mod 0 >>= \z -> B.structNew ctx.mod ctx.rt.intHt [ z ]
 
 -- | Synthesize the init function that computes each CAF once, in dependency order,
--- | storing it in its global, and register it as the module `start` so it runs at
--- | instantiation before any export. The CAF still has its own (arity-0) function —
--- | the init simply calls it once; every other reference reads the global. No-op when
--- | nothing is globalized.
-addCafInit :: Ctx -> CafPlan -> Effect Unit
+-- | storing it in its global, and **export** it as `caf_init`. The CAF still has its own
+-- | (arity-0) function — the init simply calls it once; every other reference reads the
+-- | global. Returns the function so packaging can decide *how* it runs: the loader calls it
+-- | after instantiation (so a CAF init routing through a re-entrant JS foreign can reach the
+-- | bound instance), or — with no loader — it is the wasm `start` section (ADR 0006 / 0021).
+-- | `Nothing` when nothing is globalized.
+addCafInit :: Ctx -> CafPlan -> Effect (Maybe B.Function)
 addCafInit ctx cplan
-  | Array.null cplan.initOrder = pure unit
+  | Array.null cplan.initOrder = pure Nothing
   | otherwise =
       do
         stmts <- traverse setOne cplan.initOrder
         body <- B.block ctx.mod stmts B.none
         initFn <- B.addFunction ctx.mod cafInitName (B.createType []) B.none [] body
-        B.setStart ctx.mod initFn
+        _ <- B.addFunctionExport ctx.mod cafInitName "caf_init"
+        pure (Just initFn)
       where
       setOne name = do
         let rep = fromMaybe Boxed (Map.lookup name cplan.globals)

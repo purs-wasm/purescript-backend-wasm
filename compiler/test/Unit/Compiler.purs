@@ -13,10 +13,16 @@ import Test.Unit.PureScript.Backend.Wasm.Lower as Lower
 import Test.Unit.PureScript.Backend.Wasm.Lower.Match as Match
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.LambdaLift as LambdaLift
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.FreeVars as FreeVars
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Cache as Cache
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify as Simplify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize as Specialize
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim as DictElim
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify as Impurify
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize as Serialize
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash as SerializeHash
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile as SerializePmifile
+import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile as SerializePmofile
 import Test.Unit.PureScript.Backend.Wasm.SourceForeigns as SourceForeigns
 import Test.Unit.PureScript.Backend.Wasm.Ulib.Interface as UlibInterface
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Transl as Transl
@@ -35,8 +41,14 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   LambdaLift.spec
   Simplify.spec
   Specialize.spec
+  DictElim.spec
   Impurify.spec
   Purity.spec
+  Serialize.spec
+  SerializeHash.spec
+  SerializePmifile.spec
+  SerializePmofile.spec
   SourceForeigns.spec
   UlibInterface.spec
   FreeVars.spec
+  Cache.spec

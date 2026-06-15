@@ -121,8 +121,12 @@ headImpure ctx = case _ of
   Qualified Nothing _ -> true -- a local being performed is opaque
 
 -- | The least-fixpoint set of effectful (impure-running) top-level binding keys.
-impureKeys :: Set String -> Array M.Module -> Set String
-impureKeys eff modules = fixpoint Set.empty
+-- | `seed` carries impure keys already known from finalized dependencies (ADR 0021 b1): a
+-- | dependency may be pruned to a summary that drops its body, but its key stays in the seed so a
+-- | dependent's propagation still treats a reference to it as effectful. Pass `Set.empty` for a
+-- | from-scratch whole-program run.
+impureKeys :: Set String -> Set String -> Array M.Module -> Set String
+impureKeys eff seed modules = fixpoint seed
   where
   binds :: Array (Tuple String M.Expr)
   binds = modules >>= \m -> m.decls >>= bindEntries m.name
@@ -145,8 +149,8 @@ impureKeys eff modules = fixpoint Set.empty
 -- | because the write must run, in place. Distinct from `impureKeys` (Effect performing, ADR
 -- | 0015): a write happens on plain evaluation, never via a `Perform`, so this analysis ignores
 -- | `Effect` entirely (a `Perform`'s operand is still scanned, in case it writes).
-memEffKeys :: Array M.Module -> Set String
-memEffKeys modules = fixpoint Set.empty
+memEffKeys :: Set String -> Array M.Module -> Set String
+memEffKeys seed modules = fixpoint seed
   where
   binds = modules >>= \m -> m.decls >>= bindEntries m.name
   fixpoint memEff =

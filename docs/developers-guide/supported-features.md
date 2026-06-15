@@ -131,9 +131,10 @@ runtime copy-and-set (ADR 0023).
 `record-studio`-style helpers. Adding a field whose name is **not** a syntactic record label
 anywhere — so it has no compile-time id — is supported via runtime label interning
 (`$rt.internDynamic`, the [ADR 0001](../design-decisions/0001-wasm-gc-substrate-and-value-representation.md)
-addendum); `Test.E2E.Cli.RecordMeta` covers it. One load-time caveat applies when a **top-level
-value** is built through a re-entrant JS foreign — see
-[Performance and Limitations § a top-level value computed through a re-entrant JS foreign](../getting-started/performance-and-limitations.md#a-top-level-value-computed-through-a-re-entrant-js-foreign-traps-at-load).
+addendum); `Test.E2E.Cli.RecordMeta` covers it. Library helpers that route through a higher-order
+JS foreign whose callbacks carry non-scalar values (e.g. `record-studio`'s `keys`/`shrink` via
+`unfoldrArrayImpl`) are **not** yet usable — see
+[Performance and Limitations § higher-order foreigns whose callbacks carry non-scalar values](../getting-started/performance-and-limitations.md#higher-order-foreigns-whose-callbacks-carry-non-scalar-values).
 
 ## The Effect monad
 

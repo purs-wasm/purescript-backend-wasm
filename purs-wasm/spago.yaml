@@ -28,6 +28,7 @@ package:
     - prelude
     - run
     - strings
+    - stringutils
     - transformers
     - typelevel-prelude
     - unsafe-coerce

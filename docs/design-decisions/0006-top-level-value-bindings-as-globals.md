@@ -95,6 +95,15 @@ globalized; recursive non-function values remain unsupported.
   > an exported `$caf_init` right after instantiation (standalone, which has no JS foreigns, keeps the
   > `start` section). That needs the link/emit split introduced with the streaming-compilation work
   > ([ADR 0021](0021-streaming-dependency-ordered-wpo.md)), so it rides along with it.
+  >
+  > **Resolved (2026-06-14):** done, exactly as the planned fix. `linkModule` (ADR 0021) returns the
+  > live module + its `caf_init` function; the CLI's packaging step **sets the wasm `start` section
+  > only when no loader is emitted**, otherwise `caf_init` is exported and the **loader runs it after
+  > instantiation** (`inst.exports.caf_init?.()`). CAFs stay eager-once globals (this decision
+  > unchanged). A CAF whose init re-enters wasm to marshal a _supported_ (scalar / array / string /
+  > record) value now works — regression `Test.E2E.Cli.CafForeign`. (A higher-order foreign whose
+  > callbacks carry non-scalar values, e.g. `unfoldrArrayImpl` behind `record-studio`, is a _separate_
+  > marshalling limitation, ADR 0014 — not this.)
 - Composes with ADR 0004: internal globals may hold boxed `eqref`; the
   host-facing export is an unboxed `i32` global set during init.
 - Bounds the cyclic-value problem cleanly: the globalization pass handles only

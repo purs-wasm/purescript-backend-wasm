@@ -74,6 +74,57 @@ elimination + inlining), impurify (the `Effect` rewrite), and simplify again; fi
 **second** whole-program specialization (ADR 0027, to catch the `where`-worker idiom that
 inlining exposes) and a β/reduce-only simplify. The output is still MIR. See [Optimizations](./optimizations.md) for the individual transformations.
 
+### The incremental cache: `.pmi` / `.pmo` files
+
+The optimized MIR of stage 3 is the unit the **incremental build** caches (ADR 0032 phase 4
+/ ADR 0034). It is **on by default**; `-f` / `--force` ignores the existing cache and rebuilds
+from scratch (refreshing it), and `--no-opt` (no optimized MIR to cache) takes the
+whole-program path. Each module's optimized output is a pure function of `(its corefn, its
+dependency summaries)` (ADR 0032), so an unchanged module can be reused instead of re-run
+through the ~2 s middle-end. Per module, in the build work directory, the cache holds two
+files (after OCaml's `.cmi` / `.cmo`):
+
+```text
+output-wasm/_build/<Qualified.Module.Name>.pmi   the interface: cache key + source hash + deps + summary
+output-wasm/_build/<Qualified.Module.Name>.pmo   the object: the finalized MIR fed to codegen
+```
+
+The split lets a warm build skip **decode and translate**, not just optimize:
+
+- **`.pmi` (interface, `MiddleEnd.Serialize.Pmifile`)** — small, always read: the **cache key**
+  (source hash ⊕ the hashes of the dependency summaries consumed), the module's **source hash**
+  (for the decode-skip pre-pass), its precise **dependency list** (so the graph/key need no
+  re-translation), and its **summary** (the pruned MIR dependents optimize against, ADR 0021).
+- **`.pmo` (object, `MiddleEnd.Serialize.Pmofile`)** — the **finalized MIR**, loaded only to feed
+  codegen, never to decide a hit.
+
+A build then (`PursWasm.CLI.Build` → `MiddleEnd.optimizeIncremental`):
+
+1. reads every reachable module's corefn **source, hash, imports and foreign names cheaply**
+   (no Argonaut decode), and loads the `.pmi` + `.pmo` pair;
+2. runs a **coarse pre-pass** — a module whose source *and* every transitive dependency's source
+   are unchanged is a guaranteed hit, so it is not decoded at all;
+3. decodes only the remaining modules and runs them through the dependency-ordered optimizer; a
+   per-module key still decides precise reuse, and the corefn import graph orders everything
+   without translating. A hit reuses `.pmi`/`.pmo` and skips decode / translate / lambda-lift /
+   optimize entirely.
+
+Both files are **header (magic + version) + body**. The body is encoded by `MiddleEnd.Serialize`
+(over the byte writer `MiddleEnd.Serialize.Bytes`) — **not** Argonaut-generic JSON (measured ≈ the
+corefn decode cost, too slow to beat re-optimizing) but a compact *tagged tree*: a one-byte tag
+per node then its fields in declaration order, mirroring `MiddleEnd.IR`; `Int` is zigzag
+[LEB128](https://en.wikipedia.org/wiki/LEB128), `Number` 8-byte little-endian IEEE-754, `String` a
+length-prefixed UTF-8 blob. (`.pmi`/`.pmo` over `.mir`: `.mir` collides with Rust's MIR dumps.)
+`Serialize.encode` / `decode` round-trip the body exactly (unit-tested over every node and leaf
+edge case); the version covers both files, so a stale or corrupt cache fails to decode and is
+treated as a **safe miss that recomputes**, never a wrong tree.
+
+The acceptance bar is **build determinism + no benchmark regression** (not byte-identity — there
+is no basis for treating one build's bytes as canonical), though in practice a fully-warm
+`metatheory` build stays byte-identical to a cold and a non-cached one. The human-readable view of
+a module's optimized MIR is `--dump-mir <Module>` (`MiddleEnd.Print`), which on a cached build is
+pretty-printed straight from the target's `.pmo`.
+
 ## 4. Lower to the backend IR
 
 `Lower.lowerModules` lowers MIR to the **backend IR** (an ANF-ish tree the code
@@ -136,6 +187,7 @@ the CLI (`purs-wasm`, `PursWasm.CLI.Main`):
 | 1. decode | `PureScript.CoreFn.FromJSON`, `PureScript.ExternsFile` (+ its CBOR decoder) |
 | 2. translate | `MiddleEnd.Transl` |
 | 3. optimize | `MiddleEnd` (`optimizeProgram`) and `MiddleEnd.Optimize.*` |
+| incremental cache | `MiddleEnd.optimizeIncremental`; codec in `MiddleEnd.Serialize{,.Bytes,.Hash,.Pmifile,.Pmofile}`; driver in `PursWasm.CLI.Build` |
 | 4. lower | `Lower` (`lowerModules`), incl. `Lower.Unbox` (representation analysis) |
 | 5. codegen | `Codegen` (`buildModule`), `Codegen.RuntimeTypes` |
 | pipeline glue | `Compiler` (`parseModule` / `compileModules`) |
