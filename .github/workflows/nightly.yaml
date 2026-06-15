@@ -58,6 +58,11 @@ jobs:
       - name: Install deps
         run: pnpm install
 
+      # `runtime/runtime.wasm` is a build artifact (assembled from runtime.wat, git-ignored), and
+      # `prepack` copies it into the package — so it must be built before publishing.
+      - name: Build runtime
+        run: pnpm -F ./compiler run build:runtime
+
       # Smoke test before publishing, in case something reached `main` without a green CI run.
       - name: Test
         run: pnpm -F ./purs-wasm run test
