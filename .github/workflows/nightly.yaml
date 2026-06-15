@@ -1,0 +1,89 @@
+name: Nightly
+
+# Publish a nightly build of the `purs-wasm` npm package on every (non-docs) push to `main`, so
+# `npm install purs-wasm@nightly` always tracks the latest main. The stable `latest` dist-tag is
+# never touched — nightlies go out under the `nightly` tag with a unique pre-release version.
+#
+# Prerequisites (repository secrets):
+#   - NPM_TOKEN          an npm automation token with publish rights to `purs-wasm`
+#   - CACHIX_AUTH_TOKEN  (already used by CI) for the Nix build cache
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One nightly at a time; do not cancel an in-flight publish.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  # Skip the (expensive, publishing) build for docs-only pushes — a nightly would be identical.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!README.md'
+              - '!docs/**'
+
+  nightly:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      # Same Nix toolchain as CI — `nix develop` is the single source of truth (flake.nix/.lock),
+      # and `prepack` (bundle + runtime + precompiled ulib) needs spago / purs / esbuild / binaryen.
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - uses: cachix/cachix-action@v17
+        with:
+          name: purs-wasm
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+      - uses: nicknovitski/nix-develop@v1
+
+      - name: Install deps
+        run: pnpm install
+
+      # Smoke test before publishing, in case something reached `main` without a green CI run.
+      - name: Test
+        run: pnpm -F ./purs-wasm run test
+
+      # `<next-minor>-nightly.<yyyymmdd>.<short-sha>`: ahead of the last stable, below the next
+      # release. The short SHA makes it unique per commit (so same-day pushes don't collide); the
+      # `nightly` dist-tag always points at the most recently published one regardless of ordering.
+      - name: Compute nightly version
+        id: ver
+        run: |
+          base=$(node -p "require('./purs-wasm/package.json').version")
+          major=$(echo "$base" | cut -d. -f1)
+          minor=$(echo "$base" | cut -d. -f2)
+          next="${major}.$((minor + 1)).0"
+          version="${next}-nightly.$(date -u +%Y%m%d).${GITHUB_SHA::7}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "nightly version: $version"
+
+      # Bump package.json + regenerate Version.js (the `version` lifecycle script), without a git
+      # commit/tag — the change lives only in this CI workspace.
+      - name: Set version
+        working-directory: purs-wasm
+        run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version
+
+      # `prepack` assembles bundle/ + runtime/ + lib/ into the package; `--tag nightly` keeps the
+      # stable `latest` tag in place.
+      - name: Publish nightly
+        working-directory: purs-wasm
+        run: npm publish --tag nightly --access public
