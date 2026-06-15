@@ -8,6 +8,7 @@ module PursWasm.CLI.Build
 
 import Prelude
 
+import Ansi.Codes as Ansi
 import Binaryen as B
 import Data.Array as Array
 import Data.Either (Either(..), either, hush)
@@ -19,15 +20,16 @@ import Data.Number.Format (fixed, toStringWith)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.String as Str
+import Data.String.Utils (padStart)
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
 import Partial.Unsafe (unsafeCrashWith)
-import PureScript.Backend.Wasm.Compiler (linkModule, linkModuleIncremental, mirTrace, parseModule, printMir)
+import PureScript.Backend.Wasm.Compiler (effectfulForeigns, finishLink, linkModule, mirTrace, parseModule, printMir)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
-import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache)
+import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache, optimizeIncrementalM)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
@@ -38,10 +40,10 @@ import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
 import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
-import PursWasm.CLI.Lib (resolveLibPath)
 import PursWasm.CLI.Effect.Log (br)
 import PursWasm.CLI.Effect.Log as Log
 import PursWasm.CLI.Externs (readExterns)
+import PursWasm.CLI.Lib (resolveLibPath)
 import PursWasm.CLI.Module (entryRoot, printModname)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
 import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, resolveModuleSet, ulibManifestFile)
@@ -55,11 +57,16 @@ import Type.Row (type (+))
 foreign import corefnImportsImpl :: String -> Array String
 
 -- | The bare foreign-import names a `corefn.json` declares, extracted cheaply (no full decode), so
--- | the incremental (`--cache`) path can resolve foreign signatures without decoding a cache hit.
+-- | the incremental path can resolve foreign signatures without decoding a cache hit.
 foreign import corefnForeignNamesImpl :: String -> Array String
+
+-- | A transient one-line progress indicator (overwritten in place on a TTY); `progressEnd` finishes
+-- | the line. Bypasses the `LOG` effect because it is a live UI element, not a recorded message.
 
 -- | A monotonic clock in milliseconds, for the elapsed-time report.
 foreign import nowMsImpl :: Effect Number
+
+foreign import stdoutIsTTY :: Boolean
 
 -- | A byte count as a human-readable size (`B` / `KB` / `MB`).
 humanSize :: Int -> String
@@ -138,7 +145,7 @@ buildCmd cliRoot binaryenBinDir args = do
         , total: Array.length allMods
         , extra: if Array.null injected then "" else Fmt.fmt @" (+{k} ulib internal)" { k: Array.length injected }
         }
-    ) *> br
+    )
   -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
   -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
   -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
@@ -205,7 +212,6 @@ buildCmd cliRoot binaryenBinDir args = do
   -- `runtime.wasm` + foreign providers with `wasm-merge` into one self-contained wasm.
   appPath <- joinPath [ bundleDir, "app.wasm" ]
   wasmPath <- joinPath [ bundleDir, "index.wasm" ]
-  info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
   linkResult <-
     if useCache then do
       -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
@@ -235,6 +241,7 @@ buildCmd cliRoot binaryenBinDir args = do
           in
             if Set.size s' == Set.size s then s else shrink s'
         skippable = shrink (Set.filter ownUnchanged (Set.fromFoldable (map _.name srcInfos)))
+      info (Fmt.fmt @"Compiling {count} module(s) ({cached} cached)…" { count: Array.length srcInfos, cached: Set.size skippable })
       -- Decode (and version-check) only the modules that are not guaranteed hits.
       decoded <- map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i ->
         if Set.member i.name skippable then pure Nothing
@@ -254,9 +261,35 @@ buildCmd cliRoot binaryenBinDir args = do
               Just m -> \_ -> liftModule m
               Nothing -> \_ -> unsafeCrashWith ("internal: cache hit forced lift for " <> i.name)
           }
-      liftEffect (linkModuleIncremental opts roots inputs foreignNames externs allSigs)
+      -- Drive the dependency-ordered optimizer here (not inside `Compiler`), so each module's
+      -- progress can be reported live (ADR 0034). A cache hit advances the counter quietly; a miss
+      -- names the module it is compiling. The optimizer's per-module work is forced strictly per
+      -- step, so the counter keeps pace with the actual compilation.
+      let eff = effectfulForeigns allSigs
+      optimized <- optimizeIncrementalM
+        ( \p ->
+            if p.hit then do
+              Log.debug $ Fmt.fmt @"{name} is already optmized. Skip." { name: p.name }
+            else do
+              when stdoutIsTTY do
+                Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
+                Log.info $ Ansi.escapeCodeToString (Ansi.EraseLine Ansi.Entire)
+                Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
+              Log.info $ Log.cyan $ Fmt.fmt @" >  [{i} of {n}] Compling {name}"
+                { i: padStart (Str.length $ show p.total) (show p.index)
+                , n: p.total
+                , name: p.name
+                }
+        )
+        eff.names
+        eff.arities
+        inputs
+      -- liftEffect progressEndImpl
+      br *> info (Log.blue "Linking (lower + codegen)…")
+      liftEffect (finishLink opts roots allSigs foreignNames externs optimized.modules optimized.writes)
     else do
       -- Cold / `--no-opt` / `--dump-mir`: decode every module (no decode-free reuse).
+      info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
       decodedModules <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
         Left err -> logAndThrow (i.name <> ": " <> err)
         Right m -> pure (Just m)

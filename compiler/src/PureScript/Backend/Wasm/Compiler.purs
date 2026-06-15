@@ -6,7 +6,8 @@ module PureScript.Backend.Wasm.Compiler
   , CompiledModule
   , parseModule
   , linkModule
-  , linkModuleIncremental
+  , finishLink
+  , effectfulForeigns
   , compileModules
   , compileModulesText
   , mirTrace
@@ -21,6 +22,7 @@ import Data.Argonaut.Parser (jsonParser)
 import Data.Array as Array
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
+import Data.Map (Map)
 import Data.Maybe (Maybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
@@ -32,7 +34,7 @@ import PureScript.Backend.Wasm.Codegen (buildModule)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules)
-import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, IncInput, noCache, optimizeIncremental, optimizeProgramCached, optimizeProgramTrace)
+import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
 import PureScript.CoreFn (Module, ModuleName)
@@ -105,25 +107,14 @@ linkModule opts roots modules externs foreignSigs' cache =
   effArities = effectfulForeignAritiesFromSigs foreignSigs'
   optimized = optimizeProgramCached opts.optimizeMir effSet effArities cache reachable
 
--- | Like `linkModule`, but **decode-free** for cache hits (ADR 0034): it takes lazy per-module
--- | inputs (whose `lift` decodes + translates only on a miss) instead of fully-decoded modules,
--- | and the qualified foreign-name set computed by the caller (which has the corefn but does not
--- | decode hits). The caller has already pruned to the reachable set. Used for `--cache` builds;
--- | `linkModule` remains the whole-program (cold / `--no-opt`) path.
-linkModuleIncremental
-  :: CompileOptions
-  -> Array ModuleName
-  -> Array IncInput
-  -> Set String
-  -> Array ExternsFile
-  -> Object ForeignSig
-  -> Effect (Either String CompiledModule)
-linkModuleIncremental opts roots inputs foreignNames externs foreignSigs' =
-  finishLink opts roots foreignSigs' foreignNames externs optimized.modules optimized.writes
-  where
-  effSet = Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
-  effArities = effectfulForeignAritiesFromSigs foreignSigs'
-  optimized = optimizeIncremental effSet effArities inputs
+-- | The effectful-foreign set and arities (intrinsics ∪ those the signatures declare) that the
+-- | optimizer must preserve `Perform`s for (ADR 0015) — exposed so the CLI can drive the per-module
+-- | incremental loop (`MiddleEnd.optimizeIncrementalM`) itself, for live progress, then `finishLink`.
+effectfulForeigns :: Object ForeignSig -> { names :: Set String, arities :: Map String Int }
+effectfulForeigns foreignSigs' =
+  { names: Set.union effectfulForeignNames (effectfulForeignNamesFromSigs foreignSigs')
+  , arities: effectfulForeignAritiesFromSigs foreignSigs'
+  }
 
 -- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
 -- | module, and package it with the cache misses to persist. `foreignNames` is the qualified

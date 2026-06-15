@@ -14,6 +14,7 @@ module PureScript.Backend.Wasm.MiddleEnd
   ( optimizeProgram
   , optimizeProgramCached
   , optimizeIncremental
+  , optimizeIncrementalM
   , optimizeProgramTrace
   , optimizeModule
   , liftModule
@@ -27,7 +28,10 @@ module PureScript.Backend.Wasm.MiddleEnd
 import Prelude
 
 import Data.Array as Array
+import Data.Foldable (foldM)
+import Data.Identity (Identity)
 import Data.Map (Map)
+import Data.Newtype (unwrap)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
@@ -146,30 +150,56 @@ type IncInput =
 -- | decode (a coarse transitive source-unchanged pre-pass) and supplies `lift` only for those.
 optimizeIncremental :: Set String -> Map String Int -> Array IncInput -> { modules :: Array M.Module, writes :: Array CacheWrite }
 optimizeIncremental eff arities inputs =
-  { modules: result.finalized, writes: result.writes }
+  unwrap (optimizeIncrementalM (\_ -> pure unit :: Identity Unit) eff arities inputs)
+
+-- | `optimizeIncremental` over an arbitrary monad, with a per-module progress hook (called once per
+-- | module, in dependency order, with its 1-based index, the total, its name, and whether it was a
+-- | cache hit) — so the CLI can report live progress (a stage the pure loop could not). The hook
+-- | runs *before* the module's work, and the work is forced strictly per step (PureScript is strict),
+-- | so the report stays in step with the actual compilation. `optimizeIncremental` is this with a
+-- | no-op hook in `Identity`.
+optimizeIncrementalM
+  :: forall m
+   . Monad m
+  => ({ index :: Int, total :: Int, name :: String, hit :: Boolean } -> m Unit)
+  -> Set String
+  -> Map String Int
+  -> Array IncInput
+  -> m { modules :: Array M.Module, writes :: Array CacheWrite }
+optimizeIncrementalM onModule eff arities inputs = do
+  result <- foldM step initial ordered
+  pure { modules: result.finalized, writes: result.writes }
   where
   names = Set.fromFoldable (map _.name inputs)
   ordered = topoImports inputs
+  total = Array.length ordered
   -- A `case` (not `maybe`): the lift fallback must stay unforced for a cached module, since
   -- PureScript is strict and `maybe (i.lift unit) …` would evaluate the thunk eagerly — defeating
   -- the whole decode-free goal (and crashing the test's hit-only `lift`).
   viewOf i = case i.cached of
     Just c -> c.summary
     Nothing -> i.lift unit
-  programView = map viewOf inputs
-  summaryInlineKeys = Set.fromFoldable (Map.keys (buildContext eff Set.empty Set.empty programView).inline)
+  summaryInlineKeys = Set.fromFoldable (Map.keys (buildContext eff Set.empty Set.empty (map viewOf inputs)).inline)
 
   depHashes :: Array String -> Map String String -> Array String
   depHashes deps sh = Array.mapMaybe (\d -> Map.lookup d sh) deps
 
-  result = Array.foldl step
-    { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, summaryHashes: Map.empty, writes: [] }
-    ordered
+  initial = { idx: 0, finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, summaryHashes: Map.empty, writes: [] }
 
-  step acc i = case i.cached of
-    Just c | cacheKey i.sourceHash (depHashes c.deps acc.summaryHashes) == c.key ->
+  step acc i = do
+    let
+      idx = acc.idx + 1
+      hit = case i.cached of
+        Just c -> cacheKey i.sourceHash (depHashes c.deps acc.summaryHashes) == c.key
+        Nothing -> false
+    onModule { index: idx, total, name: i.name, hit }
+    pure (apply' acc i hit idx)
+
+  apply' acc i hit idx = case i.cached of
+    Just c | hit ->
       acc
-        { finalized = Array.snoc acc.finalized c.finalMod
+        { idx = idx
+        , finalized = Array.snoc acc.finalized c.finalMod
         , summaries = Array.snoc acc.summaries c.summary
         , accCtx = mergeAccum acc.accCtx (moduleContribs c.summary)
         , impure = Purity.impureKeys eff acc.impure [ c.summary ]
@@ -187,7 +217,8 @@ optimizeIncremental eff arities inputs =
         key = cacheKey i.sourceHash (depHashes deps acc.summaryHashes)
       in
         acc
-          { finalized = Array.snoc acc.finalized finalMod
+          { idx = idx
+          , finalized = Array.snoc acc.finalized finalMod
           , summaries = Array.snoc acc.summaries summary
           , accCtx = mergeAccum acc.accCtx (moduleContribs summary)
           , impure = r.impure

@@ -272,6 +272,7 @@
             "prelude",
             "run",
             "strings",
+            "stringutils",
             "transformers",
             "typelevel-prelude",
             "unsafe-coerce"
@@ -2128,6 +2129,20 @@
         "tailrec",
         "tuples",
         "unfoldable",
+        "unsafe-coerce"
+      ]
+    },
+    "stringutils": {
+      "type": "registry",
+      "version": "0.0.13",
+      "integrity": "sha256-dWtlJqMC2RK9jNupbLLOmZJYWejRk+cGqgs1In76QJk=",
+      "dependencies": [
+        "arrays",
+        "functions",
+        "integers",
+        "maybe",
+        "prelude",
+        "strings",
         "unsafe-coerce"
       ]
     },
