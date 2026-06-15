@@ -13,6 +13,7 @@ import Prelude
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
+import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn (Binder(..), Literal(..), Qualified(..))
@@ -22,16 +23,19 @@ import PureScript.CoreFn (Binder(..), Literal(..), Qualified(..))
 -- | Order is first-appearance, deduplicated — it indexes a closure's captures, so
 -- | it must be deterministic.
 freeVars :: Array String -> M.Expr -> Array String
-freeVars bound = Array.nub <<< goExpr bound
+-- The in-scope set is threaded as a `Set` (not an `Array`): membership and extension
+-- happen at every node and every binder, so an `Array` `elem`/`<>` makes the walk
+-- O(nodes × scope-size) — quadratic on the deeply-nested bodies large modules produce.
+freeVars bound = Array.nub <<< goExpr (Set.fromFoldable bound)
   where
   goExpr bnd = case _ of
-    M.Var (Qualified Nothing x) -> if Array.elem x bnd then [] else [ x ]
+    M.Var (Qualified Nothing x) -> if Set.member x bnd then [] else [ x ]
     M.Var _ -> []
     M.Lit lit -> goLit bnd lit
     M.Constructor _ _ _ -> []
     M.Accessor _ e -> goExpr bnd e
     M.Update e _ updates -> goExpr bnd e <> (updates >>= \(Tuple _ v) -> goExpr bnd v)
-    M.Abs params e -> goExpr (bnd <> params) e
+    M.Abs params e -> goExpr (Set.union bnd (Set.fromFoldable params)) e
     M.App head args -> goExpr bnd head <> (args >>= goExpr bnd)
     M.Perform e -> goExpr bnd e
     M.Case scruts alts -> (scruts >>= goExpr bnd) <> (alts >>= goAlt bnd)
@@ -40,7 +44,7 @@ freeVars bound = Array.nub <<< goExpr bound
       -- right-hand sides and the body (exact for recursive `let`, a safe
       -- over-approximation otherwise).
       let
-        bnd' = bnd <> (binds >>= bindNames)
+        bnd' = Set.union bnd (Set.fromFoldable (binds >>= bindNames))
       in
         (binds >>= bindExprs >>= goExpr bnd') <> goExpr bnd' body
   goLit bnd = case _ of
@@ -49,7 +53,7 @@ freeVars bound = Array.nub <<< goExpr bound
     _ -> []
   goAlt bnd alt =
     let
-      bnd' = bnd <> (alt.binders >>= binderVars)
+      bnd' = Set.union bnd (Set.fromFoldable (alt.binders >>= binderVars))
     in
       case alt.result of
         Right e -> goExpr bnd' e

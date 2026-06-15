@@ -29,7 +29,9 @@ import Prelude
 
 import Binaryen as B
 import Data.Array as Array
-import Data.Foldable (foldr, traverse_)
+import Data.Foldable (foldl, foldr, traverse_)
+import Data.List (List(..), (:))
+import Data.List as List
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
@@ -480,7 +482,10 @@ addExportWrapper ctx exportSigs fn = case fn.export of
 -- | Generate a function body. `Let`s become `local.set` statements sequenced in
 -- | a `block` whose value is the tail (`Return` atom or `Switch`).
 genBody :: Ctx -> AnfExpr -> Effect B.Expression
-genBody ctx = go []
+-- Statements accumulate in a `List`, prepended most-recent-first (O(1) per `Let`) and
+-- reversed once at `seal` — an `Array` accumulator (`snoc`) copies the whole prefix per
+-- binding, i.e. O(n²) on the long `Let` chains a large function's ANF body becomes.
+genBody ctx = go Nil
   where
   go statements = case _ of
     -- A returned atom is coerced to the function's result representation.
@@ -505,23 +510,25 @@ genBody ctx = go []
     Let (Slot index) _ rhs k -> do
       e <- genRhs ctx rhs >>= coerce ctx (rhsRep ctx rhs) (slotRep ctx index)
       stmt <- B.localSet ctx.mod index e
-      go (Array.snoc statements stmt) k
+      go (stmt : statements) k
     LetRec recBinds k -> do
       let groupSlots = map (\(RecBind (Slot s) _ _) -> s) recBinds
       allocs <- traverse (allocRecClosure ctx groupSlots) recBinds
       patches <- traverse (patchRecClosure ctx groupSlots) recBinds
-      go (statements <> allocs <> Array.concat patches) k
+      go (foldl (flip (:)) statements (allocs <> Array.concat patches)) k
     -- A join point (ADR 0022): generate the `producer` as a value-producing block
     -- (its tails yield `rep`, and `return_call` is disabled so it cannot escape the
     -- function), store it into the join slot, then continue the (single) continuation.
     LetJoin (Slot slot) rep producer k -> do
       producerExpr <- genBody (ctx { funcResult = rep, tailPos = false }) producer
       stmt <- B.localSet ctx.mod slot producerExpr
-      go (Array.snoc statements stmt) k
-  -- the body / branch block produces the function's result (a tail position)
+      go (stmt : statements) k
+  -- the body / branch block produces the function's result (a tail position); `statements`
+  -- is most-recent-first, so `value : statements` reversed is emission order with the value last.
   seal statements value =
-    if Array.null statements then pure value
-    else B.block ctx.mod (Array.snoc statements value) (repType ctx ctx.funcResult)
+    case statements of
+      Nil -> pure value
+      _ -> B.block ctx.mod (Array.fromFoldable (List.reverse (value : statements))) (repType ctx ctx.funcResult)
 
 -- | Is this captured atom a forward reference to another member of the same
 -- | `LetRec` group (and thus a slot to back-patch)?
