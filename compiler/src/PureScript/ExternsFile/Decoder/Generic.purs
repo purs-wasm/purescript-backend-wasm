@@ -30,7 +30,7 @@ instance genericDecoderRepConstructor ::
     let
       n = reflectType nproxy
     in
-      case runFn2 readAt 0 fgn >>= asInt "genericDecoderRepConstructor" of
+      case readAt 0 fgn >>= asInt "genericDecoderRepConstructor" of
         Left err -> Left $ AtIndex 0 err
         Right n'
           | n' == n -> Constructor @constr <$>
@@ -45,7 +45,7 @@ else instance genericDecoderRepSum ::
   ) =>
   GenericDecoderRep n (Sum inl inr) where
   genericDecoderRep nproxy _ = Decoder \fgn ->
-    case runFn2 readAt 0 fgn >>= asInt "GenericDecoderRepSum" of
+    case readAt 0 fgn >>= asInt "GenericDecoderRepSum" of
       Left err -> Left $ AtIndex 0 err
       Right n
         | n == reflectType nproxy -> Inl <$> runDecoder (genericDecoderRep nproxy (Proxy @inl)) fgn
@@ -66,7 +66,7 @@ else instance genericDecoderArgumentsArgument ::
     let
       n = reflectType nproxy
     in
-      case runFn2 readAt n fgn of
+      case readAt n fgn of
         Left err -> Left $ AtIndex n err
         Right x -> case runDecoder (decoder @t) x of
           Left err' -> Left $ AtIndex n err'

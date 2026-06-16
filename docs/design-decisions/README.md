@@ -82,6 +82,8 @@ language and are kept out of version control.)
 | 0032 | [Caller-homed specialization for per-module, incremental builds](0032-caller-homed-specialization-for-incremental-builds.md) | Accepted |
 | 0033 | [Shipping `ulib` as precompiled MIR (`.pmo`) artifacts](0033-precompiled-ulib-pmo-artifacts.md) | Proposed |
 | 0034 | [Split the module cache into `.pmi` interface and `.pmo` object](0034-pmi-interface-pmo-object-split.md) | Accepted |
+| 0035 | [Sharing/memoizing the NbE reducer, then reduction-aware inlining](0035-sharing-nbe-reduction-aware-inlining.md) | Proposed |
+| 0036 | [Parameterized join points for decision-tree leaves](0036-join-points-for-decision-tree-leaves.md) | Proposed (de-prioritized — measured duplication ~1.16×, not the `--no-opt` floor) |
 
 ## Scope
 
@@ -98,7 +100,14 @@ runs on wasm. See [`docs/developers-guide/supported-features.md`](../developers-
 Current frontiers, tracked by the records above: streaming / incremental codegen (ADR 0021
 Phase 2 — reachability pruning and dependency-ordered single-pass optimization shipped; the
 **`.pmi`/`.pmo` incremental build cache** — default-on, decode-free for unchanged modules —
-shipped too, ADR 0032 phase 4 / ADR 0034); the reduction-aware inline-or-share selection
-(ADR 0020 — the NbE core is implemented, the reduction-driven decision is not); `wasi` packaging
+shipped too, ADR 0032 phase 4 / ADR 0034); a sharing/memoizing NbE reducer and the reduction-aware
+inline-or-share selection (ADR 0020's NbE core is implemented; ADR 0035 sequences the sharing fix
+that makes the reducer non-exponential — the self-compilation scalability *time* gate — ahead of the
+reduction-driven decision, neither of which has landed); the `--no-opt` self-compilation *space*
+gate — the front-half whole-program memory floor (decode + translate + lambda-lift holding all MIR
+at once, ADR 0009) — addressed by **copy-reduction (landed: translate + lambda-lift are fused
+per module and each module's CoreFn is dropped before the next, so the program is never resident
+as CoreFn *and* MIR at once), with streaming as the future general solution** (decision-tree leaf
+sharing, ADR 0036, was measured to be ~1.16× and is *not* this floor); `wasi` packaging
 and the browser runtime/app split (ADR 0025 — `node` / `browser` / `standalone` packaging and `-E`
 have shipped); precompiled-`ulib` distribution (ADR 0033); and monomorphization.

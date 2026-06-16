@@ -8,7 +8,7 @@ details of its internal design.
   [getting-started](./getting-started/).
 
 - If you are interested in how purs-wasm works internally, [developers-guide](./developers-guide/)
-  is what you are looking for.
+  is what you are looking for. Especially, [A Tour for Hackers](./developers-guide/a-tour-for-hackers.md) is worth reading before sending a PR for the first time.
 
 - For why purs-wasm took its current shape out of the many technical alternatives, read
   [design-decisions](./design-decisions/).

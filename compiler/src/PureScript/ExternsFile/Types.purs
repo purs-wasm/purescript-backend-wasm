@@ -4,7 +4,6 @@ import Prelude
 import Prim hiding (Type, Constraint)
 
 import Data.Foldable (class Foldable)
-import Data.Function.Uncurried (runFn2)
 import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe)
 import Data.Newtype (class Newtype)
@@ -167,9 +166,9 @@ instance showDataTypeArg :: Show DataTypeArg where
 
 instance decodeDataTypeArg :: Decode DataTypeArg where
   decoder = Decoder \fgn -> ado
-    name <- runFn2 readAt 0 fgn >>= runDecoder decoder
-    kind <- runFn2 readAt 1 fgn >>= runDecoder decoder
-    role <- runFn2 readAt 2 fgn >>= runDecoder decoder
+    name <- readAt 0 fgn >>= runDecoder decoder
+    kind <- readAt 1 fgn >>= runDecoder decoder
+    role <- readAt 2 fgn >>= runDecoder decoder
     in DataTypeArg { name, kind, role }
 
 data TypeKind

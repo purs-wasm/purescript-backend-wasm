@@ -21,12 +21,12 @@ module PureScript.Backend.Wasm.MiddleEnd.Serialize
 
 import Prelude
 
+import Control.Monad.Rec.Class (Step(..), tailRecM)
 import Data.Array as Array
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Bifunctor (lmap)
 import Data.Char (fromCharCode, toCharCode)
 import Data.Either (Either(..))
-import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
@@ -61,8 +61,17 @@ fail = throwException <<< error
 
 -- Generic helpers ------------------------------------------------------------
 
+-- | `traverse_ (put w)` would build a deep `*>` chain that overflows the host JS stack in
+-- | (raw, non-trampolined) `Effect` when serializing a large array — a big module's binding
+-- | list or a wide `App`/`Case`. `tailRecM` drives the elements by index, on the heap.
 putArray :: forall a. Writer -> (Writer -> a -> Effect Unit) -> Array a -> Effect Unit
-putArray w put xs = putInt w (Array.length xs) *> traverse_ (put w) xs
+putArray w put xs = do
+  putInt w (Array.length xs)
+  tailRecM go 0
+  where
+  go i = case Array.index xs i of
+    Nothing -> pure (Done unit)
+    Just x -> put w x *> pure (Loop (i + 1))
 
 getArray :: forall a. Reader -> (Reader -> Effect a) -> Effect (Array a)
 getArray r get = do

@@ -60,6 +60,7 @@
             "foldable-traversable",
             "foreign",
             "foreign-object",
+            "free",
             "functions",
             "identity",
             "integers",
@@ -70,6 +71,7 @@
             "node-buffer",
             "prelude",
             "strings",
+            "tailrec",
             "transformers",
             "tuples"
           ]

@@ -1,9 +1,11 @@
 # Contributing
 
 The development workflow for this repository: how changes land on `main`, how commits
-are named, and the checks that guard them. For coding conventions (naming, module
-structure, the `unsafe` rule, tests) see [`CLAUDE.md`](./CLAUDE.md); for design decisions
-see the [ADRs](./docs/design-decisions).
+are named, and the checks that guard them. For the hands-on **development procedures**
+(running the dev CLI, adding an intrinsic, installing a `ulib` library, running the tests,
+benchmarking) see [`docs/developers-guide/development.md`](./docs/developers-guide/development.md);
+for coding conventions (naming, module structure, the `unsafe` rule, tests) see
+[`CLAUDE.md`](./CLAUDE.md); for design decisions see the [ADRs](./docs/design-decisions).
 
 ## Branching and pull requests
 
