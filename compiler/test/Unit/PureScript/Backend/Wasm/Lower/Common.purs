@@ -126,6 +126,10 @@ nullBinder = CF.NullBinder ann
 varBinder :: String -> CF.Binder
 varBinder = CF.VarBinder ann
 
+-- | An as-pattern binder `name@inner`.
+namedBinder :: String -> CF.Binder -> CF.Binder
+namedBinder name inner = CF.NamedBinder ann name inner
+
 -- | An `Int`-literal binder `n` (the pattern shape inside a multi-scrutinee case).
 intLitBinder :: Int -> CF.Binder
 intLitBinder n = CF.LiteralBinder ann (CF.LitInt n)

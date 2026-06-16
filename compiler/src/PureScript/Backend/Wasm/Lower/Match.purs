@@ -380,11 +380,16 @@ litOf = case _ of
   _ -> Nothing
 
 -- | Erase newtype constructors: a newtype carries no runtime tag, so `NT b`
--- | matches transparently as `b` on the same occurrence.
+-- | matches transparently as `b` on the same occurrence. Recurse through an
+-- | as-pattern's inner binder too (`x@(NT b)` → `x@b`): `peelNamed` later strips the
+-- | `NamedBinder` and exposes that inner binder as a column without re-stripping it, so
+-- | a newtype left under a `NamedBinder` here would reach `requireCtor` as an
+-- | unregistered constructor.
 stripNewtype :: C.Binder -> C.Binder
 stripNewtype = case _ of
   C.ConstructorBinder ann _ _ subs
     | ann.meta == Just C.IsNewtype, [ sub ] <- subs -> stripNewtype sub
+  C.NamedBinder ann name b -> C.NamedBinder ann name (stripNewtype b)
   other -> other
 
 litPat :: C.Literal C.Binder -> Lower LitPat

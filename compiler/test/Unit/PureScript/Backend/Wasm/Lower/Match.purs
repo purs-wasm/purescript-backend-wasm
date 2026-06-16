@@ -32,6 +32,7 @@ import Test.Unit.PureScript.Backend.Wasm.Lower.Common
   , litSwitchOf
   , lower
   , lv
+  , namedBinder
   , newtypeBinder
   , nullBinder
   , projFieldIndices
@@ -91,6 +92,29 @@ spec = describe "PureScript.Backend.Wasm.Lower.Match (decision trees)" do
           -- only the `W` switch; the newtype `NT` adds none
           Array.length (switchScrutinees fn.body) `shouldEqual` 1
           projFieldIndices fn.body `shouldEqual` [ 0 ]
+
+  it "erases a newtype constructor wrapped in an as-pattern (x@(NT v))" do
+    -- newtype NT = NT Int ; f w = case w of x@(NT v) -> v
+    -- The as-pattern binds `x` to the scrutinee and the newtype `NT` is erased, so
+    -- `v` is bound to the same occurrence: the whole match is irrefutable, no switch.
+    -- Regression for the `--no-opt` lowering hole where `stripNewtype` skipped past a
+    -- `NamedBinder` and `peelNamed` then exposed the newtype ctor unstripped, so it
+    -- reached `requireCtor` and failed with `UnknownConstructor`.
+    let
+      decls =
+        [ def "f"
+            ( lam "w"
+                ( caseOf (lv "w")
+                    [ binderAlt (namedBinder "x" (newtypeBinder "NT" [ varBinder "v" ])) (lv "v") ]
+                )
+            )
+        ]
+    case lower decls of
+      Left err -> fail (show err)
+      Right prog -> case exported "f" prog of
+        Nothing -> fail "expected an exported function f"
+        Just fn ->
+          Array.length (switchScrutinees fn.body) `shouldEqual` 0
 
   it "compiles an exhaustive constructor match to a Switch with no default" do
     -- data Ty = A | B ; f x = case x of A -> 1 ; B -> 2
