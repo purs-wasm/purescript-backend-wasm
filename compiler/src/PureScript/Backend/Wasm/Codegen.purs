@@ -65,7 +65,7 @@ import PureScript.Backend.Wasm.Lower.Reps (primRep)
 buildModule :: Program -> Effect CompiledModule
 buildModule prog = do
   st <- initCodegen prog
-  traverse_ (addFunc st.ctx) prog.funcs
+  forEachArr_ prog.funcs (addFunc st.ctx)
   cafInit <- finalizeCodegen st prog
   pure { mod: st.ctx.mod, foreignModules: foreignModuleNames prog, cafInit }
 
@@ -101,7 +101,7 @@ initCodegen prog = do
 finalizeCodegen :: CodegenState -> Program -> Effect (Maybe B.Function)
 finalizeCodegen st prog = do
   cafInit <- addCafInit st.ctx st.cplan
-  traverse_ (addExportWrapper st.ctx prog.exportSigs) prog.funcs
+  forEachArr_ prog.funcs (addExportWrapper st.ctx prog.exportSigs)
   pure cafInit
 
 -- | The result of building a Binaryen module from the IR, with what packaging needs after:
@@ -223,13 +223,12 @@ buildDataTypes _ sigs0 = do
   B.typeBuilderSetStructType tb 0 [ { ty: B.i32, mutable: false } ]
   B.typeBuilderSetOpen tb 0
   baseTmp <- B.typeBuilderGetTempHeapType tb 0
-  traverse_
+  forEachArr_ (Array.mapWithIndex Tuple nonEmpty)
     ( \(Tuple i sig) -> do
         B.typeBuilderSetStructType tb (i + 1)
           (Array.cons { ty: B.i32, mutable: false } (map (\rep -> { ty: fieldWasmType rep, mutable: false }) sig))
         B.typeBuilderSetSubType tb (i + 1) baseTmp
     )
-    (Array.mapWithIndex Tuple nonEmpty)
   hts <- B.typeBuilderBuildAndDispose tb (1 + n)
   case Array.uncons hts of
     Just { head: baseHt, tail: structHts } -> do
@@ -271,7 +270,7 @@ addCounterGlobal ctx = do
   B.addGlobal ctx.mod counterGlobalName B.i32 true initE
 
 addNullaryGlobals :: Ctx -> Set Int -> Effect Unit
-addNullaryGlobals ctx tags = traverse_ addOne (Set.toUnfoldable tags :: Array Int)
+addNullaryGlobals ctx tags = forEachArr_ (Set.toUnfoldable tags :: Array Int) addOne
   where
   addOne tag = do
     tagE <- B.i32Const ctx.mod tag
@@ -291,7 +290,7 @@ cafInitName = "$caf_init"
 -- | a throwaway constant the init function overwrites at instantiation; an `eqref`
 -- | global uses a dummy boxed `0` (a GC const expression, like a nullary constructor).
 addCafGlobals :: Ctx -> Map FuncName Rep -> Effect Unit
-addCafGlobals ctx globals = traverse_ addOne (Map.toUnfoldable globals :: Array (Tuple FuncName Rep))
+addCafGlobals ctx globals = forEachArr_ (Map.toUnfoldable globals :: Array (Tuple FuncName Rep)) addOne
   where
   addOne (Tuple name rep) = do
     initE <- defaultConst ctx rep
@@ -371,6 +370,17 @@ addInternStr ctx exportIt labels = do
 
 funcNameStr :: FuncName -> String
 funcNameStr (FuncName n) = n
+
+-- | Stack-safe `traverse_` over an array: the `Data.Foldable` one builds a deeply nested
+-- | `f x0 *> (f x1 *> …)` whose Effect run recurses to the array's length, overflowing the
+-- | host JS stack on whole-program-sized arrays (every function / global). `tailRecM` drives
+-- | it by index on the heap instead.
+forEachArr_ :: forall a. Array a -> (a -> Effect Unit) -> Effect Unit
+forEachArr_ arr f = tailRecM go 0
+  where
+  go i = case Array.index arr i of
+    Nothing -> pure (Done unit)
+    Just x -> f x *> pure (Loop (i + 1))
 
 -- | Add an internal function. Parameters take their declared representation (a
 -- | lifted code function's first parameter is `(ref $Clo)`); `Let`-bound locals
