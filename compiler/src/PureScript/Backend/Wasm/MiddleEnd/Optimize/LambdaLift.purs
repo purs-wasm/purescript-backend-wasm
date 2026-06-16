@@ -31,6 +31,8 @@ import Control.Monad.State (State, gets, modify_, runState)
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Foldable (foldl, for_)
+import Data.Map (Map)
+import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
@@ -122,7 +124,7 @@ liftSelfRecFn modName ident params body = do
     repl = mkApp liftedVar (map localVar frees)
   -- inside the lifted body the self reference becomes the same partial application
   -- (the captures resolve to the leading parameters there), then lift nested locals
-  body' <- liftExpr modName (substVar ident repl body)
+  body' <- liftExpr modName (substMany (Map.singleton ident repl) body)
   let lambda' = M.Abs (frees <> params) body'
   modify_ \s -> s { lifted = Array.snoc s.lifted (M.NonRec Nothing liftedIdent lambda') }
   pure (Tuple ident repl)
@@ -162,47 +164,66 @@ liftMutualRecGroup modName members = do
 -- substitution ---------------------------------------------------------------
 
 applySubs :: Array Sub -> M.Expr -> M.Expr
-applySubs subs e = foldl (\acc (Tuple n r) -> substVar n r acc) e subs
+applySubs subs = substMany (Map.fromFoldable subs)
 
 substBind :: Array Sub -> M.Bind -> M.Bind
 substBind subs = case _ of
   M.NonRec meta i e -> M.NonRec meta i (applySubs subs e)
   M.Rec rs -> M.Rec (map (\r -> r { expr = applySubs subs r.expr }) rs)
 
--- | Replace free occurrences of the local `name` with `repl`, stopping at any
--- | binder that rebinds `name` (capture avoidance). `repl` only references
--- | already-in-scope names, so no further freshening is needed.
-substVar :: String -> M.Expr -> M.Expr -> M.Expr
-substVar name repl = go
+-- | Replace free occurrences of each substituted local with its replacement, in a
+-- | *single* traversal, stopping at any binder that rebinds the name (capture
+-- | avoidance) by dropping it from the scope's map. Each replacement only references
+-- | already-in-scope names, so no freshening is needed — and the replacements never
+-- | introduce another substituted name (the lifted idents are excluded from the
+-- | captured frees), so applying them all at once equals folding them one at a time.
+-- | A per-substitution fold instead re-walked the expression once per lifted group,
+-- | i.e. O(groups × size) on a `let`/`where` with many recursive functions.
+substMany :: Map String M.Expr -> M.Expr -> M.Expr
+substMany = go
   where
-  go = case _ of
-    e@(M.Var (Qualified Nothing n)) -> if n == name then repl else e
-    e@(M.Var _) -> e
-    M.Lit lit -> M.Lit (goLit lit)
-    e@(M.Constructor _ _ _) -> e
-    M.Accessor l e -> M.Accessor l (go e)
-    M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
-    M.Abs ps b -> if Array.elem name ps then M.Abs ps b else M.Abs ps (go b)
-    -- a substituted head may itself be an application; keep `App` flat
-    M.App f a -> mkApp (go f) (map go a)
-    M.Perform e -> M.Perform (go e)
-    M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
-    M.Let binds body ->
-      if Array.elem name (binds >>= boundNames) then M.Let binds body
-      else M.Let (map goBind binds) (go body)
-  goLit = case _ of
-    LitArray es -> LitArray (map go es)
-    LitObject kvs -> LitObject (map (map go) kvs)
+  go subs e
+    | Map.isEmpty subs = e
+    | otherwise = case e of
+        M.Var (Qualified Nothing n) -> case Map.lookup n subs of
+          Just r -> r
+          Nothing -> e
+        M.Var _ -> e
+        M.Lit lit -> M.Lit (goLit subs lit)
+        M.Constructor _ _ _ -> e
+        M.Accessor l x -> M.Accessor l (go subs x)
+        M.Update x cf kvs -> M.Update (go subs x) cf (map (map (go subs)) kvs)
+        M.Abs ps b ->
+          let
+            subs' = dropNames ps subs
+          in
+            if Map.isEmpty subs' then e else M.Abs ps (go subs' b)
+        -- a substituted head may itself be an application; keep `App` flat
+        M.App f a -> mkApp (go subs f) (map (go subs) a)
+        M.Perform x -> M.Perform (go subs x)
+        M.Case ss alts -> M.Case (map (go subs) ss) (map (goAlt subs) alts)
+        M.Let binds body ->
+          let
+            subs' = dropNames (binds >>= boundNames) subs
+          in
+            if Map.isEmpty subs' then e
+            else M.Let (map (goBind subs') binds) (go subs' body)
+  goLit subs = case _ of
+    LitArray es -> LitArray (map (go subs) es)
+    LitObject kvs -> LitObject (map (map (go subs)) kvs)
     other -> other
-  goAlt alt =
-    if Array.elem name (alt.binders >>= binderVars) then alt
-    else alt { result = goResult alt.result }
-  goResult = case _ of
-    Right e -> Right (go e)
-    Left gs -> Left (map (\g -> { guard: go g.guard, expression: go g.expression }) gs)
-  goBind = case _ of
-    M.NonRec meta i e -> M.NonRec meta i (go e)
-    M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
+  goAlt subs alt =
+    let
+      subs' = dropNames (alt.binders >>= binderVars) subs
+    in
+      if Map.isEmpty subs' then alt else alt { result = goResult subs' alt.result }
+  goResult subs = case _ of
+    Right e -> Right (go subs e)
+    Left gs -> Left (map (\g -> { guard: go subs g.guard, expression: go subs g.expression }) gs)
+  goBind subs = case _ of
+    M.NonRec meta i e -> M.NonRec meta i (go subs e)
+    M.Rec rs -> M.Rec (map (\r -> r { expr = go subs r.expr }) rs)
+  dropNames names subs = foldl (flip Map.delete) subs names
 
 -- | Smart application that preserves the MIR invariant that an `App` head is never
 -- | itself an `App`: applying to an existing application extends its argument list.

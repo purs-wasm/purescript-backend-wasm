@@ -61,6 +61,10 @@ letRec2 :: String -> CF.Expr -> String -> CF.Expr -> CF.Expr -> CF.Expr
 letRec2 n1 e1 n2 e2 body =
   CF.Let ann [ CF.Rec [ { ann, ident: n1, expr: e1 }, { ann, ident: n2, expr: e2 } ] ] body
 
+-- | `let name = e in body`, as a single non-recursive `let`.
+letE :: String -> CF.Expr -> CF.Expr -> CF.Expr
+letE name e body = CF.Let ann [ CF.NonRec ann name e ] body
+
 litInt :: Int -> CF.Expr
 litInt n = CF.Literal ann (CF.LitInt n)
 
@@ -125,6 +129,10 @@ nullBinder = CF.NullBinder ann
 
 varBinder :: String -> CF.Binder
 varBinder = CF.VarBinder ann
+
+-- | An as-pattern binder `name@inner`.
+namedBinder :: String -> CF.Binder -> CF.Binder
+namedBinder name inner = CF.NamedBinder ann name inner
 
 -- | An `Int`-literal binder `n` (the pattern shape inside a multi-scrutinee case).
 intLitBinder :: Int -> CF.Binder

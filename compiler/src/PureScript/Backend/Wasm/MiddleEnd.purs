@@ -273,8 +273,11 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
   if dictElim then { modules: result.finalized, trace: result.trace <> snap "after post-inline specialization" result.finalized, writes: result.writes }
   else { modules: lifted, trace: snap "initial (translated + lifted)" lifted, writes: [] }
   where
-  mir = map (\m -> { name: m.name, decls: map translBind m.decls } :: M.Module) modules
-  lifted = map lambdaLiftModule mir
+  -- Translate and lambda-lift each module in one step (`liftModule`) rather than materializing
+  -- the whole translated-but-unlifted `mir` array first: that intermediate is used nowhere else,
+  -- and holding a second full-program MIR copy alongside `lifted` is a real peak-memory cost on a
+  -- whole-program build (the `--no-opt` front half holds every module's MIR at once).
+  lifted = map liftModule modules
 
   -- Map a binding key to its defining module, over the lifted program — the same relation
   -- `topoOrder` uses for dependency ordering, reused here to scope a module's cache key to

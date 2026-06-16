@@ -19,6 +19,7 @@ module PureScript.Backend.Wasm.MiddleEnd.Optimize.Impurify
 
 import Prelude
 
+import Control.Monad.Trampoline (Trampoline, delay, done, runTrampoline)
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Map (Map)
@@ -26,6 +27,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust)
 import Data.Set (Set)
 import Data.Set as Set
+import Data.Traversable (traverse)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (freeVars)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (qkey)
@@ -59,8 +61,8 @@ impurifyProgram :: Map String Int -> Array M.Module -> Array M.Module
 impurifyProgram effArities = map \m -> m { decls = map impurifyBind m.decls }
   where
   impurifyBind = case _ of
-    M.NonRec meta i e -> M.NonRec meta i (go e)
-    M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
+    M.NonRec meta i e -> M.NonRec meta i (runTrampoline (go e))
+    M.Rec rs -> M.Rec (map (\r -> r { expr = runTrampoline (go r.expr) }) rs)
 
   -- The value-arity of an effectful **host** foreign (so a full application is an `Effect`
   -- value). The monad-glue foreigns (`bindE`/`pureE`/`unsafePerformEffect`) are excluded —
@@ -70,66 +72,87 @@ impurifyProgram effArities = map \m -> m { decls = map impurifyBind m.decls }
     Just k | k /= bindEKey, k /= pureEKey, k /= performKey -> Map.lookup k effArities
     _ -> Nothing
 
+  -- Recursion runs through the `Trampoline` monad: each descent into a child is `delay`ed, so
+  -- the rewrite is driven by `runTrampoline`'s heap loop rather than the native call stack —
+  -- compiler-sized modules nest expressions deep enough to otherwise overflow it.
+  goSub :: M.Expr -> Trampoline M.Expr
+  goSub e = join (delay \_ -> go e)
+
+  goArgs :: Array M.Expr -> Trampoline (Array M.Expr)
+  goArgs es = traverse goSub es
+
   -- Rewrite top-down: an applied primitive is recognised at the `App` node; an unapplied
   -- reference is eta-expanded to its lambda form so it never reaches lowering as a bare
   -- foreign. Performed host foreigns are kept (not re-reflected — keeps reflection idempotent
   -- across rounds); host foreigns in value position are reflected to a thunk.
+  go :: M.Expr -> Trampoline M.Expr
   go expr = case expr of
     -- a host foreign already under a run stays performed (recurse args only). This is what
     -- makes the reflection below idempotent: `Π(reflect \_ -> Π(f)) → Π(f)` (Simplify β),
     -- and re-running impurify must not wrap it again.
-    M.Perform (M.App (M.Var q) args) | isJust (effArity q) -> M.Perform (M.App (M.Var q) (map go args))
-    M.Perform (M.Var q) | effArity q == Just 0 -> M.Perform (M.Var q)
+    M.Perform (M.App (M.Var q) args) | isJust (effArity q) ->
+      (\args' -> M.Perform (M.App (M.Var q) args')) <$> goArgs args
+    M.Perform (M.Var q) | effArity q == Just 0 -> done expr
     M.App (M.Var q) args
       | qkey q == Just pureEKey
-      , Just { head: a, tail } <- Array.uncons args -> reapply (thunk (go a)) (map go tail)
+      , Just { head: a, tail } <- Array.uncons args ->
+          (\a' tail' -> reapply (thunk a') tail') <$> goSub a <*> goArgs tail
       | qkey q == Just performKey
-      , Just { head: e, tail } <- Array.uncons args -> reapply (perform (go e)) (map go tail)
+      , Just { head: e, tail } <- Array.uncons args ->
+          (\e' tail' -> reapply (perform e') tail') <$> goSub e <*> goArgs tail
       | qkey q == Just bindEKey
       , Just { head: m, tail: t1 } <- Array.uncons args
-      , Just { head: k, tail: rest } <- Array.uncons t1 -> reapply (thunk (bindBody (go m) (go k))) (map go rest)
+      , Just { head: k, tail: rest } <- Array.uncons t1 ->
+          (\m' k' rest' -> reapply (thunk (bindBody m' k')) rest') <$> goSub m <*> goSub k <*> goArgs rest
       -- generalized effect reflection (ADR 0019): a fully-applied effectful host foreign is
       -- already an opaque `Effect` (`log "a" ≡ reflect (\_ -> Π(log "a"))`), so in value
       -- position it becomes a thunk; a directly-performed one β-reduces back (Simplify ~130).
-      | Just n <- effArity q, Array.length args == n -> reflect (M.App (M.Var q) (map go args))
+      | Just n <- effArity q, Array.length args == n ->
+          (\args' -> reflect (M.App (M.Var q) args')) <$> goArgs args
     -- `functorEffect.map f m` = `bindE m (\a -> pure (f a))` → `\$ev -> let a = perform m in f a`
     M.App (M.Accessor "map" (M.Var q)) args
       | qkey q == Just functorEffectKey
       , Just { head: f, tail: t1 } <- Array.uncons args
-      , Just { head: m, tail: rest } <- Array.uncons t1 -> reapply (mapBody (go f) (go m)) (map go rest)
+      , Just { head: m, tail: rest } <- Array.uncons t1 ->
+          (\f' m' rest' -> reapply (mapBody f' m') rest') <$> goSub f <*> goSub m <*> goArgs rest
     -- `applyEffect.apply mf ma` = `bindE mf (\f -> bindE ma (\a -> pure (f a)))`
     M.App (M.Accessor "apply" (M.Var q)) args
       | qkey q == Just applyEffectKey
       , Just { head: mf, tail: t1 } <- Array.uncons args
-      , Just { head: ma, tail: rest } <- Array.uncons t1 -> reapply (applyBody (go mf) (go ma)) (map go rest)
+      , Just { head: ma, tail: rest } <- Array.uncons t1 ->
+          (\mf' ma' rest' -> reapply (applyBody mf' ma') rest') <$> goSub mf <*> goSub ma <*> goArgs rest
     M.Var q
-      | qkey q == Just pureEKey -> etaPure
-      | qkey q == Just bindEKey -> etaBind
-      | qkey q == Just performKey -> etaPerform
+      | qkey q == Just pureEKey -> done etaPure
+      | qkey q == Just bindEKey -> done etaBind
+      | qkey q == Just performKey -> done etaPerform
       -- a nullary effectful host foreign (e.g. `random :: Effect a`) is itself an `Effect`
-      | effArity q == Just 0 -> reflect (M.Var q)
+      | effArity q == Just 0 -> done (reflect (M.Var q))
     _ -> descend expr
 
+  descend :: M.Expr -> Trampoline M.Expr
   descend = case _ of
-    M.Lit lit -> M.Lit (mapLit go lit)
-    e@(M.Var _) -> e
-    e@(M.Constructor _ _ _) -> e
-    M.Accessor l e -> M.Accessor l (go e)
-    M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
-    M.Abs ps b -> M.Abs ps (go b)
-    M.App f args -> M.App (go f) (map go args)
-    M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
-    M.Let bs body -> M.Let (map goBind bs) (go body)
-    M.Perform e -> M.Perform (go e)
+    M.Lit lit -> M.Lit <$> goLit lit
+    e@(M.Var _) -> done e
+    e@(M.Constructor _ _ _) -> done e
+    M.Accessor l e -> M.Accessor l <$> goSub e
+    M.Update e cf kvs -> (\e' kvs' -> M.Update e' cf kvs') <$> goSub e <*> traverse (traverse goSub) kvs
+    M.Abs ps b -> M.Abs ps <$> goSub b
+    M.App f args -> (\f' args' -> M.App f' args') <$> goSub f <*> goArgs args
+    M.Case ss alts -> (\ss' alts' -> M.Case ss' alts') <$> goArgs ss <*> traverse goAlt alts
+    M.Let bs body -> (\bs' body' -> M.Let bs' body') <$> traverse goBind bs <*> goSub body
+    M.Perform e -> M.Perform <$> goSub e
     where
-    goAlt alt = alt
-      { result = case alt.result of
-          Right e -> Right (go e)
-          Left gs -> Left (map (\g -> { guard: go g.guard, expression: go g.expression }) gs)
-      }
+    goLit = case _ of
+      LitArray es -> LitArray <$> goArgs es
+      LitObject kvs -> LitObject <$> traverse (traverse goSub) kvs
+      other -> done other
+    goAlt alt = case alt.result of
+      Right e -> (\e' -> alt { result = Right e' }) <$> goSub e
+      Left gs -> (\gs' -> alt { result = Left gs' }) <$> traverse goGuard gs
+    goGuard g = (\gu ge -> { guard: gu, expression: ge }) <$> goSub g.guard <*> goSub g.expression
     goBind = case _ of
-      M.NonRec meta i e -> M.NonRec meta i (go e)
-      M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
+      M.NonRec meta i e -> (\e' -> M.NonRec meta i e') <$> goSub e
+      M.Rec rs -> M.Rec <$> traverse (\r -> (\e' -> r { expr = e' }) <$> goSub r.expr) rs
 
 -- | Reflect an `Effect` value into its thunk encoding: `reflect m = \$ev -> Π(m)` — a thunk
 -- | that, when performed, runs `m` (ADR 0019).
@@ -201,12 +224,6 @@ applyBody mf ma =
       ( M.Let [ M.NonRec Nothing f (perform mf) ]
           (M.Let [ M.NonRec Nothing a (perform ma) ] (M.App (M.Var (Qualified Nothing f)) [ M.Var (Qualified Nothing a) ]))
       )
-
-mapLit :: (M.Expr -> M.Expr) -> Literal M.Expr -> Literal M.Expr
-mapLit f = case _ of
-  LitArray es -> LitArray (map f es)
-  LitObject kvs -> LitObject (map (map f) kvs)
-  other -> other
 
 allVars :: M.Expr -> Set String
 allVars e = Set.fromFoldable (freeVars [] e)

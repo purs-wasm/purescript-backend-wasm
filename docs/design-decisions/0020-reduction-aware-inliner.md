@@ -15,6 +15,13 @@
 > implemented here is the **NbE reducer core** (steps 1–2, per the Progress note); the reduction-aware
 > *inlining decision* (step 3) remains future work. So this ADR is **not** superseded — read its
 > whole-program-loop framing (Invariant 1, step 4) as historical context that 0021 overtook.
+>
+> **Update (2026-06-16, → [ADR 0035](0035-sharing-nbe-reduction-aware-inlining.md)):** stage 3 now
+> has a concrete realization in [ADR 0035](0035-sharing-nbe-reduction-aware-inlining.md). Self-compiling
+> `purs-wasm` surfaced that the stage-1/2 NbE core is **itself exponential** for lack of memoization
+> (it recomputes values on every `eval`/`quote` traversal), independent of the fusion motivation
+> here. ADR 0035 sequences the fix: a behaviour-neutral **sharing/memo** pass (the scalability gate)
+> first, then this ADR's reduction-aware inline-or-share **policy** on top.
 
 ## Context
 

@@ -84,6 +84,16 @@ deepNest =
   , decls: [ M.NonRec Nothing "d" (Array.foldl (\acc i -> M.App acc [ M.Lit (LitInt i) ]) (local "base") (Array.range 1 1000)) ]
   }
 
+-- | A single node carrying a very *wide* array (50k application arguments). `deepNest` exercises
+-- | tree depth; this exercises `putArray` width: the old `traverse_`-based encoder built an
+-- | N-deep `*>` chain that overflowed the host stack in (non-trampolined) `Effect` on a large
+-- | array. 50k is well past the ~10k default-stack limit the old code died at.
+wideArgs :: M.Module
+wideArgs =
+  { name: [ "Wide" ]
+  , decls: [ M.NonRec Nothing "w" (M.App (local "f") (Array.replicate 50000 (M.Lit (LitInt 0)))) ]
+  }
+
 spec :: Spec Unit
 spec = describe "PureScript.Backend.Wasm.MiddleEnd.Serialize" do
   describe "encode/decode" do
@@ -102,3 +112,8 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Serialize" do
       -- Compare as a Boolean: a derived `show` of a 1000-deep tree (on a hypothetical
       -- failure) would itself overflow and mask the real result.
       (roundTrips deepNest == Right deepNest) `shouldEqual` true
+
+    it "round-trips a node with a very wide array without overflowing (putArray)" do
+      -- Guards `putArray`'s stack safety: encoding the 50k-element argument list must not
+      -- build an N-deep `*>` chain. Compared as a Boolean (a 50k-element `show` would be huge).
+      (roundTrips wideArgs == Right wideArgs) `shouldEqual` true

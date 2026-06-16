@@ -17,6 +17,7 @@ package:
     - foldable-traversable
     - foreign
     - foreign-object
+    - free
     - functions
     - identity
     - integers
@@ -27,6 +28,7 @@ package:
     - node-buffer
     - prelude
     - strings
+    - tailrec
     - transformers
     - tuples
   test:

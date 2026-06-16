@@ -41,7 +41,7 @@ instance decodeBoolean :: Decode Boolean where
 
 instance decodeMaybe :: Decode a => Decode (Maybe a) where
   decoder = Decoder \fgn ->
-    case runFn2 readAt 0 fgn of
+    case readAt 0 fgn of
       Left MissingValue -> Right Nothing
       Left err -> Left err
       Right fgn' -> case runDecoder (decoder @a) fgn' of
@@ -56,15 +56,15 @@ instance decodeArray :: Decode a => Decode (Array a) where
 
 instance decodeEither :: (Decode a, Decode b) => Decode (Either a b) where
   decoder = Decoder \fgn ->
-    case runFn2 readAt 0 fgn >>= asInt "Either" of
+    case readAt 0 fgn >>= asInt "Either" of
       Left err -> Left (AtIndex 0 err)
       Right tag -> case tag of
-        0 -> runFn2 readAt 1 fgn >>= runDecoder (decoder @a) <#> Left
-        1 -> runFn2 readAt 1 fgn >>= runDecoder (decoder @b) <#> Right
+        0 -> readAt 1 fgn >>= runDecoder (decoder @a) <#> Left
+        1 -> readAt 1 fgn >>= runDecoder (decoder @b) <#> Right
         _ -> Left $ UnknownConstructorTag tag
 
 instance decodeTuple :: (Decode a, Decode b) => Decode (Tuple a b) where
   decoder = Decoder \fgn -> ado
-    a <- runFn2 readAt 0 fgn >>= runDecoder decoder
-    b <- runFn2 readAt 1 fgn >>= runDecoder decoder
+    a <- readAt 0 fgn >>= runDecoder decoder
+    b <- readAt 1 fgn >>= runDecoder decoder
     in Tuple a b
