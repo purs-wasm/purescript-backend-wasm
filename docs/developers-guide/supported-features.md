@@ -85,12 +85,17 @@ recursion needs nothing special — each call is a direct call.
 
 A **point-free** recursive function — defined without an explicit lambda, e.g.
 `purescript-run`'s `loop = resume f pure` — is **eta-expanded** to `\x -> loop' x` so it lowers
-as a function (sound for a binding of positive residual arity). This is what lets `Free` / `Run`
-code compile, though such interpreters are currently slow on wasm and the eta-expansion gives up
-some closure sharing — see [optimizations § Known gaps](./optimizations.md#known-gaps). A genuinely
-recursive **value** binding (a non-function that references itself, e.g. a self-referential
-`Tuple`) is supported only at the **top level**, as a cyclic value CAF that globalization keeps as
-a recomputed getter (ADR 0006); the same shape inside a local `let` is not yet supported.
+as a function. A binding whose head is a **known function** is eta-expanded whether it is applied
+below its arity *or* exactly saturated — its result is itself a function (`resume`'s is), so
+`loop = resume f pure` lowers even though `resume` is fully applied; a saturated **constructor**
+application instead builds data and is left as a recursive value (below), never eta-expanded. This
+is what lets `Free` / `Run` code compile, though such interpreters are currently slow on wasm and
+the eta-expansion gives up some closure sharing — see
+[optimizations § Known gaps](./optimizations.md#known-gaps). A genuinely recursive **value** binding
+(a non-function that references itself, e.g. a self-referential `Tuple`, or any saturated
+constructor application) is supported only at the **top level**, as a cyclic value CAF that
+globalization keeps as a recomputed getter (ADR 0006); the same shape inside a local `let` is not
+yet supported.
 
 ## Tail-call elimination
 

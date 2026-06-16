@@ -105,7 +105,9 @@ inline-or-share selection (ADR 0020's NbE core is implemented; ADR 0035 sequence
 that makes the reducer non-exponential — the self-compilation scalability *time* gate — ahead of the
 reduction-driven decision, neither of which has landed); the `--no-opt` self-compilation *space*
 gate — the front-half whole-program memory floor (decode + translate + lambda-lift holding all MIR
-at once, ADR 0009), addressed by copy-reduction / streaming, not yet landed (decision-tree leaf
+at once, ADR 0009) — addressed by **copy-reduction (landed: translate + lambda-lift are fused
+per module and each module's CoreFn is dropped before the next, so the program is never resident
+as CoreFn *and* MIR at once), with streaming as the future general solution** (decision-tree leaf
 sharing, ADR 0036, was measured to be ~1.16× and is *not* this floor); `wasi` packaging
 and the browser runtime/app split (ADR 0025 — `node` / `browser` / `standalone` packaging and `-E`
 have shipped); precompiled-`ulib` distribution (ADR 0033); and monomorphization.
