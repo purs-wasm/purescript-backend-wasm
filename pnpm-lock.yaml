@@ -10,12 +10,6 @@ importers:
 
   bench: {}
 
-  bench/bench/output-js-es: {}
-
-  bench/output: {}
-
-  bench/output-js-es: {}
-
   binaryen:
     dependencies:
       binaryen:
@@ -27,20 +21,6 @@ importers:
       cbor:
         specifier: ^10.0.12
         version: 10.0.12
-
-  compiler/test/e2e-fixtures-out: {}
-
-  examples/output: {}
-
-  examples/output-effect-prim: {}
-
-  examples/output-meta: {}
-
-  examples/output-priv: {}
-
-  examples/output-random: {}
-
-  examples/output-run: {}
 
   purs-wasm:
     dependencies:

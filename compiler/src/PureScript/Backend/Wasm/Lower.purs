@@ -119,13 +119,17 @@ isEffectForeignApp env = case _ of
   M.Var q -> isEff q
   _ -> false
   where
-  -- An intrinsic (incl. the `Effect.Ref` ops and `modifyImpl`, ADR 0017) is NOT a host
-  -- foreign: it is performed via the unit-application path (so its arity includes the
-  -- perform-unit), even though source reconstruction (ADR 0016) also lists it in
-  -- `foreignSigs` with an `MEffect` result. Exclude it here so that path is taken.
   isEff q@(Qualified _ ident)
     | isJust (qualifiedIntrinsic (qualifiedKeyOf q)) = false
     | isJust (foreignIntrinsic ident) = false
+    -- A user-defined top-level function has a decl body, so it is in `knownFuncs`; it is
+    -- NOT a host foreign. It is performed via the unit-application path (its arity includes
+    -- the perform-unit, ADR 0018), even though source reconstruction (ADR 0016) also lists
+    -- it in `foreignSigs` with an `MEffect` result. Without this exclusion, a performed
+    -- partial application of such a function (`perform (bad "x")`) is misrouted to the
+    -- host-foreign path and lowered as a bare producer value — a partial closure that is
+    -- built but never applied to the unit, silently dropping the effect.
+    | Object.member (qualifiedKeyOf q) env.knownFuncs = false
     | otherwise = case Object.lookup (qualifiedKeyOf q) env.foreignSigs of
         Just sig -> case sig.result of
           MEffect _ -> true
