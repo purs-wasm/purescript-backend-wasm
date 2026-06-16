@@ -145,9 +145,11 @@ here:
 - It remains a central change to the optimizer core; staging keeps each step independently
   verifiable, and [ADR 0020](0020-reduction-aware-inliner.md)'s blast-radius caveat stands.
 
-### Plan (each step gated: e2e + unit green, the 10-benchmark baseline — `countEffect` / `curry` /
-`mapFoldArray` are the fragile ones — unchanged, and the bench wasm byte-equal modulo `$specN`/`$q`
-renaming, the [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) gate)
+### Plan
+
+Each step is gated by: e2e + unit green; the 10-benchmark baseline unchanged (`countEffect` /
+`curry` / `mapFoldArray` are the fragile ones); and the bench wasm byte-equal modulo `$specN`/`$q`
+renaming (the [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) gate).
 
 1. **Layer A** — memoize inline-binding evaluation. Behaviour-neutral. Added gate: the self-host
    `output/` build (286 modules from `Main`) reaches and **completes** the `Optimize.Specialize`
