@@ -11,8 +11,8 @@ import PureScript.ExternsFile.Decoder.Utils (asInt, readAt)
 
 newtypeDecoder :: forall a b. Newtype a b => Decode b => Decoder a
 newtypeDecoder = Decoder \fgn ->
-  case runFn2 readAt 0 fgn >>= asInt "newtypeDecoder" of
+  case readAt 0 fgn >>= asInt "newtypeDecoder" of
     Left err -> Left err
     Right n
-      | n == 0 -> runFn2 readAt 1 fgn >>= runDecoder (decoder @b) <#> wrap
+      | n == 0 -> readAt 1 fgn >>= runDecoder (decoder @b) <#> wrap
       | otherwise -> Left $ Unexpected "Not a constructor tag of newtype"

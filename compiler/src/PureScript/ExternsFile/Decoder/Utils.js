@@ -1,31 +1,31 @@
-import { Left, Right } from "../Data.Either/index.js";
-import { Unexpected, MissingValue } from "../PureScript.ExternsFile.Decoder.Monad/index.js";
+// import { Left, Right } from "../Data.Either/index.js";
+// import { Unexpected, MissingValue } from "../PureScript.ExternsFile.Decoder.Monad/index.js";
 
-export const readAt = function (idx, fgn) {
+export const readAt_ = function (utils, idx, fgn) {
   if (!Array.isArray(fgn)) {
-    return Left.create(Unexpected.create("Expecting array, got " + typeof fgn));
+    return utils.Left(utils.Unexpected("Expecting array, got " + typeof fgn));
   }
   if (fgn[idx] === void 0) {
-    return Left.create(MissingValue.value);
+    return utils.Left(utils.MissingValue);
   }
   if (fgn.length < idx) {
-    return Left.create(Unexpected.create("Got an array of length " + fgn.length + ", which is too small to get element at " + idx));
+    return utils.Left(utils.Unexpected("Got an array of length " + fgn.length + ", which is too small to get element at " + idx));
   }
-  return Right.create(fgn[idx]);
+  return utils.Right(fgn[idx]);
 };
 
-export const asInt = n => function (fgn) {
+export const asInt_ = function (utils, n, fgn) {
   if (typeof fgn === "number") {
     return ((fgn | 0) === fgn)
-      ? Right.create(fgn)
-      : Left.create(Unexpected.create("Expecting integer, got a floating point number"));
+      ? utils.Right(fgn)
+      : utils.Left(utils.Unexpected("Expecting integer, got a floating point number"));
   }
-  return Left.create(Unexpected.create("Expecting integer, got " + typeof fgn));
+  return utils.Left(utils.Unexpected("Expecting integer, got " + typeof fgn));
 };
 
-export const asArray = function (fgn) {
+export const asArray_ = function (utils, fgn) {
   if (!Array.isArray(fgn)) {
-    return Left.create(Unexpected.create("Expecting array, got " + typeof fgn));
+    return utils.Left(utils.Unexpected("Expecting array, got " + typeof fgn));
   }
-  return Right.create(fgn);
+  return utils.Right(fgn);
 };
