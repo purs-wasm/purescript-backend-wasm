@@ -52,7 +52,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), fst, snd)
 import Foreign.Object (Object)
 import Foreign.Object as Object
-import PureScript.Backend.Wasm.Intrinsics (qualifiedIntrinsic, foreignIntrinsic)
+import PureScript.Backend.Wasm.Intrinsics (Intrinsic(MkEffectFn), qualifiedIntrinsic, foreignIntrinsic)
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
@@ -428,7 +428,7 @@ lowerCoreLetK env binds body finish = case Array.uncons binds of
       lowerCoreLetK (env { locals = Object.insert ident atom env.locals }) tail body finish
   Just { head: Rec recBinds, tail } -> case recBinds of
     [ r ]
-      | M.Abs params recBody <- r.expr
+      | M.Abs params recBody <- recBindFunctionForm r.expr
       , Just { head: param, tail: rest } <- Array.uncons params -> do
           { codeName, captures } <- liftLambda (Just r.ident) env param (reAbs rest recBody)
           bindRhs (RMkClosure codeName captures) \fAtom ->
@@ -451,32 +451,72 @@ lowerCoreLetK env binds body finish = case Array.uncons binds of
 -- | already bound to its slot, so sibling references become forward references for
 -- | the `LetRec` to patch.
 lowerRecBind :: Env -> Tuple M.RecBinding Slot -> Lower RecBind
-lowerRecBind env (Tuple rb slot) = case rb.expr of
+lowerRecBind env (Tuple rb slot) = case recBindFunctionForm rb.expr of
   M.Abs params recBody
     | Just { head: param, tail: rest } <- Array.uncons params -> do
         { codeName, captures } <- liftLambda Nothing env param (reAbs rest recBody)
         pure (RecBind slot codeName captures)
   -- A point-free recursive *function* (e.g. purescript-run's `loop = resume f pure`): not a
-  -- syntactic lambda, but a known callable applied below its arity, so it is in fact a function.
-  -- Eta-expand it to a saturated lambda (`\x -> e x`) — sound by the eta law, since it has positive
-  -- residual arity — and lower through the normal Abs path above. Genuine recursive *values*
-  -- (residual arity 0, e.g. a self-referential `Tuple`/`data`) do not match and fall through to the
-  -- error; a cyclic top-level value is instead handled by CAF globalization (ADR 0006, `FibAnd`).
-  _
-    | Just residual <- recBindResidualArity env rb.expr
-    , residual >= 1 ->
-        lowerRecBind env (Tuple (rb { expr = etaExpand rb.expr residual }) slot)
+  -- syntactic lambda, but a known callable whose (partial or saturated-returning-a-function)
+  -- application is in fact a function. Eta-expand it (`\x -> e x`, sound by the eta law) and lower
+  -- through the normal Abs path above. A saturated *constructor* application is genuine recursive
+  -- data, not a function, so `recBindEtaArity` returns `Nothing` and it falls through to the error
+  -- (a cyclic top-level value is instead handled by CAF globalization — ADR 0006, `FibAnd`).
+  peeled
+    | Just etaN <- recBindEtaArity env peeled ->
+        lowerRecBind env (Tuple (rb { expr = etaExpand peeled etaN }) slot)
   _ -> throw (UnsupportedExpr ("a recursive let binding must be a function: " <> rb.ident))
+
+-- | Normalise a recursive `let` binding's defining expression toward the syntactic lambda it
+-- | denotes, so the `LetRec` machinery recognises it as a function:
+-- |
+-- |   * peel `Data.Function.Uncurried.mkFnN` / `Effect.Uncurried.mkEffectFnN`, which are the
+-- |     identity (the uncurried value *is* the curried `$Clo`, ADR 0018; an *applied* `mkFnN`
+-- |     lowers to the `RPrim MkEffectFn` no-op) — e.g. `Data.Map.Internal`'s `mkFn2`-wrapped folds;
+-- |   * float a `let` whose body is a function inward — `let H in \xs -> b` becomes
+-- |     `\xs -> let H in b`. Sound for this strict, pure IR: `H` was bound outside the lambda so
+-- |     it cannot capture `xs`, and re-evaluating its (pure) bindings per call only forgoes
+-- |     sharing — e.g. the `let goLit … in \v -> case v of …` a `where`-helper-rich recursive
+-- |     worker compiles to.
+-- |
+-- | The middle-end normalises both, so only the `--no-opt` path reaches lowering with one intact.
+recBindFunctionForm :: M.Expr -> M.Expr
+recBindFunctionForm = case _ of
+  M.App (M.Var q) [ inner ]
+    | Just (Tuple MkEffectFn _) <- qualifiedIntrinsic (qualifiedKeyOf q) -> recBindFunctionForm inner
+  M.Let binds body
+    | M.Abs params inner <- recBindFunctionForm body -> M.Abs params (M.Let binds inner)
+  other -> other
 
 -- | The residual arity of a non-lambda binding RHS: a known callable (function / constructor /
 -- | intrinsic / foreign) applied to fewer arguments than its arity still denotes a function, of
 -- | the leftover arity. `Nothing` when the head's arity is unknown — then we cannot prove it is a
 -- | function, so the caller keeps the conservative "must be a function" error.
-recBindResidualArity :: Env -> M.Expr -> Maybe Int
-recBindResidualArity env = case _ of
-  v@(M.Var _) -> headArity env v
-  M.App h args -> (_ - Array.length args) <$> headArity env h
+-- | The number of parameters to eta-expand a non-lambda recursive binding by, turning it into a
+-- | syntactic function — or `Nothing` if the binding denotes a value rather than a function.
+-- |
+-- | A *partial* application is always a function: eta by its residual arity (`Cons 1`, `resume f`).
+-- | A *saturated* (or over-) application splits on the head. A constructor builds data, so a
+-- | saturated `Ctor …` is a genuine recursive *value* — a cyclic *local* data binding would diverge
+-- | under strict evaluation, so the only real case is a top-level CAF (handled by globalization,
+-- | ADR 0006); reject it here. A function's result is itself a value that, for a non-diverging local
+-- | recursive `let`, must be a function (e.g. `loop = resume f pure`, whose result type is a
+-- | function), so eta-expand by one to apply it — `lowerApp`'s over-application path does the rest.
+recBindEtaArity :: Env -> M.Expr -> Maybe Int
+recBindEtaArity env = case _ of
+  M.Var q -> etaArity q 0
+  M.App (M.Var q) args -> etaArity q (Array.length args)
   _ -> Nothing
+  where
+  etaArity q@(Qualified (Just _) ident) nargs
+    | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors =
+        let residual = info.arity - nargs in if residual >= 1 then Just residual else Nothing
+    | Just arity <- funcArity q ident = Just (max 1 (arity - nargs))
+  etaArity _ _ = Nothing
+  funcArity q ident =
+    Object.lookup (qualifiedKeyOf q) env.knownFuncs
+      <|> (snd <$> (qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident))
+      <|> ((Array.length <<< _.params) <$> Object.lookup (qualifiedKeyOf q) env.foreignSigs)
 
 -- | The declared arity of an application head, resolved the same way `lowerApp` dispatches a call:
 -- | a constructor, a top-level/specialized function, an intrinsic, or a foreign import.

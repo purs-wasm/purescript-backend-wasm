@@ -16,7 +16,7 @@ import PureScript.Backend.Wasm.Lower.IR (Atom(..), FuncName(..), LitPat(..), Mar
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
-import Test.Unit.PureScript.Backend.Wasm.Lower.Common (allRhs, ann, appE, blockAtoms, boolAlt, caseOf, closureCaptures, ctor, ctorAlt, def, dictCtorDecl, exportOf, exported, intAlt, isApply, isCallForeign, isPrim, lam, letRec2, liftedFuncs, litInt, litObj, litStr, litSwitchOf, lower, lowerForeign, lowerMany, lv, mkDataTags, newtypeCase, objUpdate, objUpdatePoly, projLabelIds, recSetLabelIds, qv, qvIn, recAlt, recordLabelIds, strAlt, switchOf, switchScrutinees, hasSwitch, accessor, varBinder, arrayLengths, callKnownArities, callKnownNames, countLitSwitches, letRecOf, case2, ctorBinder, alt2, nullBinder, wildAlt, moduleNamed)
+import Test.Unit.PureScript.Backend.Wasm.Lower.Common (allRhs, ann, appE, blockAtoms, boolAlt, caseOf, closureCaptures, ctor, ctorAlt, def, dictCtorDecl, exportOf, exported, intAlt, isApply, isCallForeign, isPrim, lam, letE, letRec, letRec2, liftedFuncs, litInt, litObj, litStr, litSwitchOf, lower, lowerForeign, lowerMany, lv, mkDataTags, newtypeCase, objUpdate, objUpdatePoly, projLabelIds, recSetLabelIds, qv, qvIn, recAlt, recordLabelIds, strAlt, switchOf, switchScrutinees, hasSwitch, accessor, varBinder, arrayLengths, callKnownArities, callKnownNames, countLitSwitches, letRecOf, case2, ctorBinder, alt2, nullBinder, wildAlt, moduleNamed)
 
 -- A function with a capturing lambda applied immediately:
 -- `f a b = (\y -> intAdd a y) b`. The lambda captures `a`.
@@ -121,6 +121,81 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
             Nothing -> fail "expected a LetRec group"
             -- two members, each capturing exactly its sibling
             Just rbs -> map (\(RecBind _ _ env) -> Array.length env) rbs `shouldEqual` [ 1, 1 ]
+
+    -- The next three are recursive-`let` shapes the middle-end normally normalizes, so only
+    -- the `--no-opt` lowering path meets them; each used to raise
+    -- `UnsupportedExpr "a recursive let binding must be a function"`.
+    it "lowers a recursive let whose body is a mkFnN-wrapped lambda" do
+      -- f x = let go = mkFn2 (\a b -> go) in go
+      -- `mkFn2` / `mkEffectFnN` are the identity (ADR 0018) — the uncurried value *is* the
+      -- curried closure — so `go` is a function and lowering peels the wrapper.
+      let
+        f = def "f"
+          ( lam "x"
+              ( letRec "go"
+                  (appE (qvIn "Data.Function.Uncurried" "mkFn2") (lam "a" (lam "b" (lv "go"))))
+                  (lv "go")
+              )
+          )
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just _ -> pure unit
+
+    it "lowers a recursive let whose body is a let-wrapped lambda" do
+      -- f x = let descend = (let h = \w -> w in \v -> descend (h v)) in descend
+      -- The `let` is floated into the lambda (`let H in \v -> b` ⟹ `\v -> let H in b`), so
+      -- `descend` is a function.
+      let
+        f = def "f"
+          ( lam "x"
+              ( letRec "descend"
+                  ( letE "h" (lam "w" (lv "w"))
+                      (lam "v" (appE (lv "descend") (appE (lv "h") (lv "v"))))
+                  )
+                  (lv "descend")
+              )
+          )
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just _ -> pure unit
+
+    it "eta-expands a saturated point-free recursive function" do
+      -- resume k j = k (arity 2) ; f x = let loop = resume (\a -> loop a) 0 in loop
+      -- `resume …` is saturated (residual 0) but its result is a function, so `loop` is a
+      -- function and is eta-expanded to `\z -> resume … z`.
+      let
+        resume = def "resume" (lam "k" (lam "j" (lv "k")))
+        f = def "f"
+          ( lam "x"
+              ( letRec "loop"
+                  (appE (appE (qv "resume") (lam "a" (appE (lv "loop") (lv "a")))) (litInt 0))
+                  (lv "loop")
+              )
+          )
+      case lower [ resume, f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          Just _ -> pure unit
+
+    it "rejects a saturated recursive constructor application as a value, not a function" do
+      -- data L = Nil | Cons Int L ; f x = let xs = Cons 1 xs in xs
+      -- A *saturated* constructor builds data, so `xs` is a genuine recursive value (a cyclic
+      -- local value would diverge; a top-level one is a CAF, ADR 0006) — not a function, so
+      -- lowering must reject it rather than eta-expand a non-function.
+      let
+        decls =
+          [ ctor "L" "Nil" []
+          , ctor "L" "Cons" [ "h", "t" ]
+          , def "f" (lam "x" (letRec "xs" (appE (appE (qv "Cons") (litInt 1)) (lv "xs")) (lv "xs")))
+          ]
+      case lower decls of
+        Left _ -> pure unit
+        Right _ -> fail "expected lowering to reject a saturated recursive constructor as a value"
 
   describe "data types" do
     it "assigns constructor tags by declaration order and erases the constructors" do
