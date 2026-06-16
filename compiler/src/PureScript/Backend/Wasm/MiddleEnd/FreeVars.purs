@@ -24,10 +24,8 @@ import PureScript.CoreFn (Binder(..), Literal(..), Qualified(..))
 -- | it must be deterministic.
 -- |
 -- | Computed as the *scope-independent* free set (`rawFreeVars`) minus the given
--- | `bound`. The raw set is the same for every caller of a given node regardless of
--- | their `bound`, so memoizing it (below) lets lowering re-query a nested lambda's
--- | body without re-walking it once per enclosing lambda — the difference between
--- | O(n²) and O(n) on the deeply-nested bodies large modules produce.
+-- | `bound` — splitting out the bound-independent part keeps the result identical for
+-- | every caller of a node regardless of their `bound`.
 freeVars :: Array String -> M.Expr -> Array String
 freeVars bound = case Array.null bound of
   true -> rawFreeVars
@@ -39,11 +37,9 @@ freeVars bound = case Array.null bound of
 
 -- | The free variables of an expression with *nothing* externally bound, in
 -- | first-appearance order with duplicates removed at every node (so the result is
--- | small and the global first-appearance order is preserved). Memoized by node
--- | identity (`unsafeMemoExpr`): a shared MIR subtree — e.g. a lambda body that the
--- | enclosing lambda's analysis already visited — is computed at most once.
+-- | small and the global first-appearance order is preserved).
 rawFreeVars :: M.Expr -> Array String
-rawFreeVars = unsafeMemoExpr go
+rawFreeVars = go
   where
   dedup = Array.nub
   go = case _ of
@@ -85,11 +81,6 @@ rawFreeVars = unsafeMemoExpr go
   bindExprs = case _ of
     M.NonRec _ _ e -> [ e ]
     M.Rec rs -> map _.expr rs
-
--- | Memoize a function of an `M.Expr` by reference identity. Observationally pure
--- | (the MIR is immutable and the function is pure), so it is wrapped and never
--- | exported; only the pure `freeVars` is.
-foreign import unsafeMemoExpr :: (M.Expr -> Array String) -> M.Expr -> Array String
 
 -- | The variables a binder brings into scope.
 binderVars :: Binder -> Array String
