@@ -1,15 +1,17 @@
--- | Standalone stress harness for the NbE exponential (bug A, ADR 0035) — NOT part of the
--- | routine `test:unit` suite (it deliberately blows up on the current reducer). Run on demand:
--- |
--- |     spago test -p compiler -m Test.NbeStress
+-- | The NbE exponential regression guard (bug A, ADR 0035 §8).
 -- |
 -- | It drives `Semantics.normalize` directly against a synthetic **diamond inline DAG**: an
 -- | inline set `b0 … bd` where each `bᵢ = f b₍ᵢ₋₁₎ b₍ᵢ₋₁₎` references the previous binding twice.
--- | Normalizing `bd` re-evaluates the shared leaf `b0` once per path = Θ(2ᵈ) on the current
--- | reducer (M1 in eval, M2 in quote), so the printed result size **doubles every depth** and the
--- | wall clock explodes around d≈22-25. After the ADR-0035 sharing fix the result stays O(d) and
--- | the loop runs to the end instantly — this is the exponential regression guard (ADR 0035 §8),
--- | reproduced without building the whole compiler to wasm. Edit `maxDepth` to taste.
+-- | Normalizing `bd` re-evaluates the shared leaf `b0` once per path = Θ(2ᵈ) on the *unfixed*
+-- | reducer (M1 in eval, M2 in quote), so the result size **doubles every depth** and the wall
+-- | clock explodes around d≈22-25. After the ADR-0035 sharing fix (Layer A eval memo + Layer B
+-- | quote CSE) the result stays **O(d)** (≈ 4d) and the loop runs instantly — verified without
+-- | building the whole compiler to wasm.
+-- |
+-- | `spec` is the routine `test:unit` guard (a generous linear bound at depth 20 that fails loudly
+-- | if the exponential ever returns). `main` sweeps deeper depths for manual inspection:
+-- |
+-- |     spago test -p compiler -m Test.NbeStress
 module Test.NbeStress where
 
 import Prelude
@@ -27,6 +29,8 @@ import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (exprSize)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Semantics (normalize)
 import PureScript.CoreFn (Qualified(..))
+import Test.Spec (Spec, describe, it)
+import Test.Spec.Assertions (shouldEqual)
 
 maxDepth :: Int
 maxDepth = 20
@@ -58,6 +62,16 @@ ctxFor d =
   , impureBindings: Set.empty
   , memEffBindings: Set.empty
   }
+
+-- | Routine guard (ADR 0035 §8): a depth-20 diamond normalizes to a *linear*-size term. On the
+-- | pre-sharing reducer this is 2^20 ≈ a million nodes (seconds of work + a huge tree); the
+-- | Layer A memo + Layer B quote CSE keep it ≈ 4·20 + 3 = 83. The generous `< 1000` bound passes
+-- | instantly when sharing holds and fails (or times out) the moment the exponential returns.
+spec :: Spec Unit
+spec = describe "Semantics.normalize — NbE exponential guard (ADR 0035)" do
+  it "normalizes a depth-20 diamond inline DAG to linear size, not O(2^d)" do
+    let d = 20
+    (exprSize (normalize (ctxFor d) (ref d)) < 1000) `shouldEqual` true
 
 main :: Effect Unit
 main = do

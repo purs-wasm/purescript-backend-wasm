@@ -19,10 +19,12 @@ module PureScript.Backend.Wasm.MiddleEnd.Optimize.Semantics
 
 import Prelude
 
-import Control.Monad.State (State, evalState, get, put)
+import Control.Monad.State (State, get, modify_, put, runState)
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Lazy (Lazy, defer, force)
+import Data.List (List(..), (:))
+import Data.List as List
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -59,6 +61,12 @@ data Sem
   -- a recursive group, never unfolded: bindings (bodies already evaluated with the group
   -- names opaque) plus the continuation semantic value.
   | SLetRec (Array RecB) Sem
+  -- a value shared across use sites, tagged with the memo key it was unfolded from (ADR 0035
+  -- Layer B). Transparent to *reduction* — `unShared` strips it wherever a value is consumed
+  -- (β / projection / match / perform) so it never blocks a redex — but opaque to `quote`, which
+  -- CSEs it: the first occurrence is bound once to a hoisted `let` and the rest reference it,
+  -- killing the M2 re-quote explosion. The key is the inline binding's name (already unique).
+  | SShared String Sem
   | SNeu Neu
 
 type RecB = { meta :: Maybe Meta, ident :: String, expr :: Sem }
@@ -86,8 +94,19 @@ data Match
 
 -- | Normalise an expression: evaluate to `Sem`, then quote back to IR.
 normalize :: Ctx -> M.Expr -> M.Expr
-normalize ctx e = evalState (quote (pctxOf ctx) (eval ctx memo Set.empty Map.empty e)) 0
+normalize ctx e =
+  let
+    Tuple body st = runState (quote (pctxOf ctx) (eval ctx memo Set.empty Map.empty e)) initialQ
+    -- the CSE'd shared values, hoisted as a `let` at the declaration top. `defs` is most-recent-
+    -- first and a binding may reference an earlier one (quoting a value records its dependencies
+    -- first), so reverse to dependency order. They are closed, so a single non-recursive group works.
+    defs = Array.fromFoldable (List.reverse st.defs)
+  in
+    if Array.null defs then body
+    else M.Let (map (\(Tuple n ex) -> M.NonRec Nothing n ex) defs) body
   where
+  initialQ = { counter: 0, shared: Map.empty, defs: Nil }
+
   -- ADR 0035 Layer A: evaluate each inline-set binding **once** and share the resulting `Sem` at
   -- every use site, rather than re-evaluating its body per reference (the M1 exponential). The memo
   -- is keyed by binding name; `evalVar` forces it. The inline set is a DAG — it is built from
@@ -141,7 +160,7 @@ eval ctx memo = go
         -- unfold a binding in the inline set (ADR 0020), but **once** per `normalize`: every
         -- reference shares the memoized `Sem` (ADR 0035 Layer A) instead of re-evaluating the
         -- body. `memo` has an entry for exactly the inline-set keys (`ctx.inline`).
-        | Just lz <- Map.lookup k memo -> force lz
+        | Just lz <- Map.lookup k memo -> SShared k (force lz)
         | Set.member k ctx.dataCtors -> SCtorApp q []
         | otherwise -> SNeu (NTop q)
       Nothing -> SNeu (NTop q)
@@ -149,10 +168,18 @@ eval ctx memo = go
 -- | Apply a semantic value to arguments — β when the head is a known lambda (with
 -- | arity handling), accumulation for a known constructor, otherwise a stuck `NApp`
 -- | (flattened so a curried spine becomes one n-ary application).
+-- | Strip the `SShared` tag wherever a value is *consumed* by a reduction, so sharing never
+-- | blocks a redex (the tag exists only to let `quote` CSE an unconsumed shared value).
+unShared :: Sem -> Sem
+unShared = case _ of
+  SShared _ s -> unShared s
+  s -> s
+
 apply :: Sem -> Array Sem -> Sem
 apply head args
   | Array.null args = head
   | otherwise = case head of
+      SShared _ s -> apply s args
       SLam ps fn ->
         let
           np = Array.length ps
@@ -170,6 +197,7 @@ bindParams env ps args = Array.foldl (\e (Tuple p a) -> Map.insert p a e) env (A
 
 accessor :: Ctx -> Map String (Lazy Sem) -> Set String -> String -> Sem -> Sem
 accessor ctx memo visited l = case _ of
+  SShared _ s -> accessor ctx memo visited l s
   SRecord fs -> fromMaybe (SNeu (NAccessor l (SRecord fs))) (lookupSem l fs)
   -- a transparent (newtype / dictionary) constructor is the identity on its payload, so
   -- a field read sees through it: `Dict({…}).l` is `{…}.l`
@@ -189,6 +217,7 @@ accessor ctx memo visited l = case _ of
 
 update :: Sem -> Maybe (Array String) -> Array (Tuple String Sem) -> Sem
 update e mb kvs = case e of
+  SShared _ s -> update s mb kvs
   SRecord fs -> SRecord (Array.foldl overwrite fs kvs)
   _ -> SNeu (NUpdate e mb kvs)
   where
@@ -197,13 +226,17 @@ update e mb kvs = case e of
     else Array.snoc fs (Tuple k v)
 
 performSem :: PCtx -> Sem -> M.Expr -> Sem
-performSem pctx se orig = case se of
-  -- performing a literal thunk runs its body (apply to the unit); always sound, even
-  -- for an effectful body — this is the pure-`Effect` collapse's entry point
-  SLam _ _ -> apply se [ unit_ ]
-  _
-    | runPure pctx orig -> apply se [ unit_ ]
-    | otherwise -> SNeu (NPerform se)
+performSem pctx se orig =
+  let
+    s = unShared se
+  in
+    case s of
+      -- performing a literal thunk runs its body (apply to the unit); always sound, even
+      -- for an effectful body — this is the pure-`Effect` collapse's entry point
+      SLam _ _ -> apply s [ unit_ ]
+      _
+        | runPure pctx orig -> apply s [ unit_ ]
+        | otherwise -> SNeu (NPerform s)
   where
   unit_ = SLit (LitInt 0)
 
@@ -263,14 +296,15 @@ matchSem ctx = case _, _ of
     | Just k <- qkey ctor, Set.member k ctx.newtypeCtors -> case subs of
         [ sub ] -> matchSem ctx sub s -- transparent newtype: the value is its payload
         _ -> MUnknown
-    | Just k <- qkey ctor -> case s of
+    | Just k <- qkey ctor -> case unShared s of
         SCtorApp q cargs
           | qkey q == Just k -> matchAllSem ctx subs cargs
           | otherwise -> MNo
         _ -> MUnknown
     | otherwise -> MUnknown
-  LiteralBinder _ lit, SLit slit -> matchLitSem lit slit
-  LiteralBinder _ _, _ -> MUnknown
+  LiteralBinder _ lit, s -> case unShared s of
+    SLit slit -> matchLitSem lit slit
+    _ -> MUnknown
 
 matchLitSem :: Literal Binder -> Literal Sem -> Match
 matchLitSem = case _, _ of
@@ -325,7 +359,14 @@ inlineLet ctx x rhs body =
 
 -- quote -----------------------------------------------------------------------
 
-type Q = State Int
+-- | `quote`'s state (ADR 0035 Layer B): the fresh-binder counter, plus the CSE table for shared
+-- | values — `shared` maps a memo key to the `let` name its quoted value was bound to, and `defs`
+-- | accumulates those `(name, expr)` bindings (most-recent-first) to hoist at the top of the
+-- | normalized declaration. The shared values are inline bindings, evaluated with an empty
+-- | environment, so their quoted expressions are closed and hoist without capture.
+type QState = { counter :: Int, shared :: Map String String, defs :: List (Tuple String M.Expr) }
+
+type Q = State QState
 
 quote :: PCtx -> Sem -> Q M.Expr
 quote pctx = case _ of
@@ -353,6 +394,20 @@ quote pctx = case _ of
     rs' <- traverse (\r -> (\e -> { meta: r.meta, ident: r.ident, expr: e }) <$> quote pctx r.expr) rs
     body' <- quote pctx body
     pure (M.Let [ M.Rec rs' ] body')
+  -- CSE a shared value (ADR 0035 Layer B): quote it **once** into a hoisted `let` (recorded in
+  -- `defs`) and emit a reference; every later occurrence of the same key reuses the binding. The
+  -- name is reserved before quoting the body, so a (defensive) self/mutual reference reuses it
+  -- rather than recursing forever.
+  SShared k s -> do
+    st <- get
+    case Map.lookup k st.shared of
+      Just name -> pure (M.Var (Qualified Nothing name))
+      Nothing -> do
+        name <- fresh "$shared"
+        modify_ \st' -> st' { shared = Map.insert k name st'.shared }
+        e <- quote pctx s
+        modify_ \st' -> st' { defs = Tuple name e : st'.defs }
+        pure (M.Var (Qualified Nothing name))
   SNeu n -> quoteNeu pctx n
 
 quoteNeu :: PCtx -> Neu -> Q M.Expr
@@ -405,9 +460,9 @@ fresh base0 = do
     base = case String.indexOf (Pattern "$q") base0 of
       Just i -> String.take i base0
       Nothing -> base0
-  n <- get
-  put (n + 1)
-  pure (base <> "$q" <> show n)
+  st <- get
+  put st { counter = st.counter + 1 }
+  pure (base <> "$q" <> show st.counter)
 
 mergeAbs :: Array String -> M.Expr -> M.Expr
 mergeAbs ps = case _ of

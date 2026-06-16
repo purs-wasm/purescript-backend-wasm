@@ -29,6 +29,7 @@ import Test.Unit.PureScript.Backend.Wasm.Ulib.Interface as UlibInterface
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Transl as Transl
 import Test.Unit.PureScript.CoreFn as CoreFn
 import Test.Unit.PureScript.ExternsFile as ExternsFile
+import Test.NbeStress as NbeStress
 
 main :: Effect Unit
 main = runSpecAndExitProcess [ consoleReporter ] do
@@ -37,6 +38,7 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Externs.spec
   Caf.spec
   Codegen.spec
+  NbeStress.spec
   Lower.spec
   Match.spec
   Transl.spec
