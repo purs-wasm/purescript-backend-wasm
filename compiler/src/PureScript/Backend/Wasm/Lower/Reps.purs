@@ -22,6 +22,14 @@ primRep = case _ of
   IntDiv -> I32
   IntMod -> I32
   IntDegree -> I32
+  -- `Data.Int.Bits` 32-bit bitwise ops all produce a raw i32
+  IntAnd -> I32
+  IntOr -> I32
+  IntXor -> I32
+  IntShl -> I32
+  IntShr -> I32
+  IntZshr -> I32
+  IntComplement -> I32
   NumToInt -> I32
   StrLen -> I32
   StrByteAt -> I32 -- a UTF-8 byte (0-255), as an Int
@@ -63,6 +71,14 @@ primOperandReps = case _ of
   IntLt -> [ I32, I32 ]
   IntDegree -> [ I32 ]
   IntToNum -> [ I32 ]
+  -- `Data.Int.Bits`: both operands unboxed i32 (the shift count too)
+  IntAnd -> [ I32, I32 ]
+  IntOr -> [ I32, I32 ]
+  IntXor -> [ I32, I32 ]
+  IntShl -> [ I32, I32 ]
+  IntShr -> [ I32, I32 ]
+  IntZshr -> [ I32, I32 ]
+  IntComplement -> [ I32 ]
   FromNumberImpl -> [ Boxed, Boxed, F64 ] -- just, nothing, n (the Number is unboxed)
   NumToInt -> [ F64 ]
   NumAdd -> [ F64, F64 ]

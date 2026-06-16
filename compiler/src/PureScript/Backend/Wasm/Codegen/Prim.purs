@@ -257,6 +257,18 @@ genPrim ctx intr args = case intr, args of
     nothingElse <- genAtomAs ctx Boxed nothing
     inner <- B.if_ ctx.mod isInt justApplied nothingThen
     B.if_ ctx.mod guardE inner nothingElse
+  -- `Data.Int.Bits`: single i32 instructions. `IntShr` is arithmetic
+  -- (sign-propagating, JS `>>`); `IntZshr` is logical (zero-fill, JS `>>>`).
+  IntAnd, [ a, b ] -> intBinop B.i32And a b
+  IntOr, [ a, b ] -> intBinop B.i32Or a b
+  IntXor, [ a, b ] -> intBinop B.i32Xor a b
+  IntShl, [ a, b ] -> intBinop B.i32Shl a b
+  IntShr, [ a, b ] -> intBinop B.i32ShrS a b
+  IntZshr, [ a, b ] -> intBinop B.i32ShrU a b
+  IntComplement, [ a ] -> do
+    ea <- intArg a
+    m1 <- B.i32Const ctx.mod (-1)
+    B.i32Xor ctx.mod ea m1
   _, _ -> throwException (error "Codegen: intrinsic given an operand list of the wrong arity")
   where
   -- operand at the representation the op needs (no-op if already that rep)

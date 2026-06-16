@@ -87,6 +87,18 @@ export const i32AndImpl = (mod) => (left) => (right) => () =>
 export const i32OrImpl = (mod) => (left) => (right) => () =>
   mod.i32.or(left, right);
 
+export const i32XorImpl = (mod) => (left) => (right) => () =>
+  mod.i32.xor(left, right);
+
+export const i32ShlImpl = (mod) => (left) => (right) => () =>
+  mod.i32.shl(left, right);
+
+export const i32ShrSImpl = (mod) => (left) => (right) => () =>
+  mod.i32.shr_s(left, right);
+
+export const i32ShrUImpl = (mod) => (left) => (right) => () =>
+  mod.i32.shr_u(left, right);
+
 export const i32EqzImpl = (mod) => (value) => () =>
   mod.i32.eqz(value);
 
