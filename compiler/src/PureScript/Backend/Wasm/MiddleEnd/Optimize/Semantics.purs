@@ -22,6 +22,7 @@ import Prelude
 import Control.Monad.State (State, evalState, get, put)
 import Data.Array as Array
 import Data.Either (Either(..))
+import Data.Lazy (Lazy, defer, force)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -85,7 +86,16 @@ data Match
 
 -- | Normalise an expression: evaluate to `Sem`, then quote back to IR.
 normalize :: Ctx -> M.Expr -> M.Expr
-normalize ctx e = evalState (quote (pctxOf ctx) (eval ctx Set.empty Map.empty e)) 0
+normalize ctx e = evalState (quote (pctxOf ctx) (eval ctx memo Set.empty Map.empty e)) 0
+  where
+  -- ADR 0035 Layer A: evaluate each inline-set binding **once** and share the resulting `Sem` at
+  -- every use site, rather than re-evaluating its body per reference (the M1 exponential). The memo
+  -- is keyed by binding name; `evalVar` forces it. The inline set is a DAG — it is built from
+  -- `NonRec` infos in `DictElim.buildCtx`, and mutual recursion is a `Rec` group `infoOf` skips —
+  -- so the lazy thunks force without re-entrancy, and a diamond returns the same shared `Sem` on
+  -- every path (sound because, being acyclic, a binding never references one of its own ancestors).
+  memo :: Map String (Lazy Sem)
+  memo = map (\body -> defer \_ -> eval ctx memo Set.empty Map.empty body) ctx.inline
 
 pctxOf :: Ctx -> PCtx
 pctxOf ctx = { eff: ctx.effectfulForeigns, impure: ctx.impureBindings, memEff: ctx.memEffBindings }
@@ -96,13 +106,13 @@ pctxOf ctx = { eff: ctx.effectfulForeigns, impure: ctx.impureBindings, memEff: c
 -- | path; a reference to one is left as a call (`NTop`) rather than re-unfolded, which
 -- | breaks cycles in the inline set and bounds unfolding depth (the rule-based engine
 -- | tolerated cycles only via its `maxPasses` fuel; NbE has no fuel, so it needs this).
-eval :: Ctx -> Set String -> Env -> M.Expr -> Sem
-eval ctx = go
+eval :: Ctx -> Map String (Lazy Sem) -> Set String -> Env -> M.Expr -> Sem
+eval ctx memo = go
   where
   pctx = pctxOf ctx
 
   go visited env = case _ of
-    M.Var q -> evalVar visited env q
+    M.Var q -> evalVar env q
     -- a record literal is the one literal with a reduction (field projection / update),
     -- so it gets its own semantic value; all other literals are inert `SLit`
     M.Lit (LitObject kvs) -> SRecord (map (map (go visited env)) kvs)
@@ -110,11 +120,11 @@ eval ctx = go
     e@(M.Constructor _ _ _) -> SNeu (NCtorDecl e)
     M.Abs ps body -> SLam ps (\args -> go visited (bindParams env ps args) body)
     M.App f args -> evalApp visited env f args
-    M.Accessor l e -> accessor ctx visited l (go visited env e)
+    M.Accessor l e -> accessor ctx memo visited l (go visited env e)
     M.Update e mb kvs -> update (go visited env e) mb (map (map (go visited env)) kvs)
     M.Perform e -> performSem pctx (go visited env e) e
-    M.Case scruts alts -> evalCase ctx visited env scruts alts
-    M.Let binds body -> evalLet ctx visited env binds body
+    M.Case scruts alts -> evalCase ctx memo visited env scruts alts
+    M.Let binds body -> evalLet ctx memo visited env binds body
 
   -- short-circuit the boolean operators into control flow (matching PureScript/JS
   -- semantics and avoiding the strict `i32.or`/`i32.and`), before they apply as foreigns
@@ -124,14 +134,14 @@ eval ctx = go
       | qkey q == Just boolConjKey -> go visited env (boolCase a b (M.Lit (LitBoolean false)))
     _, _ -> apply (go visited env f) (map (go visited env) args)
 
-  evalVar visited env = case _ of
+  evalVar env = case _ of
     Qualified Nothing x -> fromMaybe (SNeu (NLocal x)) (Map.lookup x env)
     q@(Qualified (Just _) _) -> case qkey q of
       Just k
-        -- unfold a binding in the inline set, unless it is already being unfolded on
-        -- this path (a cycle / self-reference) — then leave it as a call (ADR 0020).
-        -- Re-evaluated at each use site, reproducing the current inline policy.
-        | Just body <- Map.lookup k ctx.inline -> if Set.member k visited then SNeu (NTop q) else go (Set.insert k visited) Map.empty body
+        -- unfold a binding in the inline set (ADR 0020), but **once** per `normalize`: every
+        -- reference shares the memoized `Sem` (ADR 0035 Layer A) instead of re-evaluating the
+        -- body. `memo` has an entry for exactly the inline-set keys (`ctx.inline`).
+        | Just lz <- Map.lookup k memo -> force lz
         | Set.member k ctx.dataCtors -> SCtorApp q []
         | otherwise -> SNeu (NTop q)
       Nothing -> SNeu (NTop q)
@@ -158,12 +168,12 @@ apply head args
 bindParams :: Env -> Array String -> Array Sem -> Env
 bindParams env ps args = Array.foldl (\e (Tuple p a) -> Map.insert p a e) env (Array.zip ps args)
 
-accessor :: Ctx -> Set String -> String -> Sem -> Sem
-accessor ctx visited l = case _ of
+accessor :: Ctx -> Map String (Lazy Sem) -> Set String -> String -> Sem -> Sem
+accessor ctx memo visited l = case _ of
   SRecord fs -> fromMaybe (SNeu (NAccessor l (SRecord fs))) (lookupSem l fs)
   -- a transparent (newtype / dictionary) constructor is the identity on its payload, so
   -- a field read sees through it: `Dict({…}).l` is `{…}.l`
-  SCtorApp q [ payload ] | Just k <- qkey q, Set.member k ctx.newtypeCtors -> accessor ctx visited l payload
+  SCtorApp q [ payload ] | Just k <- qkey q, Set.member k ctx.newtypeCtors -> accessor ctx memo visited l payload
   s@(SNeu (NTop q))
     | Just k <- qkey q
     , Just fields <- Map.lookup k ctx.instanceFields
@@ -173,7 +183,7 @@ accessor ctx visited l = case _ of
         -- `heytingAlgebraBoolean.implies` calls its own `.disj`): mark it visited so the
         -- projected field's own back-reference stays a call rather than looping.
         case Array.find (\(Tuple fl _) -> fl == l) fields of
-          Just (Tuple _ fieldExpr) -> eval ctx (Set.insert k visited) Map.empty fieldExpr
+          Just (Tuple _ fieldExpr) -> eval ctx memo (Set.insert k visited) Map.empty fieldExpr
           Nothing -> SNeu (NAccessor l s)
   s -> SNeu (NAccessor l s)
 
@@ -199,41 +209,41 @@ performSem pctx se orig = case se of
 
 -- case ------------------------------------------------------------------------
 
-evalCase :: Ctx -> Set String -> Env -> Array M.Expr -> Array M.Alt -> Sem
-evalCase ctx visited env scrutsE alts =
+evalCase :: Ctx -> Map String (Lazy Sem) -> Set String -> Env -> Array M.Expr -> Array M.Alt -> Sem
+evalCase ctx memo visited env scrutsE alts =
   let
-    scruts = map (eval ctx visited env) scrutsE
+    scruts = map (eval ctx memo visited env) scrutsE
   in
-    case selectAlt ctx visited env scruts alts of
+    case selectAlt ctx memo visited env scruts alts of
       Just sem -> sem
-      Nothing -> SNeu (NCase scruts (map (evalAlt ctx visited env) alts))
+      Nothing -> SNeu (NCase scruts (map (evalAlt ctx memo visited env) alts))
 
 -- | Select the first alternative that definitely matches (binding its sub-patterns),
 -- | stopping — and leaving the whole `case` — at the first undecidable or guarded
 -- | alternative. Mirrors `Simplify.caseOfKnown`.
-selectAlt :: Ctx -> Set String -> Env -> Array Sem -> Array M.Alt -> Maybe Sem
-selectAlt ctx visited env scruts = go
+selectAlt :: Ctx -> Map String (Lazy Sem) -> Set String -> Env -> Array Sem -> Array M.Alt -> Maybe Sem
+selectAlt ctx memo visited env scruts = go
   where
   go alts = case Array.uncons alts of
     Nothing -> Nothing
     Just { head: alt, tail } -> case alt.result of
       Right body -> case matchAllSem ctx alt.binders scruts of
-        MYes subs -> Just (eval ctx visited (Array.foldl (\e (Tuple x s) -> Map.insert x s e) env subs) body)
+        MYes subs -> Just (eval ctx memo visited (Array.foldl (\e (Tuple x s) -> Map.insert x s e) env subs) body)
         MNo -> go tail
         MUnknown -> Nothing
       Left _ -> Nothing
 
 -- | Evaluate an alternative's body(ies) with its binder variables bound to opaque
 -- | locals (the scrutinee is not known, so the bound values are not either).
-evalAlt :: Ctx -> Set String -> Env -> M.Alt -> NAlt
-evalAlt ctx visited env alt =
+evalAlt :: Ctx -> Map String (Lazy Sem) -> Set String -> Env -> M.Alt -> NAlt
+evalAlt ctx memo visited env alt =
   let
     env' = Array.foldl (\e v -> Map.insert v (SNeu (NLocal v)) e) env (alt.binders >>= binderVars)
   in
     { binders: alt.binders
     , result: case alt.result of
-        Right e -> Right (eval ctx visited env' e)
-        Left gs -> Left (map (\g -> { guard: eval ctx visited env' g.guard, expression: eval ctx visited env' g.expression }) gs)
+        Right e -> Right (eval ctx memo visited env' e)
+        Left gs -> Left (map (\g -> { guard: eval ctx memo visited env' g.guard, expression: eval ctx memo visited env' g.expression }) gs)
     }
 
 matchAllSem :: Ctx -> Array Binder -> Array Sem -> Match
@@ -287,22 +297,22 @@ combine = case _, _ of
 -- | single bindings (order preserved), each inlined or retained per the current gates
 -- | (single-use/dead pure, trivial record, small lambda); a recursive group is retained,
 -- | its bound variables opaque (never unfolded — that is the infinite-loop hazard).
-evalLet :: Ctx -> Set String -> Env -> Array M.Bind -> M.Expr -> Sem
-evalLet ctx visited env binds body = case Array.uncons binds of
-  Nothing -> eval ctx visited env body
+evalLet :: Ctx -> Map String (Lazy Sem) -> Set String -> Env -> Array M.Bind -> M.Expr -> Sem
+evalLet ctx memo visited env binds body = case Array.uncons binds of
+  Nothing -> eval ctx memo visited env body
   Just { head: M.NonRec _ x rhs, tail } ->
     let
-      rhsSem = eval ctx visited env rhs
-      rest e = evalLet ctx visited e tail body
+      rhsSem = eval ctx memo visited env rhs
+      rest e = evalLet ctx memo visited e tail body
     in
       if inlineLet ctx x rhs body then rest (Map.insert x rhsSem env)
       else SLet x rhsSem (\xv -> rest (Map.insert x xv env))
   Just { head: M.Rec rs, tail } ->
     let
       env' = Array.foldl (\e r -> Map.insert r.ident (SNeu (NLocal r.ident)) e) env rs
-      rs' = map (\r -> { meta: r.meta, ident: r.ident, expr: eval ctx visited env' r.expr }) rs
+      rs' = map (\r -> { meta: r.meta, ident: r.ident, expr: eval ctx memo visited env' r.expr }) rs
     in
-      SLetRec rs' (evalLet ctx visited env' tail body)
+      SLetRec rs' (evalLet ctx memo visited env' tail body)
 
 -- | Whether a `let` binding should be inlined rather than retained — the *current*
 -- | policy (ADR 0020 stage 2): single-use or dead and pure, or a trivial record, or a

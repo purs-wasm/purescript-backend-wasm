@@ -193,6 +193,19 @@
           "dependencies": []
         }
       },
+      "examples-nbe-stress": {
+        "path": "examples/nbe-stress",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-recordmeta": {
         "path": "examples/record-meta",
         "core": {
