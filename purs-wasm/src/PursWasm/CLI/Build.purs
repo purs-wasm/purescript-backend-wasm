@@ -287,21 +287,35 @@ buildCmd cliRoot binaryenBinDir args = do
       -- liftEffect progressEndImpl
       br *> info (Log.blue "Linking (lower + codegen)…")
       liftEffect (finishLink opts roots allSigs foreignNames externs optimized.modules optimized.writes)
-    else do
-      -- Cold / `--no-opt` / `--dump-mir`: decode every module (no decode-free reuse).
-      info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
-      decodedModules <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
-        Left err -> logAndThrow (i.name <> ": " <> err)
-        Right m -> pure (Just m)
-      either logAndThrow pure (checkWasmBaseCompat decodedModules)
-      either logAndThrow pure (checkCorefnVersions decodedModules)
-      case args.dumpMir of
-        Nothing -> pure unit
-        Just target -> do
-          mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
-          writeText mirPath (mirTrace opts decodedModules allSigs target)
-          info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
-      liftEffect (linkModule opts roots decodedModules externs allSigs noCache)
+    else case args.dumpMir of
+      -- `--dump-mir` needs the whole CoreFn for the trace, so keep the decode-everything path
+      -- (a debugging build, where peak memory is not a concern).
+      Just target -> do
+        info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
+        decodedModules <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
+          Left err -> logAndThrow (i.name <> ": " <> err)
+          Right m -> pure (Just m)
+        either logAndThrow pure (checkWasmBaseCompat decodedModules)
+        either logAndThrow pure (checkCorefnVersions decodedModules)
+        mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
+        writeText mirPath (mirTrace opts decodedModules allSigs target)
+        info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
+        liftEffect (linkModule opts roots decodedModules externs allSigs noCache)
+      -- Cold / `--no-opt`: translate + lambda-lift each module and drop its CoreFn before the next,
+      -- so the whole program is never resident as CoreFn *and* MIR at once (copy-reduction — the
+      -- front-half memory floor that blocks self-compilation). `--no-opt` does no whole-program
+      -- optimization, so per-module `liftModule` is the full middle-end; reuse the precomputed
+      -- `foreignNames` and call `finishLink` directly, exactly as the cached path above does.
+      Nothing -> do
+        info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
+        either logAndThrow pure
+          (checkWasmBaseCompat (map (\i -> { name: i.mn, foreignNames: i.foreignNames }) srcInfos))
+        lifted <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
+          Left err -> logAndThrow (i.name <> ": " <> err)
+          Right m -> do
+            either logAndThrow pure (checkCorefnVersions [ m ])
+            pure (Just (liftModule m))
+        liftEffect (finishLink opts roots allSigs foreignNames externs lifted [])
   case linkResult of
     Left err -> logAndThrow err
     Right built -> do
