@@ -22,6 +22,12 @@
 > (it recomputes values on every `eval`/`quote` traversal), independent of the fusion motivation
 > here. ADR 0035 sequences the fix: a behaviour-neutral **sharing/memo** pass (the scalability gate)
 > first, then this ADR's reduction-aware inline-or-share **policy** on top.
+>
+> **Update (2026-06-17):** [ADR 0035](0035-sharing-nbe-reduction-aware-inlining.md)'s **sharing pass
+> (Layers A + B) landed** and opened the scalability gate — the optimized self-compile now reduces
+> through `Optimize.Specialize` instead of spinning. **This ADR's reduction-aware *decision* is
+> ADR 0035 Layer C, now deferred**: with the exponential gone, it is an optimization-quality
+> improvement (the fusion win) rather than a scalability blocker.
 
 ## Context
 
