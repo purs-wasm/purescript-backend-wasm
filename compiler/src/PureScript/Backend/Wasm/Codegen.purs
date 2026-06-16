@@ -28,6 +28,7 @@ module PureScript.Backend.Wasm.Codegen
 import Prelude
 
 import Binaryen as B
+import Control.Monad.Rec.Class (Step(..), tailRecM)
 import Data.Array as Array
 import Data.Foldable (foldl, foldr, traverse_)
 import Data.List (List(..), (:))
@@ -350,20 +351,23 @@ addInternStr ctx exportIt labels = do
     dyn <- B.call ctx.mod internDynamicHelperName [ key ] B.i32
     base <- B.i32Const ctx.mod (Array.length labels)
     B.i32Add ctx.mod base dyn
-  body <- foldr step (pure miss) labels
+  -- `ifChain` (a tail loop) rather than `foldr step (pure miss)`: the whole-program label
+  -- set is large, and the fold's nested Effect binds overflow the host JS stack on a
+  -- self-sized program.
+  prepared <- traverse prepare labels
+  body <- ifChain ctx prepared miss
   _ <- B.addFunction ctx.mod internStrName (B.createType [ B.eqref ]) B.i32 [] body
   -- exported when a record/object foreign needs name→id resolution from the JS
   -- marshalling glue (ADR 0014); otherwise internal (and Binaryen-pruned if unused)
   when exportIt (void (B.addFunctionExport ctx.mod internStrName "internStr"))
   pure unit
   where
-  step (Tuple label labelId) accM = do
-    acc <- accM
+  prepare (Tuple label labelId) = do
     key <- B.localGet ctx.mod 0 B.eqref
     labelConst <- genAtom ctx (ALitString label)
     cond <- B.call ctx.mod strEqHelperName [ key, labelConst ] B.i32
     idExpr <- B.i32Const ctx.mod labelId
-    B.if_ ctx.mod cond idExpr acc
+    pure (Tuple cond idExpr)
 
 funcNameStr :: FuncName -> String
 funcNameStr (FuncName n) = n
@@ -485,13 +489,18 @@ genBody :: Ctx -> AnfExpr -> Effect B.Expression
 -- Statements accumulate in a `List`, prepended most-recent-first (O(1) per `Let`) and
 -- reversed once at `seal` — an `Array` accumulator (`snoc`) copies the whole prefix per
 -- binding, i.e. O(n²) on the long `Let` chains a large function's ANF body becomes.
-genBody ctx = go Nil
+--
+-- The `Let`/`LetRec`/`LetJoin` spine is walked with `tailRecM` rather than self-recursion:
+-- a large function's ANF body is a deeply nested spine, and the Effect recursion compiles to
+-- a non-tail-call chain (`__do`) that overflows the host JS stack on a self-sized program.
+-- `tailRecM` (MonadRec Effect) runs the spine on the heap, in constant stack.
+genBody ctx = tailRecM go <<< { statements: Nil, expr: _ }
   where
-  go statements = case _ of
+  go { statements, expr } = case expr of
     -- A returned atom is coerced to the function's result representation.
-    Return atom -> seal statements =<< genAtomAs ctx ctx.funcResult atom
-    Switch scrutAtom branches dflt -> seal statements =<< genSwitch ctx scrutAtom branches dflt
-    LitSwitch scrutAtom branches dflt -> seal statements =<< genLitSwitch ctx scrutAtom branches dflt
+    Return atom -> Done <$> (seal statements =<< genAtomAs ctx ctx.funcResult atom)
+    Switch scrutAtom branches dflt -> Done <$> (seal statements =<< genSwitch ctx scrutAtom branches dflt)
+    LitSwitch scrutAtom branches dflt -> Done <$> (seal statements =<< genLitSwitch ctx scrutAtom branches dflt)
     -- A direct call whose result is immediately returned is a *tail* call: emit
     -- `return_call` so a tail-recursive chain runs in constant stack. Only valid when
     -- the callee's result rep matches this function's (the frame is replaced, so no
@@ -504,25 +513,25 @@ genBody ctx = go Nil
       , Just sig <- Map.lookup name ctx.sigs
       , sig.result == ctx.funcResult -> do
           operands <- traverse (\(Tuple rep a) -> genAtomAs ctx rep a) (Array.zip sig.params args)
-          seal statements =<< B.returnCall ctx.mod (funcNameStr name) operands (repType ctx sig.result)
+          Done <$> (seal statements =<< B.returnCall ctx.mod (funcNameStr name) operands (repType ctx sig.result))
     -- Store the rhs into its slot, boxing/unboxing if the slot's chosen rep differs
     -- from the rhs's natural rep.
     Let (Slot index) _ rhs k -> do
       e <- genRhs ctx rhs >>= coerce ctx (rhsRep ctx rhs) (slotRep ctx index)
       stmt <- B.localSet ctx.mod index e
-      go (stmt : statements) k
+      pure (Loop { statements: stmt : statements, expr: k })
     LetRec recBinds k -> do
       let groupSlots = map (\(RecBind (Slot s) _ _) -> s) recBinds
       allocs <- traverse (allocRecClosure ctx groupSlots) recBinds
       patches <- traverse (patchRecClosure ctx groupSlots) recBinds
-      go (foldl (flip (:)) statements (allocs <> Array.concat patches)) k
+      pure (Loop { statements: foldl (flip (:)) statements (allocs <> Array.concat patches), expr: k })
     -- A join point (ADR 0022): generate the `producer` as a value-producing block
     -- (its tails yield `rep`, and `return_call` is disabled so it cannot escape the
     -- function), store it into the join slot, then continue the (single) continuation.
     LetJoin (Slot slot) rep producer k -> do
       producerExpr <- genBody (ctx { funcResult = rep, tailPos = false }) producer
       stmt <- B.localSet ctx.mod slot producerExpr
-      go (stmt : statements) k
+      pure (Loop { statements: stmt : statements, expr: k })
   -- the body / branch block produces the function's result (a tail position); `statements`
   -- is most-recent-first, so `value : statements` reversed is emission order with the value last.
   seal statements value =
@@ -569,40 +578,55 @@ patchRecClosure ctx groupSlots (RecBind (Slot slot) _ env) =
 
 -- | A `Switch` becomes a chain of `if (tag == k) <branch> else …`, ending in the
 -- | default block or `unreachable`. The tag is read afresh per comparison.
+-- | Assemble an `if … else …` chain stack-safely from already-generated `(cond, then)`
+-- | pairs and an innermost `else` (`base`): fold from the last branch inward, so the
+-- | accumulating `else` is built by a tail loop rather than the non-tail recursion (each
+-- | level binding the recursive result before `B.if_`) that overflows the host JS stack on
+-- | a switch with many branches in a self-sized program.
+ifChain :: Ctx -> Array (Tuple B.Expression B.Expression) -> B.Expression -> Effect B.Expression
+ifChain ctx branches base = tailRecM step { acc: base, rest: Array.reverse branches }
+  where
+  step { acc, rest } = case Array.uncons rest of
+    Nothing -> pure (Done acc)
+    Just { head: Tuple cond thenE, tail } -> do
+      acc' <- B.if_ ctx.mod cond thenE acc
+      pure (Loop { acc: acc', rest: tail })
+
+dfltExpr :: Ctx -> Maybe AnfExpr -> Effect B.Expression
+dfltExpr ctx = case _ of
+  Just d -> genBody ctx d
+  Nothing -> B.unreachable ctx.mod
+
 genSwitch :: Ctx -> Atom -> Array Branch -> Maybe AnfExpr -> Effect B.Expression
-genSwitch ctx scrutAtom branches dflt = chain branches
+genSwitch ctx scrutAtom branches dflt = do
+  prepared <- traverse prepare branches
+  base <- dfltExpr ctx dflt
+  ifChain ctx prepared base
   where
   readTag = do
     s <- genAtomAs ctx Boxed scrutAtom
     c <- B.refCast ctx.mod s ctx.dataBase.ref
     B.structGet ctx.mod 0 c B.i32 false
-  chain bs = case Array.uncons bs of
-    Nothing -> case dflt of
-      Just d -> genBody ctx d
-      Nothing -> B.unreachable ctx.mod
-    Just { head: Branch tag body, tail } -> do
-      tagExpr <- readTag
-      k <- B.i32Const ctx.mod tag
-      cond <- B.i32Eq ctx.mod tagExpr k
-      thenE <- genBody ctx body
-      elseE <- chain tail
-      B.if_ ctx.mod cond thenE elseE
+  prepare (Branch tag body) = do
+    tagExpr <- readTag
+    k <- B.i32Const ctx.mod tag
+    cond <- B.i32Eq ctx.mod tagExpr k
+    thenE <- genBody ctx body
+    pure (Tuple cond thenE)
 
 -- | A `LitSwitch` becomes a chain of `if (scrutinee == literal) <branch> else …`.
 -- | The equality test unboxes the scrutinee per literal kind: `Int`/`Char` and
 -- | `Boolean` compare as `i32`, `Number` as `f64`.
 genLitSwitch :: Ctx -> Atom -> Array LitBranch -> Maybe AnfExpr -> Effect B.Expression
-genLitSwitch ctx scrutAtom branches dflt = chain branches
+genLitSwitch ctx scrutAtom branches dflt = do
+  prepared <- traverse prepare branches
+  base <- dfltExpr ctx dflt
+  ifChain ctx prepared base
   where
-  chain bs = case Array.uncons bs of
-    Nothing -> case dflt of
-      Just d -> genBody ctx d
-      Nothing -> B.unreachable ctx.mod
-    Just { head: LitBranch pat body, tail } -> do
-      cond <- litTest pat
-      thenE <- genBody ctx body
-      elseE <- chain tail
-      B.if_ ctx.mod cond thenE elseE
+  prepare (LitBranch pat body) = do
+    cond <- litTest pat
+    thenE <- genBody ctx body
+    pure (Tuple cond thenE)
   litTest = case _ of
     PInt n -> do
       s <- genAtomAs ctx I32 scrutAtom

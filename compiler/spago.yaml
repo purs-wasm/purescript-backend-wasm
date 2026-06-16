@@ -28,6 +28,7 @@ package:
     - node-buffer
     - prelude
     - strings
+    - tailrec
     - transformers
     - tuples
   test:
