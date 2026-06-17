@@ -1,12 +1,15 @@
 name: Nightly
 
-# Publish a nightly build of the `purs-wasm` npm package on every (non-docs) push to `main`, so
-# `npm install purs-wasm@nightly` always tracks the latest main. The stable `latest` dist-tag is
-# never touched — nightlies go out under the `nightly` tag with a unique pre-release version.
+# Publish a nightly build of the `purs-wasm` npm package — but only when **explicitly opted in**, so a
+# routine merge to `main` does NOT release. Opt in by including the marker `[nightly]` anywhere in the
+# merge (squash) commit message of the PR; or run this workflow manually (workflow_dispatch). Without
+# the marker the job is skipped. `npm install purs-wasm@nightly` then tracks the most recent nightly;
+# the stable `latest` dist-tag is never touched — nightlies go out under the `nightly` tag with a
+# unique pre-release version.
 #
 # Prerequisites (repository secrets):
-#   - NPM_TOKEN          an npm automation token with publish rights to `purs-wasm`
 #   - CACHIX_AUTH_TOKEN  (already used by CI) for the Nix build cache
+#   (npm publish uses OIDC trusted publishing — no NPM_TOKEN needed.)
 on:
   push:
     branches: [main]
@@ -18,25 +21,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Skip the (expensive, publishing) build for docs-only pushes — a nightly would be identical.
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            code:
-              - '**'
-              - '!README.md'
-              - '!docs/**'
-
   nightly:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Opt-in gate (see header): publish only when the push's head (merge/squash) commit message
+    # contains the `[nightly]` marker, or when the workflow is dispatched manually. An unmarked
+    # merge to `main` matches neither branch, so the job is skipped and nothing is published.
+    # (The old docs-only skip is gone — it is redundant now that publishing is explicit opt-in.)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[nightly]')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -62,17 +54,20 @@ jobs:
       - name: Test
         run: pnpm -F ./purs-wasm run test
 
-      # `<next-minor>-nightly.<yyyymmdd>.<short-sha>`: ahead of the last stable, below the next
-      # release. The short SHA makes it unique per commit (so same-day pushes don't collide); the
-      # `nightly` dist-tag always points at the most recently published one regardless of ordering.
+      # `0.0.0-nightly.<yyyymmdd>.g<short-sha>`. npm requires a semver `MAJOR.MINOR.PATCH` prefix, so
+      # a bare `nightly.<date>.<sha>` is not a legal version; we use a **fixed `0.0.0` base** rather
+      # than guessing the next release's bump (it may be patch/minor/major — not deterministic). The
+      # meaningful identity is the `nightly.<date>.g<sha>` pre-release tag (the short SHA makes it
+      # unique per commit; the `g` prefix — git-describe convention — keeps that identifier
+      # alphanumeric, so an all-digit SHA can't form an illegal leading-zero numeric identifier).
+      # Consumers fetch it via the `nightly` **dist-tag** (`npm install purs-wasm@nightly`), not via a
+      # semver range — `0.0.0-*` is excluded from `^x.y.z` ranges and never shadows the stable
+      # `latest`. `--tag nightly` (below) points `@nightly` at the most recently published one
+      # regardless of version ordering.
       - name: Compute nightly version
         id: ver
         run: |
-          base=$(node -p "require('./purs-wasm/package.json').version")
-          major=$(echo "$base" | cut -d. -f1)
-          minor=$(echo "$base" | cut -d. -f2)
-          next="${major}.$((minor + 1)).0"
-          version="${next}-nightly.$(date -u +%Y%m%d).${GITHUB_SHA::7}"
+          version="0.0.0-nightly.$(date -u +%Y%m%d).g${GITHUB_SHA::7}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "nightly version: $version"
 
