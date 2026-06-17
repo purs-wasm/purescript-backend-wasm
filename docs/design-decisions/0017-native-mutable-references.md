@@ -3,6 +3,31 @@
 - Status: Accepted
 - Date: 2026-06-04
 
+> **Update (2026-06-18) — the `isEffectForeignApp` non-host exclusion extends to *all* known
+> functions, and the over-coverage it guards against is `Externs.foreignSigs`, not ADR 0016.**
+> A dropped-effect bug (PR #42, guard `Test.E2E.Cli.PerformUserEffect`) refined the Decision's
+> intrinsic-exclusion bullet on two points:
+> - **The `foreignSigs` over-coverage originates in `Externs.foreignSigs`, not (only) the ADR 0016
+>   source path.** `Externs.foreignSigs` is keyed off **every `EDValue` — every *exported*
+>   top-level value, ordinary functions included** — because the externs format does not flag which
+>   values are `foreign import`s (a foreign and a plain value are both `EDValue ident type`); its own
+>   doc comment notes the extra entries are "inert" *because foreign resolution only consults a sig
+>   where the name is an actual unresolved import*. ADR 0016 source reconstruction adds the
+>   *private*-foreign half on top, but a non-foreign user function (e.g. an exported
+>   `bump :: … -> Effect …`) lands in `foreignSigs` via the **externs** path, not the source path —
+>   so the Decision's "source reconstruction (ADR 0016) also lists these" is, more precisely, the
+>   externs `EDValue` coverage.
+> - **`MEffect`-result is not a sound host-foreign classifier; exclude `knownFuncs`.**
+>   `isEffectForeignApp` broke the "inert" assumption by using a sig's `MEffect` result as the
+>   *classifier* for "is this a host foreign?". An exported `Effect`-returning **user function** then
+>   matched and was lowered as a bare producer value — a partial closure built but never applied to
+>   the perform-unit — silently dropping the effect when its `perform` was discarded (`void` / `*>` /
+>   a `do` statement). The fix excludes any binding in `knownFuncs` (anything with a decl body) from
+>   the predicate, mirroring the intrinsic / `foreignIntrinsic` exclusions: a binding we have a body
+>   for is by definition not an opaque host foreign — it is performed via the unit-application path
+>   (its arity includes the perform-unit, ADR 0018), so a performed application saturates to a direct
+>   `RCallKnown`. Refs ADR 0015 (perform lowering), ADR 0018 (perform-unit arity).
+
 ## Context
 
 `Effect.Ref` (and `Control.Monad.ST`) provide a mutable cell. The standard library
