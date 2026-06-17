@@ -214,32 +214,54 @@ dataSignatures = foldProgramRhs collect []
 -- | Build the ADT struct types: a tag-only base `$Data = (struct i32)` (open) plus
 -- | one subtype `$Data_<sig> = (sub $Data (struct i32 <field per rep>))` per distinct
 -- | non-empty signature. The empty signature maps to the base (a nullary ctor is
--- | just its tag). All in one recursion group so the subtype declarations resolve.
+-- | just its tag).
+-- |
+-- | Each type is its **own singleton recursion group** (the base built first, then
+-- | every subtype in a separate builder declaring the already-built base as
+-- | supertype) rather than one shared group. wasm-GC is isorecursive — type identity
+-- | is per rec group — so a type grouped with different neighbours is a distinct type
+-- | and a cross-module `ref.cast` would trap. Singletons canonicalise regardless of a
+-- | module's other types, which is what lets separately-built modules share these GC
+-- | types under `wasm-merge` (ADR 0037 barrier ①). Sound here because fields are
+-- | `i32`/`f64`/`eqref` (never a concrete subtype), so the type graph has no cycles —
+-- | every type is the base or a base-subtype. The supertype reference across builders
+-- | is validated by binaryen.js (a built `HeapType` may be passed to `setSubType`).
 buildDataTypes :: B.Module -> Array (Array Rep) -> Effect { base :: DataStruct, structs :: Map (Array Rep) DataStruct }
 buildDataTypes _ sigs0 = do
   let nonEmpty = Array.filter (not <<< Array.null) (Array.nub sigs0)
-  let n = Array.length nonEmpty
-  tb <- B.typeBuilderCreate (1 + n)
-  B.typeBuilderSetStructType tb 0 [ { ty: B.i32, mutable: false } ]
-  B.typeBuilderSetOpen tb 0
-  baseTmp <- B.typeBuilderGetTempHeapType tb 0
-  forEachArr_ (Array.mapWithIndex Tuple nonEmpty)
-    ( \(Tuple i sig) -> do
-        B.typeBuilderSetStructType tb (i + 1)
+  baseHt <- buildBase
+  let base = toStruct baseHt
+  structPairs <- buildSubStructs baseHt nonEmpty
+  pure
+    { base
+    , structs: Map.insert [] base (Map.fromFoldable structPairs)
+    }
+  where
+  toStruct ht = { ht, ref: B.typeFromHeapType ht false }
+  -- the open base `$Data = (struct i32)` as a singleton group
+  buildBase = do
+    tb <- B.typeBuilderCreate 1
+    B.typeBuilderSetStructType tb 0 [ { ty: B.i32, mutable: false } ]
+    B.typeBuilderSetOpen tb 0
+    hts <- B.typeBuilderBuildAndDispose tb 1
+    case Array.head hts of
+      Just baseHt -> pure baseHt
+      Nothing -> throwException (error "Codegen: expected the $Data base type")
+  -- one singleton subtype group per signature; `tailRecM` over the index keeps the
+  -- accumulation stack-safe (the same discipline as the rest of this module)
+  buildSubStructs baseHt sigs = tailRecM go { i: 0, acc: [] }
+    where
+    go { i, acc } = case Array.index sigs i of
+      Nothing -> pure (Done acc)
+      Just sig -> do
+        tb <- B.typeBuilderCreate 1
+        B.typeBuilderSetStructType tb 0
           (Array.cons { ty: B.i32, mutable: false } (map (\rep -> { ty: fieldWasmType rep, mutable: false }) sig))
-        B.typeBuilderSetSubType tb (i + 1) baseTmp
-    )
-  hts <- B.typeBuilderBuildAndDispose tb (1 + n)
-  case Array.uncons hts of
-    Just { head: baseHt, tail: structHts } -> do
-      let toStruct ht = { ht, ref: B.typeFromHeapType ht false }
-      let base = toStruct baseHt
-      pure
-        { base
-        , structs: Map.insert [] base
-            (Map.fromFoldable (Array.zipWith (\sig ht -> Tuple sig (toStruct ht)) nonEmpty structHts))
-        }
-    Nothing -> throwException (error "Codegen: expected at least the $Data base type")
+        B.typeBuilderSetSubType tb 0 baseHt
+        hts <- B.typeBuilderBuildAndDispose tb 1
+        case Array.head hts of
+          Just ht -> pure (Loop { i: i + 1, acc: Array.snoc acc (Tuple sig (toStruct ht)) })
+          Nothing -> throwException (error "Codegen: expected a $Data subtype")
 
 -- | The wasm type of a single ADT struct field for a given representation
 -- | (`i32`/`f64` unboxed, otherwise the boxed `eqref`).
