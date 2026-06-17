@@ -84,6 +84,7 @@ language and are kept out of version control.)
 | 0034 | [Split the module cache into `.pmi` interface and `.pmo` object](0034-pmi-interface-pmo-object-split.md) | Accepted |
 | 0035 | [Sharing/memoizing the NbE reducer, then reduction-aware inlining](0035-sharing-nbe-reduction-aware-inlining.md) | Accepted (Layers A+B landed 2026-06-17 — the scalability gate; Layer C deferred) |
 | 0036 | [Parameterized join points for decision-tree leaves](0036-join-points-for-decision-tree-leaves.md) | Proposed (de-prioritized — measured duplication ~1.16×, not the `--no-opt` floor) |
+| 0037 | [Separate per-module codegen and linking (per-module wasm + `wasm-merge`)](0037-separate-per-module-codegen-and-linking.md) | Accepted (barriers ①②③ validated by spikes; boxed module boundary chosen; implementation phased — not started) |
 
 ## Scope
 
