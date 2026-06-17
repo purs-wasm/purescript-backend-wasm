@@ -143,6 +143,16 @@ data Intrinsic
   -- | applying it to the unit (the erased `Partial` dictionary). Native so the wasm
   -- | closure never crosses to the JS foreign (which would call it as `f()`).
   | UnsafePartial
+  -- | `Data.Int.Bits` 32-bit bitwise ops (JS `& | ^ << >> >>> ~`), each a single
+  -- | i32 instruction. `IntShr` is *arithmetic* (sign-propagating, JS `>>`);
+  -- | `IntZshr` is *logical* (zero-fill, JS `>>>`); `IntComplement x` = `x ^ -1`.
+  | IntAnd
+  | IntOr
+  | IntXor
+  | IntShl
+  | IntShr
+  | IntZshr
+  | IntComplement
 
 derive instance eqIntrinsic :: Eq Intrinsic
 derive instance genericIntrinsic :: Generic Intrinsic _
@@ -232,9 +242,9 @@ foreignIntrinsic = case _ of
 -- | Intrinsics resolved by *qualified* name (rather than the bare identifier the table
 -- | above uses): the `effect`-package primitives — `Effect.Ref` cell ops (ADR
 -- | 0017) and the `Effect` control-flow loops (ADR 0018) — plus
--- | `Partial.Unsafe._unsafePartial`, a couple of `Data.Array` ops, and the
--- | uncurried-function families. Qualified because names like `read` / `write` / `new`
--- | / `forE` are too generic to claim globally.
+-- | `Partial.Unsafe._unsafePartial`, a couple of `Data.Array` ops, the `Data.Int.Bits`
+-- | bitwise ops, and the uncurried-function families. Qualified because names like
+-- | `read` / `write` / `new` / `forE` / `and` / `or` are too generic to claim globally.
 -- |
 -- | The arity counts each op's value parameters plus the trailing `Effect`
 -- | perform-unit for the ops whose result is `Effect Unit` (`Ref.write`, `forE`, …):
@@ -291,6 +301,16 @@ qualifiedIntrinsic = case _ of
   "Wasm.Int.lt" -> Just (Tuple IntLt 2)
   "Wasm.Int.div" -> Just (Tuple IntDiv 2)
   "Wasm.Int.mod" -> Just (Tuple IntMod 2)
+  -- `Data.Int.Bits` 32-bit bitwise ops (the `integers` package foreigns: bare
+  -- `and`/`or`/`xor`/`shl`/`shr`/`zshr`/`complement`, qualified here because the
+  -- bare names are too generic). Pure, so absent from `effectfulForeignNames`.
+  "Data.Int.Bits.and" -> Just (Tuple IntAnd 2)
+  "Data.Int.Bits.or" -> Just (Tuple IntOr 2)
+  "Data.Int.Bits.xor" -> Just (Tuple IntXor 2)
+  "Data.Int.Bits.shl" -> Just (Tuple IntShl 2)
+  "Data.Int.Bits.shr" -> Just (Tuple IntShr 2)
+  "Data.Int.Bits.zshr" -> Just (Tuple IntZshr 2)
+  "Data.Int.Bits.complement" -> Just (Tuple IntComplement 1)
   -- `reverse`/`sliceImpl`/`indexImpl`/`unconsImpl`, `Data.Foldable.fold{l,r}Array`,
   -- `Data.String.CodeUnits.{singleton,toCharArray,fromCharArray}`, `Data.Int.fromStringAsImpl`
   -- now live in `ulib/<Module>/foreign.wat` (ADR 0012), resolved as merged foreigns.

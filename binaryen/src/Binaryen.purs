@@ -41,6 +41,10 @@ module Binaryen
   , i32LtS
   , i32And
   , i32Or
+  , i32Xor
+  , i32Shl
+  , i32ShrS
+  , i32ShrU
   , i32Eqz
   , i32Const
   , i32TruncF64S
@@ -283,6 +287,30 @@ foreign import i32OrImpl :: Module -> Expression -> Expression -> Effect Express
 -- | `i32.or`: bitwise OR.
 i32Or :: Module -> Expression -> Expression -> Effect Expression
 i32Or = i32OrImpl
+
+foreign import i32XorImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.xor`: bitwise XOR.
+i32Xor :: Module -> Expression -> Expression -> Effect Expression
+i32Xor = i32XorImpl
+
+foreign import i32ShlImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.shl`: logical left shift (`left << (right & 31)`).
+i32Shl :: Module -> Expression -> Expression -> Effect Expression
+i32Shl = i32ShlImpl
+
+foreign import i32ShrSImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.shr_s`: arithmetic right shift, sign-propagating (PureScript `shr`, JS `>>`).
+i32ShrS :: Module -> Expression -> Expression -> Effect Expression
+i32ShrS = i32ShrSImpl
+
+foreign import i32ShrUImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i32.shr_u`: logical right shift, zero-filling (PureScript `zshr`, JS `>>>`).
+i32ShrU :: Module -> Expression -> Expression -> Effect Expression
+i32ShrU = i32ShrUImpl
 
 foreign import i32EqzImpl :: Module -> Expression -> Effect Expression
 

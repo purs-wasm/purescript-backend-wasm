@@ -119,13 +119,17 @@ isEffectForeignApp env = case _ of
   M.Var q -> isEff q
   _ -> false
   where
-  -- An intrinsic (incl. the `Effect.Ref` ops and `modifyImpl`, ADR 0017) is NOT a host
-  -- foreign: it is performed via the unit-application path (so its arity includes the
-  -- perform-unit), even though source reconstruction (ADR 0016) also lists it in
-  -- `foreignSigs` with an `MEffect` result. Exclude it here so that path is taken.
   isEff q@(Qualified _ ident)
     | isJust (qualifiedIntrinsic (qualifiedKeyOf q)) = false
     | isJust (foreignIntrinsic ident) = false
+    -- A user-defined top-level function has a decl body, so it is in `knownFuncs`; it is
+    -- NOT a host foreign. It is performed via the unit-application path (its arity includes
+    -- the perform-unit, ADR 0018), even though source reconstruction (ADR 0016) also lists
+    -- it in `foreignSigs` with an `MEffect` result. Without this exclusion, a performed
+    -- partial application of such a function (`perform (bad "x")`) is misrouted to the
+    -- host-foreign path and lowered as a bare producer value — a partial closure that is
+    -- built but never applied to the unit, silently dropping the effect.
+    | Object.member (qualifiedKeyOf q) env.knownFuncs = false
     | otherwise = case Object.lookup (qualifiedKeyOf q) env.foreignSigs of
         Just sig -> case sig.result of
           MEffect _ -> true
@@ -198,9 +202,16 @@ lowerArg env expr k = case expr of
   -- collapse removes most `Perform`s in the simplifier.)
   M.Perform e
     | isEffectForeignApp env e -> lowerArg env e k
+    -- A performed application of a non-foreign producer: append the perform unit to the
+    -- producer's OWN argument list, so the whole thing lowers as one application. A function
+    -- whose arity includes the perform-unit (ADR 0018) then saturates to a *direct*
+    -- `RCallKnown` (the same direct shape a foreign perform takes), and `applyArity` still
+    -- handles the over-applied case (call saturated, apply the unit to the result). The old
+    -- `head: e` form passed the application itself as the head, hit the closure/`RApply`
+    -- fallback, built the producer as a partial closure, and dropped the apply that feeds
+    -- the unit — silently discarding the effect.
+    | M.App h as <- e -> lowerApp env { head: h, args: as <> [ M.Lit (LitInt 0) ] } k
     | otherwise -> lowerApp env { head: e, args: [ M.Lit (LitInt 0) ] } k
-  -- An (uncurried) lambda lowers to a closure; closures are arity-1, so a
-  -- multi-parameter lambda peels one parameter and the rest stay an inner lambda.
   M.Abs params body -> case Array.uncons params of
     Nothing -> lowerArg env body k
     Just { head: param, tail } -> do
@@ -517,17 +528,6 @@ recBindEtaArity env = case _ of
     Object.lookup (qualifiedKeyOf q) env.knownFuncs
       <|> (snd <$> (qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident))
       <|> ((Array.length <<< _.params) <$> Object.lookup (qualifiedKeyOf q) env.foreignSigs)
-
--- | The declared arity of an application head, resolved the same way `lowerApp` dispatches a call:
--- | a constructor, a top-level/specialized function, an intrinsic, or a foreign import.
-headArity :: Env -> M.Expr -> Maybe Int
-headArity env = case _ of
-  M.Var q@(Qualified (Just _) ident) ->
-    (_.arity <$> Object.lookup (qualifiedKeyOf q) env.ctors)
-      <|> Object.lookup (qualifiedKeyOf q) env.knownFuncs
-      <|> (snd <$> (qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident))
-      <|> ((Array.length <<< _.params) <$> Object.lookup (qualifiedKeyOf q) env.foreignSigs)
-  _ -> Nothing
 
 -- | Compile a `case` into a `Switch` on the scrutinee's tag, finishing each branch
 -- | with `finish` (so the same compiler serves a tail-position `case` — `finish =
