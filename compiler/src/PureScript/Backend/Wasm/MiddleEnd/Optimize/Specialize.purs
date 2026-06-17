@@ -36,7 +36,6 @@ import Prelude
 import Control.Monad.State (State, gets, modify_, runState)
 import Data.Array as Array
 import Data.Either (Either(..))
-import Data.Foldable (foldl)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -48,6 +47,7 @@ import Data.Tuple (Tuple(..), snd)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (binderVars, freeVars)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (substMany)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
 import PureScript.CoreFn (Literal(..), ModuleName, Qualified(..))
 
 -- | A top-level function that is a candidate callee: its parameter list, body, and
@@ -327,41 +327,24 @@ lambdaFrees = case _ of
   e -> freeVars [] e
 
 -- a structural key for the lambda with its free variables abstracted, so two
--- lambdas equal up to their captures share a specialization
+-- lambdas equal up to their captures share a specialization. The free vars are
+-- abstracted to positional markers in a single capture-avoiding pass (rather than one
+-- `substVar` per free), and the canonical form is then **hashed** rather than used
+-- verbatim: the raw `show` of a large lambda body is a multi-kilobyte string, and it was
+-- both built (genericShow) and *retained as a `Map` key* for every specialization
+-- candidate — quadratic-ish key comparisons plus heavy GC that dominated the optimization of
+-- large higher-order modules. A 16-hex digest keeps the dedup `Map` keys tiny and fixed-size.
+-- A clash would mis-share two distinct specializations, but the digest is the same one already
+-- trusted for the build-cache identity, so an accidental clash is astronomically unlikely.
 canonicalKey :: Array String -> M.Expr -> String
 canonicalKey frees lam =
-  show (foldlWithIndexArr (\i e f -> substVar f (M.Var (Qualified Nothing ("#" <> show i))) e) lam frees)
+  hashString (show (substMany markers lam))
+  where
+  markers =
+    Map.fromFoldable
+      (Array.mapWithIndex (\i f -> Tuple f (M.Var (Qualified Nothing ("#" <> show i)))) frees)
 
 -- substitution / helpers ------------------------------------------------------
-
--- replace free occurrences of local `name` with `repl`, stopping at shadowing
-substVar :: String -> M.Expr -> M.Expr -> M.Expr
-substVar name repl = go
-  where
-  go = case _ of
-    e@(M.Var (Qualified Nothing n)) -> if n == name then repl else e
-    e@(M.Var _) -> e
-    M.Lit lit -> M.Lit (mapLit go lit)
-    e@(M.Constructor _ _ _) -> e
-    M.Accessor l e -> M.Accessor l (go e)
-    M.Update e cf kvs -> M.Update (go e) cf (map (map go) kvs)
-    M.Abs ps b -> if Array.elem name ps then M.Abs ps b else M.Abs ps (go b)
-    M.App f a -> mkApp (go f) (map go a)
-    M.Perform e -> M.Perform (go e)
-    M.Case ss alts -> M.Case (map go ss) (map goAlt alts)
-    M.Let bs body ->
-      if Array.elem name (bs >>= boundNames) then M.Let bs body
-      else M.Let (map goBind bs) (go body)
-  goAlt alt =
-    if Array.elem name (alt.binders >>= binderVars) then alt
-    else alt
-      { result = case alt.result of
-          Right e -> Right (go e)
-          Left gs -> Left (map (\g -> { guard: go g.guard, expression: go g.expression }) gs)
-      }
-  goBind = case _ of
-    M.NonRec meta i e -> M.NonRec meta i (go e)
-    M.Rec rs -> M.Rec (map (\r -> r { expr = go r.expr }) rs)
 
 -- keep `App` heads flat (never an `App` of an `App`)
 mkApp :: M.Expr -> Array M.Expr -> M.Expr
@@ -403,9 +386,6 @@ litExprs = case _ of
   LitArray es -> es
   LitObject kvs -> map snd kvs
   _ -> []
-
-foldlWithIndexArr :: forall a b. (Int -> b -> a -> b) -> b -> Array a -> b
-foldlWithIndexArr f z arr = foldl (\acc (Tuple i a) -> f i acc a) z (Array.mapWithIndex Tuple arr)
 
 key :: ModuleName -> String -> String
 key modName ident = joinWith "." modName <> "." <> ident

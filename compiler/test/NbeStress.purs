@@ -8,8 +8,10 @@
 -- | quote CSE) the result stays **O(d)** (≈ 4d) and the loop runs instantly — verified without
 -- | building the whole compiler to wasm.
 -- |
--- | `spec` is the routine `test:unit` guard (a generous linear bound at depth 20 that fails loudly
--- | if the exponential ever returns). `main` sweeps deeper depths for manual inspection:
+-- | `spec` is the routine `test:unit` guard: the linear-bound diamond check above, plus a guard for
+-- | the **Layer C size cap** (`DictElim.simplifyModule` falls back to the un-inlined form when a
+-- | declaration inlines genuine, unshareable bulk — the `genericShow`-into-`show` blow-up that hung
+-- | self-compilation). `main` sweeps deeper diamond depths for manual inspection:
 -- |
 -- |     spago test -p compiler -m Test.NbeStress
 module Test.NbeStress where
@@ -27,8 +29,9 @@ import Effect (Effect)
 import Effect.Console (error) as Console
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Analysis (exprSize)
+import PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim (normalFormSizeCap, simplifyModule)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Semantics (normalize)
-import PureScript.CoreFn (Qualified(..))
+import PureScript.CoreFn (Literal(..), Qualified(..))
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -63,15 +66,50 @@ ctxFor d =
   , memEffBindings: Set.empty
   }
 
--- | Routine guard (ADR 0035 §8): a depth-20 diamond normalizes to a *linear*-size term. On the
--- | pre-sharing reducer this is 2^20 ≈ a million nodes (seconds of work + a huge tree); the
--- | Layer A memo + Layer B quote CSE keep it ≈ 4·20 + 3 = 83. The generous `< 1000` bound passes
--- | instantly when sharing holds and fails (or times out) the moment the exponential returns.
+-- An **un-shareable** term of `n` distinct-position leaves (a flat array of int literals): unlike a
+-- diamond, `quote` cannot CSE it, so its normal form really is ~`n` nodes. Inlining a binding bound
+-- to this produces genuine bulk with no reduction — the `genericShow`-into-`show` pathology in
+-- miniature — which is exactly what the size cap must catch.
+flatBig :: Int -> M.Expr
+flatBig n = M.Lit (LitArray (Array.replicate n (M.Lit (LitInt 0))))
+
+-- a one-declaration module `U.user = <body>`, the unit `simplifyModule` reduces.
+userModule :: M.Expr -> M.Module
+userModule body = { name: [ "U" ], decls: [ M.NonRec Nothing "user" body ] }
+
+-- the reduced size of `U.user` after `simplifyModule`.
+userSize :: M.Module -> Int
+userSize m = case Array.head m.decls of
+  Just (M.NonRec _ _ e) -> exprSize e
+  _ -> -1
+
 spec :: Spec Unit
-spec = describe "Semantics.normalize — NbE exponential guard (ADR 0035)" do
-  it "normalizes a depth-20 diamond inline DAG to linear size, not O(2^d)" do
-    let d = 20
-    (exprSize (normalize (ctxFor d) (ref d)) < 1000) `shouldEqual` true
+spec = do
+  -- | Routine guard (ADR 0035 §8): a depth-20 diamond normalizes to a *linear*-size term. On the
+  -- | pre-sharing reducer this is 2^20 ≈ a million nodes (seconds of work + a huge tree); the
+  -- | Layer A memo + Layer B quote CSE keep it ≈ 4·20 + 3 = 83. The generous `< 1000` bound passes
+  -- | instantly when sharing holds and fails (or times out) the moment the exponential returns.
+  describe "Semantics.normalize — NbE exponential guard (ADR 0035)" do
+    it "normalizes a depth-20 diamond inline DAG to linear size, not O(2^d)" do
+      let d = 20
+      (exprSize (normalize (ctxFor d) (ref d)) < 1000) `shouldEqual` true
+
+  -- | The Layer C size cap: inlining that blows the normal form past `normalFormSizeCap` falls back
+  -- | to the un-inlined form (the binding stays a call). This is what bounds NbE when a declaration
+  -- | inlines genuine, unshareable bulk — the `genericShow` dictionary of a large derived-`Generic`
+  -- | ADT inlined into `show`, the case that hung the compiler compiling itself. The companion case
+  -- | proves the cap discriminates: a reduced form *under* the cap is still inlined.
+  describe "DictElim.simplifyModule — code-size cap (ADR 0035 Layer C lite)" do
+    it "falls back to the un-inlined call when inlining blows the size cap" do
+      let big = M.Var (Qualified (Just [ "M" ]) "big")
+      let ctx = (ctxFor 0) { inline = Map.singleton "M.big" (flatBig (normalFormSizeCap + 10)) }
+      -- inlined it would be > cap; the cap forces the un-inlined form, so `user` stays a small call.
+      (userSize (simplifyModule ctx (userModule big)) < normalFormSizeCap) `shouldEqual` true
+    it "still inlines a binding whose reduced form is under the cap (the cap discriminates)" do
+      let small = M.Var (Qualified (Just [ "M" ]) "small")
+      let ctx = (ctxFor 0) { inline = Map.singleton "M.small" (flatBig 50) }
+      -- well under the cap: inlining proceeds, so `user` grows to the inlined array (≫ a bare call).
+      (userSize (simplifyModule ctx (userModule small)) > 50) `shouldEqual` true
 
 main :: Effect Unit
 main = do

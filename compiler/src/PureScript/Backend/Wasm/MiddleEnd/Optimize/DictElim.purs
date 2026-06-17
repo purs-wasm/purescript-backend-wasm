@@ -18,6 +18,7 @@ module PureScript.Backend.Wasm.MiddleEnd.Optimize.DictElim
   ( buildCtx
   , simplifyModule
   , summarize
+  , normalFormSizeCap
   ) where
 
 import Prelude
@@ -132,8 +133,30 @@ summarize keepKeys m = m { decls = Array.filter keep m.decls }
 useNbE :: Boolean
 useNbE = true
 
+-- | A reduced declaration larger than this many IR nodes is re-reduced with the inline
+-- | context emptied (ADR 0035, the Layer C size guard). Inlining exists to *shrink* code by
+-- | firing redexes; when a binding instead inlines into a normal form orders of magnitude
+-- | larger than any real declaration — the canonical case is the `genericShow` dictionary of a
+-- | large derived-`Generic` ADT inlined into a `show`, which produces no redex, only bulk — it is
+-- | pure code-size blow-up. Falling back to the un-inlined form keeps that dictionary an ordinary
+-- | call, the same (correct) shape `--no-opt` emits, and is what bounds NbE when a program is
+-- | itself `show`-heavy (notably the compiler compiling itself). The threshold sits far above any
+-- | genuine declaration (tens of thousands of nodes) and far below the observed blow-ups
+-- | (5×10⁵–2×10⁶), so only pathological declarations fall back; the guard measures the *actual*
+-- | reduced size, so a large-but-shared normal form (which quote CSEs back down) is kept inlined.
+normalFormSizeCap :: Int
+normalFormSizeCap = 200_000
+
 reduce :: Ctx -> M.Expr -> M.Expr
-reduce ctx = if useNbE then normalize ctx else simplifyExpr ctx
+reduce ctx e =
+  let
+    r = reduce1 ctx e
+  in
+    if exprSize r > normalFormSizeCap && ctxInlines ctx then reduce1 (ctx { inline = Map.empty, instanceFields = Map.empty }) e
+    else r
+  where
+  reduce1 c = if useNbE then normalize c else simplifyExpr c
+  ctxInlines c = not (Map.isEmpty c.inline) || not (Map.isEmpty c.instanceFields)
 
 simplifyModule :: Ctx -> M.Module -> M.Module
 simplifyModule ctx m = m { decls = map go m.decls }

@@ -130,7 +130,7 @@ eval ctx memo = go
   where
   pctx = pctxOf ctx
 
-  go visited env = case _ of
+  go visited env e = case e of
     M.Var q -> evalVar env q
     -- a record literal is the one literal with a reduction (field projection / update),
     -- so it gets its own semantic value; all other literals are inert `SLit`
@@ -369,7 +369,7 @@ type QState = { counter :: Int, shared :: Map String String, defs :: List (Tuple
 type Q = State QState
 
 quote :: PCtx -> Sem -> Q M.Expr
-quote pctx = case _ of
+quote pctx sem = case sem of
   -- merge a directly-nested lambda into one parameter list (disjoint params), so a
   -- curried worker `\n -> \s -> …` becomes the arity-2 `\n s -> …` whose saturated
   -- self-call is a direct, tail-callable call (constant-stack TCE; ADR 0015). Binders
