@@ -26,6 +26,9 @@ data LowerError
   | UnsupportedBinder String
   | UnknownVariable String
   | UnknownConstructor String
+  -- distinct record labels that hash to the same interned id (ADR 0037 ④); the build
+  -- must fail rather than merge two fields. Carries the colliding label names.
+  | LabelHashCollision (Array String)
 
 derive instance eqLowerError :: Eq LowerError
 derive instance genericLowerError :: Generic LowerError _

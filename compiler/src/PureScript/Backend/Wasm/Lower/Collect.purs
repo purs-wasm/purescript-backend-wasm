@@ -8,6 +8,7 @@ module PureScript.Backend.Wasm.Lower.Collect
   , collectFuncs
   , collectDictCtors
   , collectLabels
+  , labelCollisions
   , functionDecls
   , topLevelBindings
   , isConstructor
@@ -20,11 +21,13 @@ import Prelude
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
+import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (Rep(..))
+import PureScript.Backend.Wasm.Lower.LabelHash (labelHash)
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo, peelAbs, qualifiedKey)
 import PureScript.Backend.Wasm.MiddleEnd.IR (Bind(..), Module)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
@@ -126,13 +129,17 @@ collectDictCtors modules = Object.fromFoldable (modules >>= moduleDictCtors)
     NonRec (Just IsTypeClassConstructor) ident _ -> Just (Tuple (qualifiedKey moduleName ident) unit)
     _ -> Nothing
 
--- | Intern every record/dictionary label across all modules to a unique `i32` id,
--- | assigned by sorted label order so the mapping is deterministic and shared:
--- | records built in one module and projected in another agree on a label's id.
+-- | Intern every record/dictionary label to its `i32` id. The id is a hash of the
+-- | label's bytes (`labelHash`), so it is a pure function of the name — a module can
+-- | assign a label's id without seeing the whole program's label set, which is what
+-- | lets modules be lowered (and later codegenned) independently yet still agree on a
+-- | label's id (records built in one module project correctly in another; ADR 0037
+-- | barrier ④). Distinct labels can in principle hash to the same id; `labelCollisions`
+-- | reports any such clash so the build can fail rather than emit a corrupt record.
 collectLabels :: Array Module -> Object Int
 collectLabels modules =
   Object.fromFoldable
-    (Array.mapWithIndex (\i l -> Tuple l i) (Array.sort (Array.nub (modules >>= \m -> m.decls >>= bindLabels))))
+    (map (\l -> Tuple l (labelHash l)) (Array.nub (modules >>= \m -> m.decls >>= bindLabels)))
   where
   bindLabels = case _ of
     NonRec _ _ e -> exprLabels e
@@ -163,6 +170,20 @@ collectLabels modules =
     ConstructorBinder _ _ _ bs -> bs >>= binderLabels
     NamedBinder _ _ b -> binderLabels b
     _ -> []
+
+-- | Groups of distinct labels that hash to the same interned id (`collectLabels`).
+-- | Empty when every label has a unique id (the expected case). A non-empty result is
+-- | a hash clash that would merge two record fields, so the lowering rejects it rather
+-- | than emit a corrupt record. The check is whole-program in *scope* (it needs the
+-- | full label set) but cheap — it only groups already-computed ids — so it does not
+-- | reintroduce a whole-program lowering pass.
+labelCollisions :: Object Int -> Array (Array String)
+labelCollisions labelIds =
+  Array.filter (\g -> Array.length g > 1) (Array.fromFoldable (Map.values grouped))
+  where
+  grouped =
+    foldl (\m (Tuple label idv) -> Map.insertWith (<>) idv [ label ] m) Map.empty
+      (Object.toUnfoldable labelIds :: Array (Tuple String Int))
 
 -- | The module-qualified names of the top-level bindings an expression references
 -- | (`Qualified (Just module) ident` `Var`s), used for reachability.

@@ -1,7 +1,7 @@
 -- | CLI-driven e2e (ADR 0031 phase 5) of record metaprogramming: `RowToList` field iteration and
--- | adding a field whose name has no compile-time id (the runtime label-interning fallback,
--- | `$rt.internDynamic`). Built standalone by the real `purs-wasm build`. Regression guard for the
--- | fix to the `internStr`-`unreachable` gap — adding such a field used to trap.
+-- | adding a field whose name has no compile-time id (its id is the runtime hash of the name,
+-- | `$rt.internStr`, ADR 0037 ④). Built standalone by the real `purs-wasm build`. Regression guard
+-- | for the `internStr`-`unreachable` gap — adding such a field used to trap.
 module Test.E2E.Cli.RecordMeta (spec) where
 
 import Prelude

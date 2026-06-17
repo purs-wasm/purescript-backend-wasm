@@ -24,13 +24,6 @@
   (type $Code (func (param (ref $Clo) eqref) (result eqref)))       ;; lifted closure-body signature
   (type $Ref (struct (field (mut eqref))))                          ;; Effect.Ref / ST.STRef: a single mutable cell (ADR 0017)
 
-  ;; Runtime intern table for record-label names with no compile-time id (record
-  ;; metaprogramming: a field name introduced via `Record.insert`/`unsafeSet` that is not a
-  ;; syntactic record label anywhere). `internDynamic` find-or-appends here; a name's id is its
-  ;; index (offset by the compile-time label count in `$internStr`, so the two id-spaces never
-  ;; collide). Grows by copy (dynamic names are rare). Holds `$Str`s as eqref (reuses `$Vals`).
-  (global $internKeys (mut (ref null $Vals)) (ref.null $Vals))
-
   ;; $rt.proj(rec, target) -> eqref : linear-search the record's interned label-id
   ;; array for `target`, returning the parallel value (ADR 0007). A projected record
   ;; always contains the looked-up field, so the first read needs no bound check (empty
@@ -155,39 +148,36 @@
     (array.copy $Vals $Vals (local.get $nvals) (local.get $pos) (local.get $vals) (i32.add (local.get $pos) (i32.const 1)) (local.get $rest))
     (struct.new $Rec (local.get $nids) (local.get $nvals)))
 
-  ;; $rt.internDynamic(key) -> i32 : find-or-append `key` in the runtime intern table
-  ;; ($internKeys), returning its index (a *stable* id for that string). The fallback for a
-  ;; record-label name with no compile-time id (`$internStr`); see the table's declaration.
-  ;; Linear scan + grow-by-one (dynamic names are few). `$internStr` offsets the result by the
-  ;; compile-time label count, so these ids slot above the static `0..N-1` and `recSet`'s sorted
-  ;; insert keeps each record's `$LabelIds` ordered.
-  (func $rt.internDynamic (export "internDynamic") (param $key eqref) (result i32)
-    (local $keys (ref null $Vals))
+  ;; $rt.internStr(key) -> i32 : the interned id of a record-label name — FNV-1a over the
+  ;; `$Str`'s UTF-8 bytes (one byte per lane), masked to 31 bits. This MUST match the
+  ;; compiler's `Lower.LabelHash` byte-for-byte: the marshalling glue resolves a host field
+  ;; name to its id via this export (`runtime/marshal.js`), so the runtime-computed id has
+  ;; to equal the one the compiler assigned the same static label. Hashing is total, so a
+  ;; dynamically-introduced field name (record metaprogramming) hashes the same as a
+  ;; syntactic label — there is no separate dynamic-id table (ADR 0037 ④). The 31-bit mask
+  ;; keeps the id non-negative, so the order `recSet` maintains (unsigned) matches the order
+  ;; statically-built records are sorted in (signed `Int`).
+  ;; exported as `internStrHash` (not `internStr`): the generated module re-exports its own
+  ;; `internStr` wrapper for the JS marshalling glue, so the runtime's export must not clash
+  ;; with it under `wasm-merge`.
+  (func $rt.internStr (export "internStrHash") (param $key eqref) (result i32)
+    (local $bytes (ref $Bytes))
     (local $n i32)
     (local $i i32)
-    (local $new (ref $Vals))
-    (local.set $keys (global.get $internKeys))
-    ;; empty table: create a length-1 table and return id 0
-    (if (ref.is_null (local.get $keys))
-      (then
-        (local.set $new (array.new $Vals (ref.null none) (i32.const 1)))
-        (array.set $Vals (local.get $new) (i32.const 0) (local.get $key))
-        (global.set $internKeys (local.get $new))
-        (return (i32.const 0))))
-    (local.set $n (array.len (local.get $keys)))
-    (block $miss
+    (local $h i32)
+    (local.set $bytes (struct.get $Str 0 (ref.cast (ref $Str) (local.get $key))))
+    (local.set $n (array.len (local.get $bytes)))
+    (local.set $h (i32.const 0x811c9dc5))
+    (block $end
       (loop $loop
-        (br_if $miss (i32.ge_u (local.get $i) (local.get $n)))
-        (if (call $rt.strEq (local.get $key) (array.get $Vals (local.get $keys) (local.get $i)))
-          (then (return (local.get $i))))
+        (br_if $end (i32.ge_u (local.get $i) (local.get $n)))
+        (local.set $h
+          (i32.mul
+            (i32.xor (local.get $h) (array.get $Bytes (local.get $bytes) (local.get $i)))
+            (i32.const 0x01000193)))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $loop)))
-    ;; miss: grow by one, append `key`, return the new index (= old length)
-    (local.set $new (array.new $Vals (ref.null none) (i32.add (local.get $n) (i32.const 1))))
-    (array.copy $Vals $Vals (local.get $new) (i32.const 0) (local.get $keys) (i32.const 0) (local.get $n))
-    (array.set $Vals (local.get $new) (local.get $n) (local.get $key))
-    (global.set $internKeys (local.get $new))
-    (local.get $n))
+    (i32.and (local.get $h) (i32.const 0x7fffffff)))
 
   ;; $rt.strEq(a, b) -> i32 : 1 iff the two strings have equal bytes.
   (func $rt.strEq (export "strEq") (param $a eqref) (param $b eqref) (result i32)

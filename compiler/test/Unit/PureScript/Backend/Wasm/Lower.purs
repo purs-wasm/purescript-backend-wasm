@@ -13,6 +13,7 @@ import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), FuncName(..), LitPat(..), MarshalKind(..), RecBind(..), Rep(..), VarRef(..))
+import PureScript.Backend.Wasm.Lower.LabelHash (labelHash)
 import PureScript.CoreFn as CF
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
@@ -273,41 +274,41 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
 
   describe "records and dictionaries" do
     it "lowers a record literal to RMkRecord with label ids sorted" do
-      -- r = { b: 2, a: 1 }  -- ids assigned by sorted label: a=0, b=1
+      -- r = { b: 2, a: 1 }  -- label ids are hashes (Lower.LabelHash, ADR 0037 ④), sorted ascending
       let r = def "r" (litObj [ Tuple "b" (litInt 2), Tuple "a" (litInt 1) ])
       case lower [ r ] of
         Left err -> fail (show err)
         Right prog ->
-          (recordLabelIds <<< _.body <$> exported "r" prog) `shouldEqual` Just [ [ 0, 1 ] ]
+          (recordLabelIds <<< _.body <$> exported "r" prog) `shouldEqual` Just [ Array.sort [ labelHash "a", labelHash "b" ] ]
 
     it "lowers a record accessor to a label-id projection" do
-      -- get r = r.a  -- "a" is the only label, so it interns to 0
+      -- get r = r.a  -- "a" is the only label; its id is its hash
       let get = def "get" (lam "r" (accessor "a" (lv "r")))
       case lower [ get ] of
         Left err -> fail (show err)
         Right prog ->
-          (projLabelIds <<< _.body <$> exported "get" prog) `shouldEqual` Just [ 0 ]
+          (projLabelIds <<< _.body <$> exported "get" prog) `shouldEqual` Just [ labelHash "a" ]
 
     it "lowers a record update to a rebuilt record (updated + copied fields)" do
-      -- f r = r { a = 1 }  -- record is { a, b }, so b is copied; ids a=0, b=1
+      -- f r = r { a = 1 }  -- record is { a, b }, so b is copied; ids are the labels' hashes
       let f = def "f" (lam "r" (objUpdate (lv "r") [ "b" ] [ Tuple "a" (litInt 1) ]))
       case lower [ f ] of
         Left err -> fail (show err)
         Right prog -> do
-          (recordLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ [ 0, 1 ] ]
+          (recordLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ Array.sort [ labelHash "a", labelHash "b" ] ]
           -- the untouched field b is projected out of the original record
-          (projLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ 1 ]
+          (projLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ labelHash "b" ]
 
     it "lowers a polymorphic record update to a recSet chain (ADR 0023)" do
       -- f r = r { a = 1, b = 2 }  over an *open row* — the untouched fields are unknown,
-      -- so it copies the record and sets each named field (ids a=0, b=1); no projection
-      -- of untouched fields and no fresh RMkRecord.
+      -- so it copies the record and sets each named field (ids are the labels' hashes); no
+      -- projection of untouched fields and no fresh RMkRecord.
       let f = def "f" (lam "r" (objUpdatePoly (lv "r") [ Tuple "a" (litInt 1), Tuple "b" (litInt 2) ]))
       case lower [ f ] of
         Left err -> fail (show err)
         Right prog -> do
-          -- one copy-and-set per updated field, in order
-          (recSetLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ 0, 1 ]
+          -- one copy-and-set per updated field, in source order (a then b)
+          (recSetLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just [ labelHash "a", labelHash "b" ]
           -- the open row is not rebuilt field-by-field: no RMkRecord, no untouched projection
           (recordLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just []
           (projLabelIds <<< _.body <$> exported "f" prog) `shouldEqual` Just []
@@ -321,7 +322,7 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
           Nothing -> fail "expected an exported function f"
           Just fn -> do
             hasSwitch fn.body `shouldEqual` false
-            projLabelIds fn.body `shouldEqual` [ 0 ]
+            projLabelIds fn.body `shouldEqual` [ labelHash "a" ]
 
     it "references a nullary top-level value as a (zero-argument) known call" do
       -- v = 1 ; w = v  -- the bare reference to the CAF v becomes RCallKnown v []
@@ -343,7 +344,7 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Right prog -> do
           -- the dict ctor is not emitted as a function; only mkDict is
           (_.export <$> prog.funcs) `shouldEqual` [ Just "mkDict" ]
-          (recordLabelIds <<< _.body <$> exported "mkDict" prog) `shouldEqual` Just [ [ 0 ] ]
+          (recordLabelIds <<< _.body <$> exported "mkDict" prog) `shouldEqual` Just [ [ labelHash "a" ] ]
 
     it "compiles a newtype unwrap transparently (no Switch)" do
       -- unwrap d = case d of D$Dict v -> v.a  -- a method accessor's shape
@@ -358,7 +359,7 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
           Nothing -> fail "expected an exported function unwrap"
           Just fn -> do
             hasSwitch fn.body `shouldEqual` false
-            projLabelIds fn.body `shouldEqual` [ 0 ]
+            projLabelIds fn.body `shouldEqual` [ labelHash "a" ]
 
   describe "literal pattern matching" do
     it "compiles Int literal patterns with a catch-all to a LitSwitch" do

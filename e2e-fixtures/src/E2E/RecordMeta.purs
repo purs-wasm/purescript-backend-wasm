@@ -1,10 +1,11 @@
 -- | Record metaprogramming end-to-end (regression for the runtime label-interning fix):
 -- |   * `RowToList` field iteration with `IsSymbol`/`reflectSymbol` + `unsafeGet`,
--- |   * adding a field whose name (`"total"`) is **not** a syntactic record label anywhere — so it
--- |     has no compile-time id and exercises the runtime intern fallback (`$rt.internDynamic`).
+-- |   * adding a field whose name (`"total"`) is **not** a syntactic record label anywhere — so its
+-- |     id is computed at runtime by hashing the name (`$rt.internStr`, ADR 0037 ④), the same hash
+-- |     the compiler assigns a static label, so the added field interns consistently.
 -- |
--- | Reads/iteration always worked; adding such a field used to trap (`internStr` ended in
--- | `unreachable`). The exposed functions are `Int`-typed so the host can drive them.
+-- | Reads/iteration always worked; adding such a field used to trap (the old `internStr` if-chain
+-- | ended in `unreachable`). The exposed functions are `Int`-typed so the host can drive them.
 module E2E.RecordMeta where
 
 import Prelude

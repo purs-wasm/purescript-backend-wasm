@@ -53,7 +53,7 @@ import Data.Tuple (Tuple(..), fst, snd)
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(MkEffectFn), qualifiedIntrinsic, foreignIntrinsic)
-import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, functionDecls, reachableFunctions)
+import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, labelCollisions, functionDecls, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
@@ -650,12 +650,13 @@ lowerModules :: Boolean -> Object (Array Rep) -> Object ForeignImport -> Set Str
 lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
   let
     dictCtors = collectDictCtors modules
+    labelIds = collectLabels modules
     info =
       { knownFuncs: collectFuncs dictCtors modules
       , ctors: collectCtors fieldReps modules
       , dictCtors
       , enumCtors: collectEnumCtors modules
-      , labelIds: collectLabels modules
+      , labelIds
       , foreignSigs
       , foreignNames
       }
@@ -669,6 +670,12 @@ lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
     rootKeys = Array.mapMaybe (\e -> if e.isRoot then Just e.key else Nothing) entries
     reachable = reachableFunctions functions rootKeys
     toLower = Array.filter (\e -> Object.member e.key reachable) entries
+  -- A hashed label id (ADR 0037 ④) is a pure function of the name, so two distinct
+  -- labels can in principle collide — which would merge two record fields. Reject it
+  -- here rather than emit a corrupt record. Cheap: it only groups the computed ids.
+  case Array.head (labelCollisions labelIds) of
+    Just clash -> Left (LabelHashCollision clash)
+    Nothing -> pure unit
   Tuple funcs st <- runStateT
     (traverse (\e -> lowerTopFunc info e.moduleName e.isRoot (Tuple e.ident e.expr)) toLower)
     { slot: 0, lifted: [], nextCode: 0 }

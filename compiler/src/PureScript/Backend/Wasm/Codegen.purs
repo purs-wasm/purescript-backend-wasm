@@ -44,7 +44,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGlobalName, importRuntime, internDynamicHelperName, internStrName, projHelperName, recSetHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGlobalName, importRuntime, internStrHelperName, internStrName, projHelperName, recSetHelperName, strEqHelperName)
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
@@ -89,7 +89,7 @@ initCodegen prog = do
   let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, tailPos: true, sigs, dataBase: dataGroup.base, dataStructs: dataGroup.structs, cafGlobals: cplan.globals }
   importRuntime ctx
   addForeignImports ctx prog
-  addInternStr ctx (needsInternStr prog) prog.labels
+  addInternStr ctx (needsInternStr prog)
   addNullaryGlobals ctx (nullaryTags prog)
   addCafGlobals ctx cplan.globals
   when (needsCounter prog) (addCounterGlobal ctx)
@@ -354,41 +354,25 @@ addCafInit ctx cplan
 readCaf :: Ctx -> FuncName -> Rep -> Effect B.Expression
 readCaf ctx name rep = B.globalGet ctx.mod (cafGlobalName name) (repType ctx rep)
 
--- | Emit the `internStr` resolver: a `String` key → its interned `i32` label id,
--- | as an `if (strEq key "label") then <id> else …` chain over the program's
--- | compile-time `labels`. A key NOT in that table — a field name introduced
--- | dynamically (record metaprogramming: `Record.insert`/`unsafeSet` over a name that
--- | is not a syntactic record label anywhere) — falls through to the runtime intern
--- | table `$rt.internDynamic`, offset by the compile-time label count so the dynamic
--- | ids never collide with the static `0..N-1` ones. `recSet`'s sorted insert keeps a
--- | record's `$LabelIds` ordered for any id, so the dynamic ids slot in transparently.
--- | Used by `Record.Unsafe`'s string-keyed access to reach the id-keyed record helpers.
--- | (Binaryen prunes it — and the unused `internDynamic` import — when no record op
--- | references it.)
-addInternStr :: Ctx -> Boolean -> Array (Tuple String Int) -> Effect Unit
-addInternStr ctx exportIt labels = do
-  miss <- do
-    key <- B.localGet ctx.mod 0 B.eqref
-    dyn <- B.call ctx.mod internDynamicHelperName [ key ] B.i32
-    base <- B.i32Const ctx.mod (Array.length labels)
-    B.i32Add ctx.mod base dyn
-  -- `ifChain` (a tail loop) rather than `foldr step (pure miss)`: the whole-program label
-  -- set is large, and the fold's nested Effect binds overflow the host JS stack on a
-  -- self-sized program.
-  prepared <- traverse prepare labels
-  body <- ifChain ctx prepared miss
+-- | Emit `$internStr`: a record-label `String` key → its interned `i32` id, by
+-- | delegating to the runtime hash `$rt.internStr` (ADR 0037 ④). The id is a hash of
+-- | the name, the same one the compiler assigns a static label (`Lower.LabelHash`), so a
+-- | dynamically-introduced field name (record metaprogramming: `Record.insert` /
+-- | `unsafeSet`) resolves to the same id a syntactic label would — no compile-time label
+-- | table or separate dynamic-id space is needed. A thin local wrapper (rather than
+-- | calling `$rt.internStr` at each site) keeps one exportable symbol: it is exported as
+-- | `internStr` when a record crosses the host boundary, so the JS marshalling glue can
+-- | resolve field names (ADR 0014); otherwise it stays internal (Binaryen-pruned if
+-- | unused). Used by `Record.Unsafe`'s string-keyed access (`Codegen.Prim`).
+addInternStr :: Ctx -> Boolean -> Effect Unit
+addInternStr ctx exportIt = do
+  key <- B.localGet ctx.mod 0 B.eqref
+  body <- B.call ctx.mod internStrHelperName [ key ] B.i32
   _ <- B.addFunction ctx.mod internStrName (B.createType [ B.eqref ]) B.i32 [] body
   -- exported when a record/object foreign needs name→id resolution from the JS
   -- marshalling glue (ADR 0014); otherwise internal (and Binaryen-pruned if unused)
   when exportIt (void (B.addFunctionExport ctx.mod internStrName "internStr"))
   pure unit
-  where
-  prepare (Tuple label labelId) = do
-    key <- B.localGet ctx.mod 0 B.eqref
-    labelConst <- genAtom ctx (ALitString label)
-    cond <- B.call ctx.mod strEqHelperName [ key, labelConst ] B.i32
-    idExpr <- B.i32Const ctx.mod labelId
-    pure (Tuple cond idExpr)
 
 funcNameStr :: FuncName -> String
 funcNameStr (FuncName n) = n
