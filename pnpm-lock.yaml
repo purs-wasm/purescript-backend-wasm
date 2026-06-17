@@ -1,10 +1,11 @@
-lockfileVersion: "9.0"
+lockfileVersion: '9.0'
 
 settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
 importers:
+
   .: {}
 
   bench: {}
@@ -14,6 +15,12 @@ importers:
   bench/output: {}
 
   bench/output-js-es: {}
+
+  bench/output-wasm: {}
+
+  bench/output-wasm-count-state: {}
+
+  bench/output-wasm-curry: {}
 
   binaryen:
     dependencies:
@@ -27,7 +34,83 @@ importers:
         specifier: ^10.0.12
         version: 10.0.12
 
+  compiler/test/e2e-build/E2E.Arrays: {}
+
+  compiler/test/e2e-build/E2E.AsPattern: {}
+
+  compiler/test/e2e-build/E2E.CafForeign: {}
+
+  compiler/test/e2e-build/E2E.Closures: {}
+
+  compiler/test/e2e-build/E2E.CountState: {}
+
+  compiler/test/e2e-build/E2E.Counter: {}
+
+  compiler/test/e2e-build/E2E.DataTypes: {}
+
+  compiler/test/e2e-build/E2E.EffP: {}
+
+  compiler/test/e2e-build/E2E.Expr: {}
+
+  compiler/test/e2e-build/E2E.FFIScalar: {}
+
+  compiler/test/e2e-build/E2E.FibAnd: {}
+
+  compiler/test/e2e-build/E2E.Fld: {}
+
+  compiler/test/e2e-build/E2E.ForeignArray: {}
+
+  compiler/test/e2e-build/E2E.ForeignClosure: {}
+
+  compiler/test/e2e-build/E2E.ForeignEffect: {}
+
+  compiler/test/e2e-build/E2E.ForeignExport: {}
+
+  compiler/test/e2e-build/E2E.ForeignRecord: {}
+
+  compiler/test/e2e-build/E2E.ForeignString: {}
+
+  compiler/test/e2e-build/E2E.GenSC: {}
+
+  compiler/test/e2e-build/E2E.Guards: {}
+
+  compiler/test/e2e-build/E2E.LinkB: {}
+
+  compiler/test/e2e-build/E2E.Literals: {}
+
+  compiler/test/e2e-build/E2E.Mnd: {}
+
+  compiler/test/e2e-build/E2E.Mon: {}
+
+  compiler/test/e2e-build/E2E.NestedRecordPat: {}
+
+  compiler/test/e2e-build/E2E.PerformUserEffect: {}
+
+  compiler/test/e2e-build/E2E.Rec: {}
+
+  compiler/test/e2e-build/E2E.RecInst: {}
+
+  compiler/test/e2e-build/E2E.RecordMeta: {}
+
+  compiler/test/e2e-build/E2E.Records: {}
+
+  compiler/test/e2e-build/E2E.Recursion: {}
+
+  compiler/test/e2e-build/E2E.Sgp: {}
+
+  compiler/test/e2e-build/E2E.ShowNumber: {}
+
+  compiler/test/e2e-build/E2E.Strings: {}
+
+  compiler/test/e2e-build/E2E.TypeClasses: {}
+
+  compiler/test/e2e-build/E2E.TypeClassesSuper: {}
+
   compiler/test/e2e-fixtures-out: {}
+
+  examples/metatheory/output: {}
+
+  examples/metatheory/output-wasm: {}
 
   examples/output: {}
 
@@ -35,13 +118,23 @@ importers:
 
   examples/output-meta: {}
 
+  examples/output-metatheory: {}
+
   examples/output-priv: {}
 
   examples/output-random: {}
 
   examples/output-run: {}
 
+  examples/output-wasm: {}
+
   purs-wasm:
+    dependencies:
+      binaryen:
+        specifier: ^123.0.0
+        version: 123.0.0
+
+  purs-wasm/package:
     dependencies:
       binaryen:
         specifier: ^123.0.0
@@ -50,28 +143,21 @@ importers:
   ulib-tooling: {}
 
 packages:
+
   binaryen@123.0.0:
-    resolution:
-      {
-        integrity: sha512-/hls/a309aZCc0itqP6uhoR+5DsKSlJVfB8Opd2BY9Ndghs84IScTunlyidyF4r2Xe3lQttnfBNIDjaNpj6mTw==,
-      }
+    resolution: {integrity: sha512-/hls/a309aZCc0itqP6uhoR+5DsKSlJVfB8Opd2BY9Ndghs84IScTunlyidyF4r2Xe3lQttnfBNIDjaNpj6mTw==}
     hasBin: true
 
   cbor@10.0.12:
-    resolution:
-      {
-        integrity: sha512-exQDevYd7ZQLP4moMQcZkKCVZsXLAtUSflObr3xTh4xzFIv/xBCdvCd6L259kQOUP2kcTC0jvC6PpZIf/WmRXA==,
-      }
-    engines: { node: ">=20" }
+    resolution: {integrity: sha512-exQDevYd7ZQLP4moMQcZkKCVZsXLAtUSflObr3xTh4xzFIv/xBCdvCd6L259kQOUP2kcTC0jvC6PpZIf/WmRXA==}
+    engines: {node: '>=20'}
 
   nofilter@3.1.0:
-    resolution:
-      {
-        integrity: sha512-l2NNj07e9afPnhAhvgVrCD/oy2Ai1yfLpuo3EpiO1jFTsB4sFz6oIfAfSZyQzVpkZQ9xS8ZS5g1jCBgq4Hwo0g==,
-      }
-    engines: { node: ">=12.19" }
+    resolution: {integrity: sha512-l2NNj07e9afPnhAhvgVrCD/oy2Ai1yfLpuo3EpiO1jFTsB4sFz6oIfAfSZyQzVpkZQ9xS8ZS5g1jCBgq4Hwo0g==}
+    engines: {node: '>=12.19'}
 
 snapshots:
+
   binaryen@123.0.0: {}
 
   cbor@10.0.12:
