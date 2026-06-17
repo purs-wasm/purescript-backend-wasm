@@ -29,6 +29,8 @@ import Data.FoldableWithIndex (foldlWithIndex)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
+import Data.Set (Set)
+import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.Lower.IR (AnfExpr(..), Atom(..), Branch(..), FuncName, IRFunc, LitBranch(..), LitPat(..), RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..), marshalRep)
 import PureScript.Backend.Wasm.Lower.Reps (primOperandReps, primRep)
@@ -68,8 +70,16 @@ tyOfRep = case _ of
 
 type Sig = { params :: Array TyRep, result :: TyRep }
 
-assignProgramReps :: Array IRFunc -> Array IRFunc
-assignProgramReps funcs = map (rewriteFunc sigs) funcs
+-- | `pinned` names functions whose parameter/result ABI must stay **boxed** regardless
+-- | of call-site evidence: those that are visible across a module boundary (ADR 0037 ③).
+-- | In a per-module build a function reached from another module is imported/exported with
+-- | a fixed boxed ABI — the defining module is compiled without seeing the foreign call
+-- | sites, and every caller (including intra-module ones, which share the one ABI) must
+-- | agree — so its signature cannot be unboxed by the whole-program join. Pinning here keeps
+-- | intra-module-only functions (notably self-recursive tail loops, the main unboxing win)
+-- | inferred as before. An empty set is the original whole-program behaviour.
+assignProgramReps :: Set FuncName -> Array IRFunc -> Array IRFunc
+assignProgramReps pinned funcs = map (rewriteFunc sigs) funcs
   where
   callSites = buildCallSites funcs
   funcByName = Map.fromFoldable (map (\fn -> Tuple fn.name fn) funcs)
@@ -83,10 +93,14 @@ assignProgramReps funcs = map (rewriteFunc sigs) funcs
     in
       if s' == s then s else solve s'
 
-  deriveSig s fn =
-    { params: Array.mapWithIndex (paramTy s fn) fn.params
-    , result: resultTy s fn
-    }
+  -- a module-boundary-visible function is fixed to the boxed ABI (all params + result
+  -- `Bx`); callers then box arguments and read a boxed result through the existing rules
+  deriveSig s fn
+    | Set.member fn.name pinned = { params: map (const Bx) fn.params, result: Bx }
+    | otherwise =
+        { params: Array.mapWithIndex (paramTy s fn) fn.params
+        , result: resultTy s fn
+        }
 
   -- | A parameter's inferred type is the join of every argument passed to it across
   -- | the program; the closure parameter of a lifted code function stays `Bx`.

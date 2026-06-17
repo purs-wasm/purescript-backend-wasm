@@ -53,7 +53,7 @@ import Data.Tuple (Tuple(..), fst, snd)
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(MkEffectFn), qualifiedIntrinsic, foreignIntrinsic)
-import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, labelCollisions, functionDecls, reachableFunctions)
+import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels, labelCollisions, functionDecls, qualifiedRefs, reachableFunctions)
 import PureScript.Backend.Wasm.Lower.Env (Env)
 import PureScript.Backend.Wasm.Lower.IR (Atom(..), AnfExpr(..), ForeignImport, FuncName(..), IRFunc, MarshalKind(..), Program, RecBind(..), Rep(..), Rhs(..), Slot(..), VarRef(..))
 import PureScript.Backend.Wasm.Lower.Match (MatchOps, compileMatch)
@@ -646,8 +646,14 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
 -- | `roots` modules are lowered (so a `Prelude` module's unused — and possibly
 -- | unsupported — instances are never visited); the roots' own functions are
 -- | exported, the rest are internal.
-lowerModules :: Boolean -> Object (Array Rep) -> Object ForeignImport -> Set String -> Array (Array String) -> Array Module -> Either LowerError Program
-lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
+-- | `perModuleRep` (ADR 0037 ③) restricts the representation analysis to a per-module
+-- | boundary: a function reached across a module boundary is pinned to the boxed ABI, so
+-- | only intra-module signatures are unboxed. It does not change *what* is lowered (the
+-- | build is still whole-program here) — it constrains the rep solver so the result matches
+-- | what a separately-compiled per-module build would produce, for A/B measurement before
+-- | the codegen split. `false` is the original whole-program rep analysis.
+lowerModules :: Boolean -> Boolean -> Object (Array Rep) -> Object ForeignImport -> Set String -> Array (Array String) -> Array Module -> Either LowerError Program
+lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modules = do
   let
     dictCtors = collectDictCtors modules
     labelIds = collectLabels modules
@@ -670,6 +676,22 @@ lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
     rootKeys = Array.mapMaybe (\e -> if e.isRoot then Just e.key else Nothing) entries
     reachable = reachableFunctions functions rootKeys
     toLower = Array.filter (\e -> Object.member e.key reachable) entries
+    -- functions reached by a reference from a *different* module: in a per-module build
+    -- each is imported/exported with a fixed boxed ABI, so the rep solver must pin them
+    -- (ADR 0037 ③). Computed from the MIR refs; `Set.empty` keeps the whole-program rep.
+    keyModule = Object.fromFoldable (entries <#> \e -> Tuple e.key e.moduleName)
+    crossModulePins =
+      if perModuleRep then
+        Set.fromFoldable
+          ( toLower >>= \e ->
+              Array.mapMaybe
+                ( \ref -> case Object.lookup ref keyModule of
+                    Just refMod | refMod /= e.moduleName -> Just (FuncName ref)
+                    _ -> Nothing
+                )
+                (qualifiedRefs e.expr)
+          )
+      else Set.empty
   -- A hashed label id (ADR 0037 ④) is a pure function of the name, so two distinct
   -- labels can in principle collide — which would merge two record fields. Reject it
   -- here rather than emit a corrupt record. Cheap: it only groups the computed ids.
@@ -692,12 +714,13 @@ lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
       pure (Tuple ident sig)
   -- representation analysis (ADR 0013): unbox `Int`/`Number` where it avoids boxing
   pure
-    { funcs: if optimize then assignProgramReps allFuncs else allFuncs
+    { funcs: if optimize then assignProgramReps crossModulePins allFuncs else allFuncs
     , labels: Object.toUnfoldable info.labelIds
     , exportSigs
     }
 
 -- | Lower a single MIR module to a backend IR `Program`, exporting its top-level
--- | functions (the single-module case of `lowerModules`).
+-- | functions (the single-module case of `lowerModules`). A single module has no
+-- | cross-module references, so `perModuleRep` is irrelevant here (passed `false`).
 lowerModule :: Boolean -> Module -> Either LowerError Program
-lowerModule optimize m = lowerModules optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]
+lowerModule optimize m = lowerModules false optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]

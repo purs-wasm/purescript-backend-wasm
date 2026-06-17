@@ -56,7 +56,10 @@ parseModule source = case jsonParser source of
 -- | spans are threaded through to Binaryen debug locations. `optimizeMir` toggles
 -- | the middle-end (dictionary elimination); off builds an unoptimized baseline
 -- | (lambda lifting still runs, since it is needed for constant-stack tail recursion).
-type CompileOptions = { optimize :: Boolean, optimizeMir :: Boolean }
+-- | `perModuleRep` (ADR 0037 ③) constrains the representation analysis to a per-module
+-- | boundary (cross-module-visible functions pinned to the boxed ABI). Off by default; the
+-- | build is still whole-program, this only simulates the per-module rep for A/B measurement.
+type CompileOptions = { optimize :: Boolean, optimizeMir :: Boolean, perModuleRep :: Boolean }
 
 -- | The live result of `linkModule` (the "link" half of link/emit, ADR 0021): the built
 -- | Binaryen module, the distinct user-foreign source modules to resolve (ADR 0014), and the
@@ -129,7 +132,7 @@ finishLink
   -> Array CacheWrite
   -> Effect (Either String CompiledModule)
 finishLink opts roots foreignSigs' foreignNames externs optimizedModules cacheWrites =
-  case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
+  case lowerModules opts.perModuleRep opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
     Left err -> pure (Left ("linking failed: " <> show err))
     Right program -> do
       built <- buildModule program

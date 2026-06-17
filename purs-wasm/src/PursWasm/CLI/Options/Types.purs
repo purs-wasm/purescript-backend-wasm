@@ -45,6 +45,7 @@ type BuildOption =
   , noJsFallback :: Boolean
   , executable :: Boolean
   , force :: Boolean
+  , perModuleRep :: Boolean
   , dumpMir :: Maybe String
   }
 

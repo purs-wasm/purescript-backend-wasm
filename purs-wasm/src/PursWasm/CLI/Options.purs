@@ -95,6 +95,13 @@ buildOptionsParser =
           "Ignore the incremental cache under <output>/_build (rebuild every module from\n\
           \scratch) and refresh it. By default a build reuses unchanged modules from the cache."
           # ArgParser.boolean
+    , perModuleRep:
+        ArgParser.flag [ "--per-module-rep" ]
+          "Constrain the representation (unboxing) analysis to a per-module boundary:\n\
+          \cross-module-visible functions take/return boxed values, only intra-module\n\
+          \signatures are unboxed (ADR 0037). Experimental; for A/B measurement ahead of\n\
+          \per-module codegen. The build is still whole-program."
+          # ArgParser.boolean
     , dumpMir:
         ArgParser.argument [ "--dump-mir" ]
           "Dump the given module's middle IR (MIR) at the optimizer's snapshot points\n\

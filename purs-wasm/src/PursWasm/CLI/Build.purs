@@ -191,7 +191,7 @@ buildCmd cliRoot binaryenBinDir args = do
         , MEffect _ <- s.result -> pure unit
       Just _ -> logAndThrow "--executable requires the entry module's `main` to have type `Effect Unit`."
       Nothing -> logAndThrow "--executable: no `main` export found in the entry module(s)."
-  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
+  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt, perModuleRep: args.perModuleRep }
   -- One bundle per build, written flat under `--output` (no per-module subdir): the build emits a
   -- single linked wasm + optional loader, not per-module artifacts (ADR 0009), so a module-named
   -- directory would be misleading.
