@@ -34,13 +34,47 @@
         "type": "github"
       }
     },
+    "nix-claude-code": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1780030383,
+        "narHash": "sha256-vininGIqTM3wYHDejG3c/cfHgVQch4T8e2heXHP5emA=",
+        "owner": "ryoppippi",
+        "repo": "nix-claude-code",
+        "rev": "02fce910bfd96f2dc9e2df734bd53fbe198b2eb0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ryoppippi",
+        "repo": "nix-claude-code",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1781509190,
-        "narHash": "sha256-uJZs9Di8I6ciTp6jiojj0HzlNpBkud8ax5aT/O5aJkw=",
+        "lastModified": 1779560665,
+        "narHash": "sha256-tpyBcxPpcQb8ukyNF7DoCwfSY3VPsxHoYwj00Cayv5o=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "d6df3513510aa548c83868fd22bfddd0a8c0a0d4",
+        "rev": "64c08a7ca051951c8eae34e3e3cb1e202fe36786",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1779796641,
+        "narHash": "sha256-ZsIrKmhp4vbBXoXXmR/tBXA/UCsAQiJL9vsgZEduhVY=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "25f538306313eae3927264466c70d7001dcea1df",
         "type": "github"
       },
       "original": {
@@ -58,11 +92,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780972251,
-        "narHash": "sha256-PwHYPpfLP+WjSwj765zJ1N0Xp4ET3+8vRqxJ031ua3M=",
+        "lastModified": 1775771885,
+        "narHash": "sha256-TP7e1+K6CXlpin2bxF97rwLASJXrXZDdZNKmkj1flM0=",
         "owner": "thomashoneyman",
         "repo": "purescript-overlay",
-        "rev": "1cf88ab9d83596db0e0c0d304a16809c410e2917",
+        "rev": "0aaa4c2124622bd7d2f58c5758037f97c580ee73",
         "type": "github"
       },
       "original": {
@@ -74,7 +108,8 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs",
+        "nix-claude-code": "nix-claude-code",
+        "nixpkgs": "nixpkgs_2",
         "purescript-overlay": "purescript-overlay"
       }
     },
