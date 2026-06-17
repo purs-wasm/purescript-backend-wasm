@@ -10,6 +10,8 @@ importers:
 
   bench: {}
 
+  bench/output: {}
+
   binaryen:
     dependencies:
       binaryen:
@@ -21,6 +23,80 @@ importers:
       cbor:
         specifier: ^10.0.12
         version: 10.0.12
+
+  compiler/test/e2e-build/E2E.Arrays: {}
+
+  compiler/test/e2e-build/E2E.AsPattern: {}
+
+  compiler/test/e2e-build/E2E.CafForeign: {}
+
+  compiler/test/e2e-build/E2E.Closures: {}
+
+  compiler/test/e2e-build/E2E.CountState: {}
+
+  compiler/test/e2e-build/E2E.Counter: {}
+
+  compiler/test/e2e-build/E2E.DataTypes: {}
+
+  compiler/test/e2e-build/E2E.EffP: {}
+
+  compiler/test/e2e-build/E2E.Expr: {}
+
+  compiler/test/e2e-build/E2E.FFIScalar: {}
+
+  compiler/test/e2e-build/E2E.FibAnd: {}
+
+  compiler/test/e2e-build/E2E.Fld: {}
+
+  compiler/test/e2e-build/E2E.ForeignArray: {}
+
+  compiler/test/e2e-build/E2E.ForeignClosure: {}
+
+  compiler/test/e2e-build/E2E.ForeignEffect: {}
+
+  compiler/test/e2e-build/E2E.ForeignExport: {}
+
+  compiler/test/e2e-build/E2E.ForeignRecord: {}
+
+  compiler/test/e2e-build/E2E.ForeignString: {}
+
+  compiler/test/e2e-build/E2E.GenSC: {}
+
+  compiler/test/e2e-build/E2E.Guards: {}
+
+  compiler/test/e2e-build/E2E.LinkB: {}
+
+  compiler/test/e2e-build/E2E.Literals: {}
+
+  compiler/test/e2e-build/E2E.Mnd: {}
+
+  compiler/test/e2e-build/E2E.Mon: {}
+
+  compiler/test/e2e-build/E2E.NestedRecordPat: {}
+
+  compiler/test/e2e-build/E2E.PerformUserEffect: {}
+
+  compiler/test/e2e-build/E2E.Rec: {}
+
+  compiler/test/e2e-build/E2E.RecInst: {}
+
+  compiler/test/e2e-build/E2E.RecordMeta: {}
+
+  compiler/test/e2e-build/E2E.Records: {}
+
+  compiler/test/e2e-build/E2E.Recursion: {}
+
+  compiler/test/e2e-build/E2E.Sgp: {}
+
+  compiler/test/e2e-build/E2E.ShowNumber: {}
+
+  compiler/test/e2e-build/E2E.Strings: {}
+
+  compiler/test/e2e-build/E2E.TypeClasses: {}
+
+  compiler/test/e2e-build/E2E.TypeClassesSuper: {}
+
+  compiler/test/e2e-fixtures-out: {}
 
   purs-wasm:
     dependencies:

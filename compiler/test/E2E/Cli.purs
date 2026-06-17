@@ -24,6 +24,7 @@ import Test.E2E.Cli.FibAnd as FibAnd
 import Test.E2E.Cli.IntConv as IntConv
 import Test.E2E.Cli.Link as Link
 import Test.E2E.Cli.NestedRecordPat as NestedRecordPat
+import Test.E2E.Cli.PerformUserEffect as PerformUserEffect
 import Test.E2E.Cli.PreludeArith as PreludeArith
 import Test.E2E.Cli.PreludeBool as PreludeBool
 import Test.E2E.Cli.PreludeBounded as PreludeBounded
@@ -108,3 +109,4 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   ForeignRecord.spec
   ForeignExport.spec
   ForeignEffect.spec
+  PerformUserEffect.spec
