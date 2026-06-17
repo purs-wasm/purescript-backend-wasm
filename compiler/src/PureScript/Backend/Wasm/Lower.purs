@@ -529,20 +529,6 @@ recBindEtaArity env = case _ of
       <|> (snd <$> (qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident))
       <|> ((Array.length <<< _.params) <$> Object.lookup (qualifiedKeyOf q) env.foreignSigs)
 
--- | The declared arity of an application head, resolved the same way `lowerApp` dispatches a call:
--- | a constructor, a top-level/specialized function, an intrinsic, or a foreign import. 
--- headArity is now dead code. My patch routes the performed call back through lowerApp/applyArity, 
--- which recomputes arity itself, so the standalone headArity lookup (which the old Perform branch was the only caller of) is now orphaned
-
--- headArity :: Env -> M.Expr -> Maybe Int
--- headArity env = case _ of
---   M.Var q@(Qualified (Just _) ident) ->
---     (_.arity <$> Object.lookup (qualifiedKeyOf q) env.ctors)
---       <|> Object.lookup (qualifiedKeyOf q) env.knownFuncs
---       <|> (snd <$> (qualifiedIntrinsic (qualifiedKeyOf q) <|> foreignIntrinsic ident))
---       <|> ((Array.length <<< _.params) <$> Object.lookup (qualifiedKeyOf q) env.foreignSigs)
---   _ -> Nothing
-
 -- | Compile a `case` into a `Switch` on the scrutinee's tag, finishing each branch
 -- | with `finish` (so the same compiler serves a tail-position `case` — `finish =
 -- | lowerTail` — and an argument-position one, where `finish` feeds the branch
