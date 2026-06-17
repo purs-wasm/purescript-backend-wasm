@@ -196,6 +196,14 @@ intrinsic `Data.Eq.eqIntImpl`; `compare` to `ordIntImpl(LT, EQ, GT)`. Two guards
 it cheap and terminating: a **size cap** (large instances such as the `Generic`
 `to`/`from` records are not inlined) and **acyclicity**.
 
+A second, *post-reduction* guard catches blow-up the candidate cap cannot predict: if a
+declaration's **reduced** form exceeds `DictElim.normalFormSizeCap`, it is re-reduced with the
+inline context emptied — the binding stays an ordinary call, the same shape `--no-opt` emits. The
+canonical case is the derived `genericShow` dictionary of a large ADT inlined into a `show`, which
+produces no redex, only bulk; the cap bounds NbE when a program is itself `show`-heavy (notably the
+compiler compiling itself). It measures the *actual* reduced size, so a large-but-shared normal form
+(which `quote` CSEs back down — ADR 0035 Layer B) stays inlined. (ADR 0035, "Layer C lite".)
+
 ### General known-function inlining
 
 `Optimize/Inline.purs` extends the inline set beyond dictionary plumbing to *ordinary*

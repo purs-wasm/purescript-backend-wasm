@@ -10,10 +10,13 @@
 > the fix so the scalability gate is opened *before* the inline-policy rewrite.
 
 > **Progress (2026-06-17, branch `feat/reduction-aware-inlining`).** Layers **A and B are
-> implemented** in `MiddleEnd.Optimize.Semantics`, and **the scalability gate is open**: the
+> implemented** in `MiddleEnd.Optimize.Semantics`. ~~The scalability gate is open: the
 > optimized self-compile now compiles *through* `Optimize.Specialize` (the old hang point) — the
 > exponential is gone (it then OOMs in a later module, which is the independent whole-program
-> *memory* floor, not this defect). Layer A is a `Data.Lazy` memo (`Map String (Lazy Sem)`) keyed
+> *memory* floor, not this defect).~~ **(Corrected below, 2026-06-17: A+B removed the NbE
+> exponential but did *not* by themselves clear `Optimize.Specialize`; the "OOM" read was premature —
+> the real remaining blocker there was *code size*, fixed by the canonicalKey + size-cap work.)**
+> Layer A is a `Data.Lazy` memo (`Map String (Lazy Sem)`) keyed
 > by inline-binding name; Layer B is an `SShared k Sem` tag that `unShared` strips at every
 > reduction site (so it never blocks a redex) while `quote` CSEs it into a hoisted `let` (the Q
 > state carries the CSE table). The identity mechanism (§Decision, "settled at build time") was
@@ -21,11 +24,26 @@
 > ids-assigned-during-eval (rejected: would force the whole HOAS evaluator into a monad). **Byte
 > equality was *not* required** — the current compiler is not yet a correct self-host reference, so
 > the gate is *no regression in the test suite + benchmarks + `examples/`*, which holds: unit
-> 160/160 (incl. the diamond O(d) guard, below), e2e 150/150, the `test:bin` examples, bench no
+> ~~160/160~~ **162/162** (the diamond O(d) guard plus the two Layer-C-lite cap guards, below),
+> e2e 150/150, the `test:bin` examples, bench no
 > regression (most benches 1.05–1.19× *faster* from the CSE sharing; baseline untouched), and
 > `examples/metatheory` compiles and runs correctly. The exponential regression guard is
 > `compiler/test/NbeStress.purs` (`Test.NbeStress.spec`, wired into `test:unit`): a depth-20 diamond
 > inline DAG normalizes to **linear** size (≈ 4·d + 3) rather than 2^d.
+
+> **Correction (2026-06-17).** Layers A+B were **necessary but not sufficient** to compile
+> `Optimize.Specialize` / complete the optimized self-compile. With the NbE *recomputation*
+> exponential gone, that module still hung on two **code-size** problems orthogonal to A/B's fix
+> (A+B bound recomputation, not output size): **(1)** `Optimize.Specialize.canonicalKey` built its
+> de-dup `Map` key by `show`-ing the substituted lambda body — multi-KB strings, *built and retained
+> as keys* — now **hashed** (`Serialize.Hash.hashString`) over a single `substMany` pass; **(2)** NbE
+> inlines the derived `genericShow` dictionary of the large IR ADTs into multi-million-node normal
+> forms, now bounded by **`DictElim.normalFormSizeCap`** (a *Layer C lite* size guard — distinct from
+> the deferred reduction-aware *policy* of §Layer C): a reduced declaration exceeding the cap is
+> re-reduced with the inline context emptied (the binding stays a call — the `--no-opt`-correct
+> shape). With **all three** (A, B, and (1)+(2)) the optimized self-compile of `PursWasm.CLI.Main`
+> now **completes**, writing a valid 8 MB `index.wasm`. Two cap regression guards were added to
+> `Test.NbeStress` (unit 160 → 162).
 
 ## Context
 
@@ -150,7 +168,10 @@ here:
 ## Consequences
 
 - **The default-path self-host scalability gate opens at the end of Layer B** — `normalize`
-  becomes polynomial, so the `Optimize.Specialize`-class modules compile. This is the gating fix
+  becomes polynomial. ~~so the `Optimize.Specialize`-class modules compile.~~ _(Correction
+  2026-06-17: polynomial `normalize` is necessary but not sufficient — `Optimize.Specialize`
+  additionally needed the canonicalKey hashing + `normalFormSizeCap` code-size cap; see the
+  Correction note up top.)_ This is the gating fix
   among the self-host blockers (the others — `Impurify` stack-safety, the whole-program memory
   floor, and lowering's super-linear passes — are independent and tracked separately).
 - **Sharing is separable from policy.** Layers A+B are behaviour-neutral scalability fixes; only

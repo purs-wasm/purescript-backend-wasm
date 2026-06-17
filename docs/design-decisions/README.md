@@ -82,7 +82,7 @@ language and are kept out of version control.)
 | 0032 | [Caller-homed specialization for per-module, incremental builds](0032-caller-homed-specialization-for-incremental-builds.md) | Accepted |
 | 0033 | [Shipping `ulib` as precompiled MIR (`.pmo`) artifacts](0033-precompiled-ulib-pmo-artifacts.md) | Proposed |
 | 0034 | [Split the module cache into `.pmi` interface and `.pmo` object](0034-pmi-interface-pmo-object-split.md) | Accepted |
-| 0035 | [Sharing/memoizing the NbE reducer, then reduction-aware inlining](0035-sharing-nbe-reduction-aware-inlining.md) | Accepted (Layers A+B landed 2026-06-17 — the scalability gate; Layer C deferred) |
+| 0035 | [Sharing/memoizing the NbE reducer, then reduction-aware inlining](0035-sharing-nbe-reduction-aware-inlining.md) | Accepted (Layers A+B + a Layer-C-lite size cap + the Specialize dedup-key fix landed 2026-06-17 — the optimized self-compile completes; full reduction-aware Layer C policy deferred) |
 | 0036 | [Parameterized join points for decision-tree leaves](0036-join-points-for-decision-tree-leaves.md) | Proposed (de-prioritized — measured duplication ~1.16×, not the `--no-opt` floor) |
 | 0037 | [Separate per-module codegen and linking (per-module wasm + `wasm-merge`)](0037-separate-per-module-codegen-and-linking.md) | Accepted (barriers ①②③ validated by spikes; boxed module boundary chosen; implementation phased — not started) |
 
@@ -102,11 +102,14 @@ Current frontiers, tracked by the records above: streaming / incremental codegen
 Phase 2 — reachability pruning and dependency-ordered single-pass optimization shipped; the
 **`.pmi`/`.pmo` incremental build cache** — default-on, decode-free for unchanged modules —
 shipped too, ADR 0032 phase 4 / ADR 0034); the reduction-aware inline-or-share selection (ADR
-0020's NbE core is implemented; **ADR 0035 Layers A+B — the sharing fix that makes the reducer
-non-exponential — landed 2026-06-17, opening the self-compilation scalability *time* gate**: the
-optimized self-compile now compiles through `Optimize.Specialize`, where it used to hang; the
-reduction-driven inline *decision* (ADR 0035 Layer C) is deferred, an optimization-quality
-improvement rather than a remaining scalability blocker); the `--no-opt` self-compilation *space*
+0020's NbE core is implemented; **ADR 0035 Layers A+B (NbE sharing — makes the reducer
+non-exponential) + a Layer-C-lite `normalFormSizeCap` (bounds the `genericShow` code-size blow-up)
++ the `Optimize.Specialize` dedup-key fix (hash, not `show`) landed 2026-06-17, and the optimized
+self-compile now *completes*** (writes an 8 MB wasm), where it used to hang at `Optimize.Specialize`;
+A+B alone removed the recomputation exponential but did not clear that module — the code-size cap +
+dedup-key fix were also required. The full reduction-driven inline *decision* (ADR 0035 Layer C
+policy) is deferred — an optimization-quality improvement, not a remaining scalability blocker); the
+`--no-opt` self-compilation *space*
 gate — the front-half whole-program memory floor (decode + translate + lambda-lift holding all MIR
 at once, ADR 0009) — addressed by **copy-reduction (landed: translate + lambda-lift are fused
 per module and each module's CoreFn is dropped before the next, so the program is never resident
