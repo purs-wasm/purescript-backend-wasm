@@ -23,6 +23,10 @@
 -- | (`Codegen.Prim`) live in the submodules it imports.
 module PureScript.Backend.Wasm.Codegen
   ( buildModule
+  , buildModuleSingle
+  , buildLinkGlue
+  , PerModuleMeta
+  , SingleModule
   ) where
 
 import Prelude
@@ -44,7 +48,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error, throwException)
-import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGlobalName, importRuntime, internStrHelperName, internStrName, projHelperName, recSetHelperName, strEqHelperName)
+import PureScript.Backend.Wasm.Codegen.Imports (applyCloHelperName, counterGlobalName, importRuntime, internStrHelperName, internStrName, projHelperName, recSetHelperName, runtimeModuleName, strEqHelperName)
 import PureScript.Backend.Wasm.Intrinsics (Intrinsic(..))
 import PureScript.Backend.Wasm.Codegen.Prim (genPrim)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, DataStruct, buildRuntimeTypes, repType)
@@ -118,6 +122,120 @@ type CompiledModule =
 -- | provider must satisfy (excludes the runtime `rt`, which `foreignImports` never collects).
 foreignModuleNames :: Program -> Array String
 foreignModuleNames prog = Array.nub (map _.moduleName (Object.values (foreignImports prog)))
+
+-- | Per-module codegen metadata (ADR 0037 Phase 2, Slice 2.2): the module's dotted name, the home
+-- | module (dotted) of every program function key — for the module field of a cross-module import —
+-- | and the function keys referenced from another module (which of this module's functions to
+-- | export, and which `RCallKnown` targets are cross-module imports rather than local calls).
+type PerModuleMeta =
+  { moduleName :: String
+  , keyHomeModule :: Object String
+  , crossModuleRefs :: Set String
+  }
+
+-- | The result of building one module's wasm: the live module, the per-module CAF-init export name
+-- | (`Nothing` if it globalizes none) — the link glue calls every module's — and the foreign source
+-- | modules to resolve.
+type SingleModule =
+  { mod :: B.Module
+  , cafInitExport :: Maybe String
+  , foreignModules :: Array String
+  }
+
+-- | Build ONE module to its own Binaryen module for separate compilation (ADR 0037 Phase 2): like
+-- | `buildModule`, but (a) an `RCallKnown` to a function defined in another module becomes a
+-- | function import (boxed ABI, ③) resolved by `wasm-merge`; (b) this module's functions that other
+-- | modules reference (`crossModuleRefs`) are exported under their key; (c) the CAF init is a
+-- | per-module function exported as `caf_init$<module>` (the link concatenates them — cross-module
+-- | CAF references recompute via the exported function, so no cross-module init order is needed);
+-- | (d) `internStr` stays internal (the link emits the one exported `internStr`). GC types are the
+-- | usual singleton rec groups, so each module's copy canonicalises under merge (①).
+buildModuleSingle :: PerModuleMeta -> Program -> Effect SingleModule
+buildModuleSingle meta prog = do
+  mod <- B.createModule
+  B.setFeaturesGC mod
+  rt <- buildRuntimeTypes mod
+  dataGroup <- buildDataTypes mod (dataSignatures prog)
+  let sigs = Map.fromFoldable (map (\fn -> Tuple fn.name { params: fn.params, result: fn.result }) prog.funcs)
+  let cplan = cafPlan prog
+  let ctx = { mod, rt, params: [], localReps: [], funcResult: Boxed, tailPos: true, sigs, dataBase: dataGroup.base, dataStructs: dataGroup.structs, cafGlobals: cplan.globals }
+  importRuntime ctx
+  addForeignImports ctx prog
+  addCrossModuleImports ctx meta prog
+  -- internal only: the single exported `internStr` for the JS glue is emitted once by the link glue
+  addInternStr ctx false
+  addNullaryGlobals ctx (nullaryTags prog)
+  addCafGlobals ctx cplan.globals
+  when (needsCounter prog) (addCounterGlobal ctx)
+  forEachArr_ prog.funcs (addFunc ctx)
+  let cafExport = "caf_init$" <> meta.moduleName
+  cafInit <- addCafInitNamed ctx cplan cafExport
+  forEachArr_ prog.funcs (addCrossModuleExport ctx meta)
+  forEachArr_ prog.funcs (addExportWrapper ctx prog.exportSigs)
+  pure
+    { mod
+    , cafInitExport: case cafInit of
+        Just _ -> Just cafExport
+        Nothing -> Nothing
+    , foreignModules: foreignModuleNames prog
+    }
+
+-- | Build the **link glue** module (ADR 0037 Phase 2): the single place that ties the separately
+-- | compiled modules together. It exports `caf_init` — calling every module's `caf_init$<module>`
+-- | (imported), so all CAF globals are initialised at instantiation (order-independent: a
+-- | cross-module CAF reference recomputes via the callee's exported function rather than reading a
+-- | global, so no module's init depends on another's) — and `internStr` — the one exported
+-- | name→id resolver the JS marshalling glue calls, delegating to the runtime hash `$rt.internStrHash`
+-- | (per-module codegen keeps its `internStr` internal to avoid an export clash). Returns the live
+-- | module and its `caf_init` function (for packaging to set as `start` when there is no loader).
+buildLinkGlue :: Array { moduleName :: String, cafInitExport :: String } -> Effect { mod :: B.Module, cafInit :: Maybe B.Function }
+buildLinkGlue cafInits = do
+  mod <- B.createModule
+  B.setFeaturesGC mod
+  forEachArr_ cafInits \c ->
+    B.addFunctionImport mod c.cafInitExport c.moduleName c.cafInitExport (B.createType []) B.none
+  B.addFunctionImport mod internStrHelperName runtimeModuleName "internStrHash" (B.createType [ B.eqref ]) B.i32
+  -- caf_init: run every module's per-module init (no result, side-effects each module's globals)
+  calls <- traverse (\c -> B.call mod c.cafInitExport [] B.none) cafInits
+  cafBody <- B.block mod calls B.none
+  cafFn <- B.addFunction mod "$caf_init" (B.createType []) B.none [] cafBody
+  _ <- B.addFunctionExport mod "$caf_init" "caf_init"
+  -- internStr: the single host-facing resolver, delegating to the runtime hash
+  key <- B.localGet mod 0 B.eqref
+  isBody <- B.call mod internStrHelperName [ key ] B.i32
+  _ <- B.addFunction mod "$internStr" (B.createType [ B.eqref ]) B.i32 [] isBody
+  _ <- B.addFunctionExport mod "$internStr" "internStr"
+  pure { mod, cafInit: if Array.null cafInits then Nothing else Just cafFn }
+
+-- | Declare a function import for each cross-module `RCallKnown` target (a callee defined in another
+-- | module): the import's internal name is the callee's key, so the existing `B.call key` resolves
+-- | to it; the import module field is the callee's home module and the field name its key (matching
+-- | the exporter's `addCrossModuleExport`); boxed ABI (③). Deduplicated by key; the arity comes from
+-- | a (saturated) call site.
+addCrossModuleImports :: Ctx -> PerModuleMeta -> Program -> Effect Unit
+addCrossModuleImports ctx meta prog = forEachArr_ (Object.toUnfoldable imports) addOne
+  where
+  ownNames = Set.fromFoldable (map (\fn -> funcNameStr fn.name) prog.funcs)
+  imports = foldProgramRhs collect Object.empty prog
+  collect rhs acc = case rhs of
+    RCallKnown name args
+      | key <- funcNameStr name
+      , not (Set.member key ownNames) -> Object.insert key (Array.length args) acc
+    _ -> acc
+  addOne (Tuple key arity) = case Object.lookup key meta.keyHomeModule of
+    Just home -> B.addFunctionImport ctx.mod key home key (B.createType (Array.replicate arity B.eqref)) B.eqref
+    -- not a known program function (intrinsic/foreign go via RPrim/RCallForeign, not RCallKnown);
+    -- a missing home would be an internal error, so skip rather than emit a dangling import.
+    Nothing -> pure unit
+
+-- | Export this module's functions that another module references (`crossModuleRefs`), under their
+-- | key, so the importing module's function import resolves to them after `wasm-merge`.
+addCrossModuleExport :: Ctx -> PerModuleMeta -> IRFunc -> Effect Unit
+addCrossModuleExport ctx meta fn =
+  let
+    key = funcNameStr fn.name
+  in
+    when (Set.member key meta.crossModuleRefs) (void (B.addFunctionExport ctx.mod key key))
 
 -- | A nullary constructor (`RMkData tag []`) is a constant `$Data` value — just its
 -- | tag, no fields — fully determined by its tag, so every construction of it is
@@ -303,10 +421,6 @@ addNullaryGlobals ctx tags = forEachArr_ (Set.toUnfoldable tags :: Array Int) ad
 cafGlobalName :: FuncName -> String
 cafGlobalName name = "$caf." <> funcNameStr name
 
--- | The synthesized CAF initializer (the module `start` function).
-cafInitName :: String
-cafInitName = "$caf_init"
-
 -- | Emit a mutable global per globalizable CAF (ADR 0006), holding the value at its
 -- | representation (`i32`/`f64`/`eqref` — a scalar stays unboxed). The initializer is
 -- | a throwaway constant the init function overwrites at instantiation; an `eqref`
@@ -335,14 +449,21 @@ defaultConst ctx = case _ of
 -- | bound instance), or — with no loader — it is the wasm `start` section (ADR 0006 / 0021).
 -- | `Nothing` when nothing is globalized.
 addCafInit :: Ctx -> CafPlan -> Effect (Maybe B.Function)
-addCafInit ctx cplan
+addCafInit ctx cplan = addCafInitNamed ctx cplan "caf_init"
+
+-- | `addCafInit` with a chosen export name. The whole-program build uses `caf_init`; per-module
+-- | codegen (ADR 0037 Phase 2) uses a module-unique name (`caf_init$<module>`) so the per-module
+-- | init functions do not collide as exports under `wasm-merge`, and the synthesized link glue
+-- | calls them all. The internal function name is `$<exportName>` (unique likewise).
+addCafInitNamed :: Ctx -> CafPlan -> String -> Effect (Maybe B.Function)
+addCafInitNamed ctx cplan exportName
   | Array.null cplan.initOrder = pure Nothing
   | otherwise =
       do
         stmts <- traverse setOne cplan.initOrder
         body <- B.block ctx.mod stmts B.none
-        initFn <- B.addFunction ctx.mod cafInitName (B.createType []) B.none [] body
-        _ <- B.addFunctionExport ctx.mod cafInitName "caf_init"
+        initFn <- B.addFunction ctx.mod ("$" <> exportName) (B.createType []) B.none [] body
+        _ <- B.addFunctionExport ctx.mod ("$" <> exportName) exportName
         pure (Just initFn)
       where
       setOne name = do

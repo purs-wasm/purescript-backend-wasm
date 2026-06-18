@@ -34,6 +34,9 @@ module PureScript.Backend.Wasm.Lower
   ( lowerModule
   , lowerModules
   , lowerModulesPerModule
+  , lowerProgramFragments
+  , ModuleFragment
+  , LoweredProgram
   , module ReExport
   ) where
 
@@ -744,6 +747,45 @@ lowerModulesPerModule
   -> Array Module
   -> Either LowerError Program
 lowerModulesPerModule fieldReps foreignSigs foreignNames roots modules = do
+  lowered <- lowerProgramFragments fieldReps foreignSigs foreignNames roots modules
+  pure
+    { funcs: lowered.fragments >>= _.funcs
+    , labels: lowered.labels
+    , exportSigs: Object.fromFoldable (lowered.fragments >>= \f -> Object.toUnfoldable f.exportSigs)
+    }
+
+-- | One module's lowered functions plus its export signatures, kept separate (NOT recombined) so
+-- | the per-module codegen (ADR 0037 Phase 2, Slice 2.2) can emit it to its own wasm.
+type ModuleFragment =
+  { moduleName :: Array String
+  , funcs :: Array IRFunc
+  , exportSigs :: Object ForeignImport
+  }
+
+-- | The whole program lowered per-module: the fragments, plus the link-time facts a per-module
+-- | codegen needs without re-deriving them — the shared label table, the home module of each
+-- | function key (for the module field of a cross-module import), and the set of function keys
+-- | referenced from another module (the export set + boxed boundary). Bodies are never recombined.
+type LoweredProgram =
+  { fragments :: Array ModuleFragment
+  , labels :: Array (Tuple String Int)
+  , keyHomeModule :: Object String
+  , crossModuleRefs :: Set String
+  }
+
+-- | Lower every module to its own `ModuleFragment` (the per-module-codegen input). Same per-module
+-- | lowering as `lowerModulesPerModule` (fresh code-fn counter + boxed-boundary `assignProgramReps`
+-- | per module), but the fragments are returned separately, together with the cross-module facts
+-- | the linker/codegen needs. The whole-program tables (ctors / labels / refs) are derived over the
+-- | in-memory modules here; caching them as `.pmi` interfaces is Phase 3.
+lowerProgramFragments
+  :: Object (Array Rep)
+  -> Object ForeignImport
+  -> Set String
+  -> Array (Array String)
+  -> Array Module
+  -> Either LowerError LoweredProgram
+lowerProgramFragments fieldReps foreignSigs foreignNames roots modules = do
   let
     dictCtors = collectDictCtors modules
     labelIds = collectLabels modules
@@ -777,20 +819,34 @@ lowerModulesPerModule fieldReps foreignSigs foreignNames roots modules = do
   case Array.head (labelCollisions labelIds) of
     Just clash -> Left (LabelHashCollision clash)
     Nothing -> pure unit
-  perModuleFuncs <- traverse (lowerOneModule info reachable crossModuleRefs roots) modules
-  let allFuncs = Array.concat perModuleFuncs
+  fragments <- traverse (lowerOneFragment info reachable crossModuleRefs roots foreignSigs) modules
+  pure
+    { fragments
+    , labels: Object.toUnfoldable labelIds
+    , keyHomeModule: map (joinWith ".") keyModule
+    , crossModuleRefs
+    }
+
+-- | Lower one module into a `ModuleFragment`: its rep-assigned functions (`lowerOneModule`) plus
+-- | the export signatures of its exported (`fn.export`) functions, looked up in `foreignSigs`.
+lowerOneFragment
+  :: ModuleInfo
+  -> Object Unit
+  -> Set String
+  -> Array (Array String)
+  -> Object ForeignImport
+  -> Module
+  -> Either LowerError ModuleFragment
+lowerOneFragment info reachable crossModuleRefs roots foreignSigs m = do
+  funcs <- lowerOneModule info reachable crossModuleRefs roots m
   let
     exportSigs = Object.fromFoldable do
-      fn <- allFuncs
+      fn <- funcs
       ident <- maybe [] pure fn.export
       let FuncName key = fn.name
       sig <- maybe [] pure (Object.lookup key foreignSigs)
       pure (Tuple ident sig)
-  pure
-    { funcs: allFuncs
-    , labels: Object.toUnfoldable labelIds
-    , exportSigs
-    }
+  pure { moduleName: m.name, funcs, exportSigs }
 
 -- | Lower one module's reachable functions to rep-assigned `IRFunc`s: a fresh lowering state (so
 -- | code functions are numbered per module — see `lowerModulesPerModule`), then a per-module
