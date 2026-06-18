@@ -10,6 +10,8 @@ module PureScript.Backend.Wasm.Compiler
   , finishLink
   , compilePerModule
   , PerModuleArtifacts
+  , compileModuleWasm
+  , ModuleArtifact
   , effectfulForeigns
   , compileModules
   , compileModulesText
@@ -26,13 +28,14 @@ import Data.Array as Array
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
 import Data.Map (Map)
-import Data.Maybe (Maybe, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.Traversable (sequence, traverse)
 import Effect (Effect)
 import Foreign.Object (Object)
+import Foreign.Object as Object
 import PureScript.Backend.Wasm.Codegen (buildLinkGlue, buildModule, buildModuleSingle)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
@@ -215,6 +218,73 @@ compilePerModule opts roots foreignSigs' foreignNames externs optimizedModules =
       bytes <- B.emitBinary single.mod
       B.dispose single.mod
       pure (Right { moduleName: dotted, bytes, cafInitExport: single.cafInitExport, foreignModules: single.foreignModules })
+
+-- | What `compileModuleWasm` produces for ONE module (ADR 0038 Phase B — the `purwc` worker): the
+-- | module's emitted (optimised) wasm bytes ready for `wasm-merge`, its per-module CAF-init export
+-- | name (`caf_init$<Module>`, `Nothing` if it globalizes none — the orchestrator's glue calls it),
+-- | the foreign source modules to resolve, and the cross-module function keys this module exported
+-- | for merge resolution (the orchestrator internalises + DCEs them post-merge, so over-exporting is
+-- | safe). Unlike `PerModuleArtifacts`, there is no link glue — the orchestrator builds that from the
+-- | per-module `cafInitExport`s of the whole program.
+type ModuleArtifact =
+  { bytes :: Uint8Array
+  , cafInitExport :: Maybe String
+  , foreignModules :: Array String
+  , crossModuleExports :: Array String
+  }
+
+-- | Lower + codegen ONE module in isolation (ADR 0038 Phase B). `target` is the module's finalized
+-- | MIR; the target is its own root; deps are non-roots. Reuses `lowerProgramFragments` over
+-- | `[deps…, target]` and codegens only the target's fragment via `buildModuleSingle` (cross-module
+-- | calls → imports, this module's referenced functions → exports). Emits NO link glue and does NO
+-- | merge — those are the orchestrator's job (Phase C). At M1 there are no dependencies, so this is
+-- | byte-identical to the whole-program per-module oracle for a dependency-free module.
+-- |
+-- | `depFinalMods` is PROVISIONAL. Lowering the target needs, for every cross-module callee it
+-- | references, that callee's *signature* — `collectFuncs` (key→arity), `collectCtors`
+-- | (tag/arity/fieldReps), `collectDictCtors`/`collectEnumCtors` — or `lowerApp` throws
+-- | `unknown callee`. The optimize summary alone is insufficient (`DictElim.summarize` drops whole
+-- | large-pure-function decls, losing their arity). It is NOT the bodies that are needed, only the
+-- | signatures; `keyHomeModule` is derivable from the qualified key. So ADR 0038 M2 replaces this
+-- | `Array M.Module` with a `.pmi`-derived lowering interface, making the worker consume `.pmi`
+-- | ONLY — never a dependency's object code. Passing full finalMods here is the M1 stopgap.
+compileModuleWasm
+  :: CompileOptions
+  -> Object ForeignSig
+  -> Set String
+  -> Array ExternsFile
+  -> Array M.Module
+  -> M.Module
+  -> Effect (Either String ModuleArtifact)
+compileModuleWasm opts foreignSigs' foreignNames externs depFinalMods target =
+  case lowerProgramFragments (ctorFieldReps externs) foreignSigs' foreignNames [ target.name ] (Array.snoc depFinalMods target) of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right lowered -> case Array.find (\f -> f.moduleName == target.name) lowered.fragments of
+      Nothing -> pure (Left ("internal: target fragment not lowered: " <> joinWith "." target.name))
+      Just f -> do
+        let dotted = joinWith "." f.moduleName
+        let meta = { moduleName: dotted, keyHomeModule: lowered.keyHomeModule, crossModuleRefs: lowered.crossModuleRefs }
+        single <- buildModuleSingle meta { funcs: f.funcs, labels: lowered.labels, exportSigs: f.exportSigs }
+        ok <- B.validate single.mod
+        if not ok then do
+          wat <- B.emitText single.mod
+          B.dispose single.mod
+          pure (Left ("per-module codegen: " <> dotted <> " failed validation:\n" <> wat))
+        else do
+          when opts.optimize (B.optimize single.mod)
+          bytes <- B.emitBinary single.mod
+          B.dispose single.mod
+          -- Over-export the cross-module-referenced keys HOMED in this module (merge resolves them;
+          -- the orchestrator internalises + DCEs post-merge) plus this module's own `caf_init$M`.
+          let homed = Set.toUnfoldable (Set.filter (\k -> Object.lookup k lowered.keyHomeModule == Just dotted) lowered.crossModuleRefs)
+          pure
+            ( Right
+                { bytes
+                , cafInitExport: single.cafInitExport
+                , foreignModules: single.foreignModules
+                , crossModuleExports: homed <> maybe [] (\e -> [ e ]) single.cafInitExport
+                }
+            )
 
 -- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
 -- | module, and package it with the cache misses to persist. `foreignNames` is the qualified

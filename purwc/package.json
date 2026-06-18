@@ -4,6 +4,8 @@
   "scripts": {
     "compile": "cd .. && spago build -p purwc",
     "exec": "spago build && node index.dev.js",
+    "test:diff": "cd .. && node purwc/test/diffPurwc.mjs",
+    "test": "npm run test:diff",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test"
   }

@@ -17,6 +17,9 @@ module PureScript.Backend.Wasm.MiddleEnd
   , optimizeIncrementalM
   , optimizeProgramTrace
   , optimizeModule
+  , compileModuleMir
+  , SingleModuleInput
+  , SingleModuleOutput
   , liftModule
   , CacheInput
   , CacheEntry
@@ -535,3 +538,60 @@ declRefs m = m.decls >>= case _ of
 -- | `optimizeProgram` over all linked modules.
 optimizeModule :: Module -> M.Module
 optimizeModule m = fromMaybe { name: m.name, decls: [] } (Array.head (optimizeProgram true Set.empty Map.empty [ m ]))
+
+-- | Inputs to optimize ONE module in isolation (ADR 0038 Phase B — the `purwc` worker): the
+-- | target's translated + lambda-lifted MIR (`liftModule`), its `corefn.json` source hash, and its
+-- | transitive dependencies' `.pmi` summaries **in topological order** (each after the modules it
+-- | imports). The summaries are the necessary-and-sufficient optimization context (ADR 0034) — the
+-- | same data a cache hit folds into `accCtx`/`impure`/`memEff` in `optimizeIncrementalM`.
+type SingleModuleInput =
+  { sourceHash :: String
+  , lifted :: M.Module
+  , depSummaries :: Array M.Module
+  }
+
+-- | The isolated-optimization result: the finalized MIR (the `.pmo` body, for codegen), the pruned
+-- | summary (the `.pmi` body, for *this* module's dependents), the precise referenced-dependency
+-- | names + cache key (the `.pmi` header), and the impure / memory-effecting key sets.
+type SingleModuleOutput =
+  { finalMod :: M.Module
+  , summary :: M.Module
+  , deps :: Array String
+  , key :: String
+  , impure :: Set String
+  , memEff :: Set String
+  }
+
+-- | Optimize one module against its dependencies' summaries (ADR 0038 Phase B). Folds the
+-- | topo-ordered dep summaries to rebuild the optimization context exactly as
+-- | `optimizeIncrementalM`'s cache-hit path does (`mergeAccum (moduleContribs …)` + `Purity.*Keys`),
+-- | then runs the per-module miss step verbatim (specialize → `localOpt` → `finalizeModule` →
+-- | `DictElim.summarize`). `summaryInlineKeys` is taken over `deps ∪ target` rather than the whole
+-- | program; since `summarize` keeps only the target's own bindings, this differs from the batch
+-- | result only in which *pure* cross-module bodies the summary retains — an inlining-opportunity
+-- | (perf) difference, never a correctness one.
+compileModuleMir :: Set String -> Map String Int -> SingleModuleInput -> SingleModuleOutput
+compileModuleMir eff arities i =
+  let
+    folded =
+      Array.foldl
+        ( \acc s ->
+            { accCtx: mergeAccum acc.accCtx (moduleContribs s)
+            , impure: Purity.impureKeys eff acc.impure [ s ]
+            , memEff: Purity.memEffKeys acc.memEff [ s ]
+            }
+        )
+        { accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty }
+        i.depSummaries
+    summaryInlineKeys =
+      Set.fromFoldable (Map.keys (buildContext eff Set.empty Set.empty (Array.snoc i.depSummaries i.lifted)).inline)
+    speced = specializeModule i.depSummaries i.lifted
+    r = localOpt eff arities folded.accCtx folded.impure folded.memEff speced
+    finalMod = finalizeModule eff folded.accCtx i.depSummaries r.impure r.memEff r.mod
+    summary = DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod
+    names = Set.fromFoldable (map modName i.depSummaries)
+    summaryHashes = Map.fromFoldable (map (\s -> Tuple (modName s) (hashBytes (encode s))) i.depSummaries)
+    deps = referencedModules names i.lifted
+    key = cacheKey i.sourceHash (Array.mapMaybe (\d -> Map.lookup d summaryHashes) deps)
+  in
+    { finalMod, summary, deps, key, impure: r.impure, memEff: r.memEff }

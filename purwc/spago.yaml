@@ -1,11 +1,22 @@
 package:
   name: purwc
   dependencies:
-    - console
+    - argparse-basic
+    - arrays
     - cli-lib
+    - compiler
+    - console
     - effect
+    - either
     - fmt
+    - maybe
+    - node-path
+    - node-process
+    - ordered-collections
     - prelude
+    - run
+    - tuples
+    - typelevel-prelude
   test:
     main: Test.Purwc
     dependencies:

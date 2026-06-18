@@ -1,10 +1,14 @@
 # 0038. Separated compilation: the `purwc` worker, the `purs-wasm` orchestrator, and the shared `cli-lib`
 
-- Status: Accepted; **Phase A implemented** (2026-06-18) — `cli-lib` extracted and the three CLIs
-  re-homed on it (behaviour-neutral). Phases B–C (the standalone single-module `purwc` worker and the
-  `purs-wasm` orchestrator that drives it as a subprocess) are designed here but **not yet
-  implemented**.
-- Date: 2026-06-18
+- Status: Accepted; **Phase A + Phase B M1 implemented**. Phase A (2026-06-18) — `cli-lib` extracted,
+  three CLIs re-homed (behaviour-neutral). Phase B M0+M1 (2026-06-19) — the two single-module compiler
+  APIs (`MiddleEnd.compileModuleMir` = optimize one module against its dependency summaries;
+  `Compiler.compileModuleWasm` = lower+codegen one module) and the `purwc compile` worker CLI, verified
+  on a dependency-free fixture to be **byte-identical** (`.pmi`/`.pmo`/`.wasm`) to the whole-program
+  `purs-wasm build --per-module-codegen` per-module output. Phase B M2/M3 (dependency-aware codegen,
+  then dependency-aware optimize producing self-generated `.pmi`/`.pmo`) and Phase C (the `purs-wasm`
+  orchestrator driving `purwc` as a subprocess) remain.
+- Date: 2026-06-18 (Phase B M1: 2026-06-19)
 
 ## Context
 
@@ -86,7 +90,22 @@ needed the orchestrator, only the shared infra.
   sigs and its dependencies' `.pmi`s, optimize `M` in isolation (extract the single-module step out of
   the batch `optimizeIncrementalM`), lower + codegen it (the single-module path already exists inside
   `compilePerModule`), and write `M.{pmi,pmo,wasm,wat}`. Differentially checked against the current
-  `--per-module-codegen` output.
+  `--per-module-codegen` output. Decomposed into milestones:
+  - **M0 + M1 (done 2026-06-19)** — the two compiler APIs and the `purwc compile` CLI. `compileModuleMir`
+    folds the dependency summaries to rebuild the optimization context (the cache-hit fold of
+    `optimizeIncrementalM`) then runs the per-module miss step; `compileModuleWasm` reuses
+    `lowerProgramFragments [deps…, target]` and codegens only the target fragment via `buildModuleSingle`
+    (the worker emits no link glue and does no merge). The corefn-metadata FFI moved to cli-lib
+    (`CLI.Corefn`). Verified on a dependency-free fixture (`Purwc.Fixture.Solo`): `purwc compile`'s
+    `.pmi`/`.pmo`/`.wasm` are **byte-identical** to the oracle's per-module `_build/<M>.{pmi,pmo,wasm}`
+    (`purwc/test/diffPurwc.mjs`).
+  - **M2** — dependency-aware codegen: load deps' `.pmi`/`.pmo` from `--deps`, compute the transitive
+    closure + topo order, byte-check a dependency-having module against the oracle (reusing the oracle's
+    `.pmo` for deps).
+  - **M3** — dependency-aware optimize: `purwc` produces its own `.pmi`/`.pmo`, compile a whole fixture
+    module-by-module, `wasm-merge`, behaviour-parity against the whole-program oracle. The
+    `summaryInlineKeys` locality question (above) is measured here.
+  - **M4** — flags (`--no-opt`/`--force`/`--text`), errors, `--version`.
 - **Phase C — the `purs-wasm` orchestrator.** Build the dependency graph, drive `purwc` per module as
   a subprocess (in dependency order, then in parallel), and `wasm-merge` the results. Once at parity,
   make this the default path and retire the in-process `--per-module-codegen`.

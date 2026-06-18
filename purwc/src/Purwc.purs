@@ -1,15 +1,5 @@
-module Purwc where
+-- | The `purwc` package entry module. The Node loader (`index.dev.js`) imports `main` from here and
+-- | calls `main(cliRoot)(binaryenBinDir)()`; the real logic lives in `Purwc.CLI.Main`.
+module Purwc (module Purwc.CLI.Main) where
 
-import Prelude
-
-import Effect (Effect)
-import Effect.Console as Console
-import Fmt as Fmt
-import PureScript.Backend.Wasm.CLI.Effect.Filesystem (FilePath)
-
-main :: FilePath -> FilePath -> Effect Unit
-main cliRoot binaryenBinDir = do
-  Console.log "purwc - A WebAssembly Compiler for PureScript"
-  Console.log ""
-  Console.log $ Fmt.fmt @"cliRoot\t= {cliRoot}" { cliRoot }
-  Console.log $ Fmt.fmt @"binaryenBinDir\t= {binaryenBinDir}" { binaryenBinDir }
+import Purwc.CLI.Main (main)

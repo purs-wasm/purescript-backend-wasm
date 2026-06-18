@@ -353,11 +353,22 @@
         "path": "purwc",
         "core": {
           "dependencies": [
+            "argparse-basic",
+            "arrays",
             "cli-lib",
+            "compiler",
             "console",
             "effect",
+            "either",
             "fmt",
-            "prelude"
+            "maybe",
+            "node-path",
+            "node-process",
+            "ordered-collections",
+            "prelude",
+            "run",
+            "tuples",
+            "typelevel-prelude"
           ]
         },
         "test": {
@@ -365,6 +376,17 @@
             "spec",
             "spec-node"
           ]
+        }
+      },
+      "purwc-fixtures": {
+        "path": "purwc-fixtures",
+        "core": {
+          "dependencies": [
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
         }
       },
       "ulib-tooling": {

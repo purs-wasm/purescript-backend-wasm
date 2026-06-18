@@ -39,6 +39,7 @@ import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PureScript.Backend.Wasm.CLI.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
+import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames, corefnImports)
 import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log (br)
 import PureScript.Backend.Wasm.CLI.Effect.Log as Log
@@ -51,17 +52,6 @@ import PureScript.Backend.Wasm.CLI.Ulib.Shadow (loadShadowMap)
 import PursWasm.CLI.Version as Version
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
-
--- | The dotted import module names of a `corefn.json`, extracted cheaply (no full decode), for
--- | file-level reachability pruning.
-foreign import corefnImportsImpl :: String -> Array String
-
--- | The bare foreign-import names a `corefn.json` declares, extracted cheaply (no full decode), so
--- | the incremental path can resolve foreign signatures without decoding a cache hit.
-foreign import corefnForeignNamesImpl :: String -> Array String
-
--- | A transient one-line progress indicator (overwritten in place on a TTY); `progressEnd` finishes
--- | the line. Bypasses the `LOG` effect because it is a live UI element, not a recorded message.
 
 -- | A monotonic clock in milliseconds, for the elapsed-time report.
 foreign import nowMsImpl :: Effect Number
@@ -128,9 +118,9 @@ buildCmd cliRoot binaryenBinDir args = do
   -- shadow's private helper module (absent from the user closure) is *injected* from the lib.
   userImports <- map Map.fromFoldable $ for allMods \mod -> do
     source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
-    pure (Tuple (printModname mod) (corefnImportsImpl source))
+    pure (Tuple (printModname mod) (corefnImports source))
   libImports <- map (Map.fromFoldable <<< Array.catMaybes) $ for (Map.toUnfoldable shadows) \(Tuple name sh) ->
-    map (\src -> Tuple name (corefnImportsImpl src)) <$> readText sh.corefn
+    map (\src -> Tuple name (corefnImports src)) <$> readText sh.corefn
   let { reachable, libSourced } = resolveModuleSet roots allModNames userImports libImports mManifest mLock
   warnUlibVersionDrift mManifest mLock reachable
   -- Keep only modules with an actual corefn source: a user module, or a real lib module. The closure
@@ -166,8 +156,8 @@ buildCmd cliRoot binaryenBinDir args = do
       , mn: Str.split (Str.Pattern ".") name
       , src
       , sourceHash: hashString src
-      , imports: corefnImportsImpl src
-      , foreignNames: corefnForeignNamesImpl src
+      , imports: corefnImports src
+      , foreignNames: corefnForeignNames src
       }
   let sourceHashes = Map.fromFoldable (map (\i -> Tuple i.name i.sourceHash) srcInfos)
   -- Each module's `externs.cbor` carries the top-level type info CoreFn erased (front B); a module
