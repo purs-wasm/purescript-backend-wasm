@@ -1,0 +1,13 @@
+package:
+  name: purwc
+  dependencies:
+    - console
+    - cli-lib
+    - effect
+    - fmt
+    - prelude
+  test:
+    main: Test.Purwc
+    dependencies:
+      - spec
+      - spec-node

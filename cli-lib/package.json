@@ -1,0 +1,11 @@
+{
+  "name": "cli-lib",
+  "type": "module",
+  "scripts": {
+    "compile": "spago build",
+    "test": "spago test",
+    "exec": "spago build && node index.dev.js",
+    "format": "purs-tidy format-in-place src test",
+    "check": "purs-tidy check src test"
+  }
+}

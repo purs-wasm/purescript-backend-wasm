@@ -1,0 +1,10 @@
+{
+  "name": "purwc",
+  "type": "module",
+  "scripts": {
+    "compile": "cd .. && spago build -p purwc",
+    "exec": "spago build && node index.dev.js",
+    "format": "purs-tidy format-in-place src test",
+    "check": "purs-tidy check src test"
+  }
+}

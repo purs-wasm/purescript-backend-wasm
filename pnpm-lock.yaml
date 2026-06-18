@@ -28,6 +28,8 @@ importers:
         specifier: ^123.0.0
         version: 123.0.0
 
+  cli-lib: {}
+
   compiler:
     dependencies:
       cbor:
@@ -134,11 +136,7 @@ importers:
         specifier: ^123.0.0
         version: 123.0.0
 
-  purs-wasm/package:
-    dependencies:
-      binaryen:
-        specifier: ^123.0.0
-        version: 123.0.0
+  purwc: {}
 
   ulib-tooling: {}
 

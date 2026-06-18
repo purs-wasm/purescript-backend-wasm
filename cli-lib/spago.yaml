@@ -1,0 +1,8 @@
+package:
+  name: cli-lib
+  dependencies: []
+  test:
+    main: Test.PureScript.Backend.Wasm.CLI
+    dependencies:
+      - spec
+      - spec-node

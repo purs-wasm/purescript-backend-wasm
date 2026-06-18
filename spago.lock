@@ -40,6 +40,18 @@
           ]
         }
       },
+      "cli-lib": {
+        "path": "cli-lib",
+        "core": {
+          "dependencies": []
+        },
+        "test": {
+          "dependencies": [
+            "spec",
+            "spec-node"
+          ]
+        }
+      },
       "compiler": {
         "path": "compiler",
         "core": {
@@ -293,6 +305,24 @@
             "spec-node",
             "strings",
             "tuples"
+          ]
+        }
+      },
+      "purwc": {
+        "path": "purwc",
+        "core": {
+          "dependencies": [
+            "cli-lib",
+            "console",
+            "effect",
+            "fmt",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "spec",
+            "spec-node"
           ]
         }
       },
