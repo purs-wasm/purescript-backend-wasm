@@ -1,14 +1,21 @@
 # 0038. Separated compilation: the `purwc` worker, the `purs-wasm` orchestrator, and the shared `cli-lib`
 
-- Status: Accepted; **Phase A + Phase B M1 implemented**. Phase A (2026-06-18) — `cli-lib` extracted,
-  three CLIs re-homed (behaviour-neutral). Phase B M0+M1 (2026-06-19) — the two single-module compiler
-  APIs (`MiddleEnd.compileModuleMir` = optimize one module against its dependency summaries;
-  `Compiler.compileModuleWasm` = lower+codegen one module) and the `purwc compile` worker CLI, verified
-  on a dependency-free fixture to be **byte-identical** (`.pmi`/`.pmo`/`.wasm`) to the whole-program
-  `purs-wasm build --per-module-codegen` per-module output. Phase B M2/M3 (dependency-aware codegen,
-  then dependency-aware optimize producing self-generated `.pmi`/`.pmo`) and Phase C (the `purs-wasm`
-  orchestrator driving `purwc` as a subprocess) remain.
-- Date: 2026-06-18 (Phase B M1: 2026-06-19)
+- Status: Accepted; **Phase A + Phase B M1 + M2a implemented**. Phase A (2026-06-18) — `cli-lib`
+  extracted, three CLIs re-homed (behaviour-neutral). Phase B M0+M1 (2026-06-19) — the two
+  single-module compiler APIs (`MiddleEnd.compileModuleMir` = optimize one module against its
+  dependency summaries; `Compiler.compileModuleWasm` = lower+codegen one module) and the `purwc
+  compile` worker CLI, verified byte-identical to the per-module oracle on a dependency-free fixture.
+  Phase B M2a (2026-06-19) — **`.pmi` extended to the complete module interface** (`.pmi` v2): besides
+  the optimization summary it now carries the lowering interface (`funcs`/`ctors`/`dictCtors`/
+  `enumCtors`/`foreignSigs`/`foreignNames`) + `labels`, all derived from a module's own finalized MIR
+  (`Compiler.moduleInterface`) and written at both `.pmi` sites — so a dependent can lower against an
+  interface, never a dependency's `.pmo`. **Course correction**: the M1 stopgap of feeding deps' full
+  `.pmo` to `compileModuleWasm` is being replaced by `.pmi`-only consumption (`.pmo` is being retired —
+  no consumer remains once lowering reads the interface). Phase B M2b (consume the interface:
+  `lowerModuleWithInterfaces` + `.pmi`-only `compileModuleWasm` + purwc `--deps` + drop worker `.pmo`,
+  verified on a 2-module fixture by behaviour parity), M3, and Phase C (orchestrator + pre-merge
+  label-collision check + retire `.pmo`/`--per-module-codegen`) remain.
+- Date: 2026-06-18 (Phase B M1 + M2a: 2026-06-19)
 
 ## Context
 

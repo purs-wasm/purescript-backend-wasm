@@ -30,8 +30,10 @@ import PureScript.Backend.Wasm.MiddleEnd.Serialize.Bytes (finish, getBytes, getU
 magic :: Array Int
 magic = [ 0x50, 0x57, 0x50, 0x4D, 0x4F ]
 
+-- | Shared with `.pmi` (`Pmifile`); bumped to 2 for the `.pmi` lowering-interface fields
+-- | (ADR 0038 Phase B M2a) so a stale v1 cache is rejected rather than mis-parsed.
 formatVersion :: Int
-formatVersion = 1
+formatVersion = 2
 
 -- | Serialize a module's finalized MIR to `.pmo` bytes.
 encodePmo :: M.Module -> Uint8Array

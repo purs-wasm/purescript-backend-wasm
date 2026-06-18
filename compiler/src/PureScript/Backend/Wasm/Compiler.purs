@@ -12,6 +12,8 @@ module PureScript.Backend.Wasm.Compiler
   , PerModuleArtifacts
   , compileModuleWasm
   , ModuleArtifact
+  , moduleInterface
+  , ModuleInterfaceTables
   , effectfulForeigns
   , compileModules
   , compileModulesText
@@ -40,6 +42,9 @@ import PureScript.Backend.Wasm.Codegen (buildLinkGlue, buildModule, buildModuleS
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
 import PureScript.Backend.Wasm.Lower (lowerModules, lowerProgramFragments)
+import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels)
+import PureScript.Backend.Wasm.Lower.IR (Rep)
+import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
 import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
@@ -285,6 +290,40 @@ compileModuleWasm opts foreignSigs' foreignNames externs depFinalMods target =
                 , crossModuleExports: homed <> maybe [] (\e -> [ e ]) single.cafInitExport
                 }
             )
+
+-- | The lowering-interface tables of ONE module (ADR 0038 Phase B): the symbol signatures a
+-- | dependent merges into its `ModuleInfo` to lower this module's cross-module callees — derived
+-- | from this module's OWN finalized MIR via the existing `collect*` passes and serialized into its
+-- | `.pmi`, so the dependent never reads this module's `.pmo`. `foreignSigs` is filtered to the
+-- | foreigns THIS module declares; `foreignNames` is the module's full qualified foreign-name set
+-- | (the lowering opaque fallback). `labels` is carried for the orchestrator's pre-merge
+-- | hash-collision check (Phase C), NOT for a dependent's lowering.
+type ModuleInterfaceTables =
+  { funcs :: Object Int
+  , ctors :: Object CtorInfo
+  , dictCtors :: Object Unit
+  , enumCtors :: Object Unit
+  , foreignSigs :: Object ForeignSig
+  , foreignNames :: Array String
+  , labels :: Object Int
+  }
+
+moduleInterface :: Object (Array Rep) -> Object ForeignSig -> Array String -> M.Module -> ModuleInterfaceTables
+moduleInterface fieldReps allForeignSigs foreignNames m =
+  let
+    dotted = joinWith "." m.name
+    dictCtors = collectDictCtors [ m ]
+  in
+    { funcs: collectFuncs dictCtors [ m ]
+    , ctors: collectCtors fieldReps [ m ]
+    , dictCtors
+    , enumCtors: collectEnumCtors [ m ]
+    -- only the foreigns THIS module declares (the whole-program `allForeignSigs` is filtered by
+    -- the declaring module, so a dependent reading this `.pmi` gets exactly this module's foreigns).
+    , foreignSigs: Object.filter (\sig -> sig.moduleName == dotted) allForeignSigs
+    , foreignNames
+    , labels: collectLabels [ m ]
+    }
 
 -- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
 -- | module, and package it with the cache misses to persist. `foreignNames` is the qualified

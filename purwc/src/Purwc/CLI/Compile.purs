@@ -22,7 +22,8 @@ import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PureScript.Backend.Wasm.CLI.Lib (resolveLibPath)
 import PureScript.Backend.Wasm.CLI.Module (entryRoot)
 import PureScript.Backend.Wasm.CLI.Paths (wasmDisBin)
-import PureScript.Backend.Wasm.Compiler (compileModuleWasm, effectfulForeigns, parseModule)
+import PureScript.Backend.Wasm.Compiler (compileModuleWasm, effectfulForeigns, moduleInterface, parseModule)
+import PureScript.Backend.Wasm.Externs (ctorFieldReps)
 import PureScript.Backend.Wasm.MiddleEnd (compileModuleMir, liftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (encodePmi)
@@ -61,7 +62,22 @@ compileCmd cliRoot binaryenBinDir args = do
   mkdirP args.outDir
   pmiPath <- joinPath [ args.outDir, target <> ".pmi" ]
   pmoPath <- joinPath [ args.outDir, target <> ".pmo" ]
-  writeBinary pmiPath (encodePmi { sourceHash, key: out.key, deps: out.deps, summary: out.summary })
+  let iface = moduleInterface (ctorFieldReps externs) allSigs (Set.toUnfoldable foreignNameSet) out.finalMod
+  writeBinary pmiPath
+    ( encodePmi
+        { sourceHash
+        , key: out.key
+        , deps: out.deps
+        , summary: out.summary
+        , funcs: iface.funcs
+        , ctors: iface.ctors
+        , dictCtors: iface.dictCtors
+        , enumCtors: iface.enumCtors
+        , foreignSigs: iface.foreignSigs
+        , foreignNames: iface.foreignNames
+        , labels: iface.labels
+        }
+    )
   writeBinary pmoPath (encodePmo out.finalMod)
 
   -- Lower + codegen the single module (no dependency finalMods in M1) and write its wasm.

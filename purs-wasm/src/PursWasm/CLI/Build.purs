@@ -27,7 +27,8 @@ import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
 import Partial.Unsafe (unsafeCrashWith)
-import PureScript.Backend.Wasm.Compiler (compilePerModule, effectfulForeigns, finishLink, linkModule, mirTrace, parseModule, printMir)
+import PureScript.Backend.Wasm.Compiler (compilePerModule, effectfulForeigns, finishLink, linkModule, mirTrace, moduleInterface, parseModule, printMir)
+import PureScript.Backend.Wasm.Externs (ctorFieldReps)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache, optimizeIncrementalM)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
@@ -365,7 +366,25 @@ buildCmd cliRoot binaryenBinDir args = do
         for_ l.cacheWrites \w -> do
           pmiPath <- joinPath [ cacheDir, w.name <> ".pmi" ]
           pmoPath <- joinPath [ cacheDir, w.name <> ".pmo" ]
-          writeBinary pmiPath (encodePmi { sourceHash: w.sourceHash, key: w.entry.key, deps: w.deps, summary: w.entry.summary })
+          -- The lowering interface (ADR 0038 Phase B): derive this module's signature tables from
+          -- its finalized MIR + its own foreigns, so the `.pmi` is the complete interface.
+          let mForeignNames = maybe [] (\i -> map (\b -> w.name <> "." <> b) i.foreignNames) (Array.find (\i -> i.name == w.name) srcInfos)
+          let iface = moduleInterface (ctorFieldReps externs) allSigs mForeignNames w.entry.finalMod
+          writeBinary pmiPath
+            ( encodePmi
+                { sourceHash: w.sourceHash
+                , key: w.entry.key
+                , deps: w.deps
+                , summary: w.entry.summary
+                , funcs: iface.funcs
+                , ctors: iface.ctors
+                , dictCtors: iface.dictCtors
+                , enumCtors: iface.enumCtors
+                , foreignSigs: iface.foreignSigs
+                , foreignNames: iface.foreignNames
+                , labels: iface.labels
+                }
+            )
           writeBinary pmoPath (encodePmo w.entry.finalMod)
       -- `--dump-mir` on a cached build: the optimized MIR is in the target's `.pmo` (just written
       -- if it was a miss, otherwise the unchanged hit), so pretty-print that — no re-optimize, no
