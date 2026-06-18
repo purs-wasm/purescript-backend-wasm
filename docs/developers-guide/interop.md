@@ -102,9 +102,9 @@ in `marshal.js`).
 ## What crosses, and how
 
 Each kind has a conversion, expressed in terms of the live instance's exports — the `runtime.wat`
-helpers, plus the one codegen-emitted resolver `internStr` (it maps field names to *this* program's
-interned dense label ids, which `runtime.wat` cannot know, so it is generated per program, not a
-`runtime.wat` export):
+helpers, plus the resolver `internStr` (it maps a field name to its interned `i32` id by **hashing**
+the name — a 31-bit FNV-1a, the same hash the compiler assigns a static label, ADR 0037 ④ — so the
+id is computed directly from the name; the export delegates to the runtime hash `$rt.internStr`):
 
 | kind | boundary value | how it converts |
 | - | - | - |

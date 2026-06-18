@@ -26,6 +26,16 @@
 > never collide with static ones, and `recSet`'s sorted insert keeps each record's `$LabelIds` ordered
 > for any id, so a dynamically-named field is read/written like any other. Reads, iteration, and
 > in-place updates were always fine; this closes field *addition*. (Regression: `Test.E2E.Cli.RecordMeta`.)
+>
+> **Update (2026-06-18) — superseded by deterministic hashing (ADR 0037 ④):** the hybrid scheme
+> above (dense `0..N-1` static ids + the `$rt.internDynamic` runtime table for dynamic names) is
+> **gone**. A label's id is now a **31-bit FNV-1a hash of its UTF-8 bytes** (`Lower.LabelHash`,
+> matching `runtime.wat`'s `$rt.internStr`), so it is a pure function of the name — no whole-program
+> numbering pass, which is what lets modules be compiled separately (ADR 0037 barrier ④). There is no
+> `internDynamic` and no static/dynamic id-space split: a dynamically-introduced field name hashes to
+> the same id a syntactic label would. The lowering checks the program's whole label set for a hash
+> collision and fails the build rather than emit a corrupt record (astronomically unlikely at realistic
+> label counts). `recSet`'s sorted insert is unaffected (the hash is masked non-negative).
 
 ## Context
 

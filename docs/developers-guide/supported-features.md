@@ -134,9 +134,11 @@ runtime copy-and-set (ADR 0023).
 **Record metaprogramming** works: `RowToList` field iteration with
 `IsSymbol`/`reflectSymbol`, and `Record.insert` / `Record.Builder` / `Record.merge` and the
 `record-studio`-style helpers. Adding a field whose name is **not** a syntactic record label
-anywhere — so it has no compile-time id — is supported via runtime label interning
-(`$rt.internDynamic`, the [ADR 0001](../design-decisions/0001-wasm-gc-substrate-and-value-representation.md)
-addendum); `Test.E2E.Cli.RecordMeta` covers it. Library helpers that route through a higher-order
+anywhere is supported because a label's id is a hash of its name (`$rt.internStr` /
+`Lower.LabelHash`, the [ADR 0001](../design-decisions/0001-wasm-gc-substrate-and-value-representation.md)
+addendum + [ADR 0037](../design-decisions/0037-separate-per-module-codegen-and-linking.md) ④), so a
+dynamically-introduced name hashes to the same id a static label would;
+`Test.E2E.Cli.RecordMeta` covers it. Library helpers that route through a higher-order
 JS foreign whose callbacks carry non-scalar values (e.g. `record-studio`'s `keys`/`shrink` via
 `unfoldrArrayImpl`) are **not** yet usable — see
 [Performance and Limitations § higher-order foreigns whose callbacks carry non-scalar values](../getting-started/performance-and-limitations.md#higher-order-foreigns-whose-callbacks-carry-non-scalar-values).

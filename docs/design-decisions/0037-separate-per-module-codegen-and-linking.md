@@ -1,7 +1,10 @@
 # 0037. Separate per-module codegen and linking (per-module wasm + `wasm-merge`)
 
-- Status: Accepted (decision accepted; implementation phased — not yet started)
-- Date: 2026-06-17
+- Status: Accepted; **implemented** (2026-06-18) — Phases 0–2 + the Phase-3 codegen restructure are
+  in, i.e. single-module compilation behind `--per-module-codegen`, verified at behaviour + export/size
+  parity with the whole-program build. Still pending: the per-module **wasm cache** (incremental
+  rebuilds) and the cross-module-unboxing recovery (Addendum).
+- Date: 2026-06-17 (implemented 2026-06-18)
 
 ## Context
 

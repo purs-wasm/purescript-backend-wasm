@@ -88,9 +88,13 @@ A record is `$Rec = (struct (ref $LabelIds) (ref $Vals))` — **two parallel arr
   sorted ascending;
 - `$Vals` — the field values (boxed `eqref`), in the same order.
 
-Labels are interned **per program**: every record label in the linked program is
-assigned a dense `i32` id, so a field access is an integer comparison, not a string
-compare. A projection (`r.l`) is a linear search of `$LabelIds` for the label's id,
+Labels are interned by a **hash of the name** — a 31-bit FNV-1a over the label's UTF-8
+bytes (`Lower.LabelHash`, matching `runtime.wat`'s `$rt.internStr`). The id is therefore a
+pure function of the name, so any module computes it without a whole-program numbering pass
+(this is what lets modules be compiled separately — ADR 0037 ④), and a field access is an
+integer comparison, not a string compare. (The hash is masked non-negative so the sorted
+`$LabelIds` order is consistent; the lowering fails the build on the astronomically unlikely
+event two distinct labels collide.) A projection (`r.l`) is a linear search of `$LabelIds` for the label's id,
 returning the parallel `$Vals` element (`$rt.proj`). A projected record always contains
 the field being looked up, so the first read needs no bound check. (Empty records exist
 only via `recEmpty` on the FFI path — ADR 0014 — and `proj` is never applied to them;

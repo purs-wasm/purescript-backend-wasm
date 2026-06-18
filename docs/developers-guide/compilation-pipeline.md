@@ -134,7 +134,9 @@ generator consumes directly). This stage decides the *physical* shape of the pro
   a representation (`i32`/`f64`/`eqref`/closure) and unbox scalars where the `eqref` is
   unnecessary; read the per-constructor field representations from the externs. (Under
   `--no-opt` the slot analysis is skipped — every slot stays boxed `eqref` — though the
-  constructor field reps are still threaded.)
+  constructor field reps are still threaded.) By default the analysis is whole-program; under
+  `--per-module-codegen` it is **module-local**, pinning cross-module-visible functions to a
+  boxed ABI so separately-compiled modules agree on a callee's representation (ADR 0037 ③).
 - **Closure / application lowering** — closures become `$Clo` construction and arity-1
   `call_ref` application; a saturated call to a known top-level function is a direct
   call (lambda lifting in stage 3 already floated capturing/recursive closures out).
@@ -146,7 +148,9 @@ generator consumes directly). This stage decides the *physical* shape of the pro
 - **Reachability pruning (DCE)** — only functions reachable from the entry module's
   exports are lowered, tree-shaking the dictionaries and helpers optimization made dead
   (ADR 0009).
-- Plus label interning for records and the export signatures.
+- Plus record **label interning** — a label's id is a hash of its name (a 31-bit FNV-1a,
+  `Lower.LabelHash`), so modules agree on ids with no whole-program numbering pass (ADR 0037 ④) —
+  and the export signatures.
 
 ## 5. Code generation
 
@@ -158,6 +162,13 @@ call, applies **tail-call elimination** (a tail call to a known top-level functi
 adds the host-facing export wrappers, the
 foreign host imports, and the `internStr` resolver. The module is validated, then
 emitted as a binary (or disassembled to WAT with `--text`).
+
+By default `buildModule` codegens the whole reachable program into **one** Binaryen module.
+The experimental `--per-module-codegen` path (ADR 0037 Phase 2) instead codegens **each module to
+its own wasm** (`buildModuleSingle`): cross-module calls become function imports, closures cross via
+`funcref`, and the GC types are singleton rec groups so each module's copies canonicalise. The
+per-module wasms are then `wasm-merge`d together (stage 6), preserving the single-wasm output — this
+is the basis for future incremental rebuilds (re-emit only changed modules).
 
 ## 6. Linking and runtime integration
 
@@ -175,7 +186,9 @@ types, hand-written in `runtime/runtime.wat`; ADR 0010). To produce something ru
 the CLI (`purs-wasm`, `PursWasm.CLI.Main`):
 
 - merges `runtime.wasm` into the app with `wasm-merge` (and merges any `foreign.wasm` /
-  `foreign.wat` providers — ADR 0014 rung 2), resolving the imports into one wasm;
+  `foreign.wat` providers — ADR 0014 rung 2), resolving the imports into one wasm — under
+  `--per-module-codegen` the per-module wasms are merged here too (and a cheap post-merge DCE
+  internalises the cross-module exports);
 - if the program calls **JS foreigns**, emits a JavaScript **loader** (`index.mjs`) that
   supplies them from each module's `foreign.js` with the [marshalling glue](./interop.md);
 - a program with no JS foreigns is a single self-contained `index.wasm`.
