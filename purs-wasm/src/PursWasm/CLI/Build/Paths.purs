@@ -6,6 +6,7 @@ module PursWasm.CLI.Build.Paths
   ( runtimeWasm
   , loaderGlue
   , wasmMergeBin
+  , wasmOptBin
   , wasmDisBin
   , wasmAsBin
   ) where
@@ -23,6 +24,9 @@ loaderGlue cliRoot = cliRoot <> "/runtime/marshal.js"
 
 wasmMergeBin :: String -> String
 wasmMergeBin binaryenBinDir = binaryenBinDir <> "/wasm-merge"
+
+wasmOptBin :: String -> String
+wasmOptBin binaryenBinDir = binaryenBinDir <> "/wasm-opt"
 
 wasmDisBin :: String -> String
 wasmDisBin binaryenBinDir = binaryenBinDir <> "/wasm-dis"

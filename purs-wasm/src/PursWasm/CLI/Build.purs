@@ -37,7 +37,7 @@ import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
-import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
+import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin, wasmOptBin)
 import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
 import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PursWasm.CLI.Effect.Log (br)
@@ -424,6 +424,13 @@ buildCmd cliRoot binaryenBinDir args = do
       execFile (wasmMergeBin binaryenBinDir) (appMerges <> [ runtimeWasm cliRoot, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
       for_ l.cleanup unlink
       for_ providers \p -> when p.assembled (maybe (pure unit) unlink p.wasm)
+      -- Per-module modules are emitted unoptimised so their GC types still canonicalise under merge
+      -- (ADR 0037 Slice 2.2c); optimise the merged wasm once here, where the types are unified —
+      -- `-O3` also DCEs unreachable functions. The whole-program path already optimised in-memory
+      -- before merge, so this step is per-module only.
+      when (args.perModuleCodegen && opts.optimize) do
+        info (Log.blue "Optimizing merged wasm (wasm-opt -O3)…")
+        execFile (wasmOptBin binaryenBinDir) [ wasmPath, "-O3", "-o", wasmPath, "--all-features" ]
       artifact <-
         if args.text then do
           watPath <- joinPath [ bundleDir, "index.wat" ]
