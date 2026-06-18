@@ -4,14 +4,14 @@
 -- | prebuilt lib points the env var at it; the planned `ulib upgrade` command, ADR 0031 §5, is
 -- | not yet implemented), else the default `<cliRoot>/lib` (the lib ships inside
 -- | the package; `cliRoot` is the package dir in the published CLI, the repo root in dev).
-module PursWasm.CLI.Lib
+module PureScript.Backend.Wasm.CLI.Lib
   ( resolveLibPath
   ) where
 
 import Prelude
 
 import Data.Maybe (Maybe(..))
-import PursWasm.CLI.Effect (ENV, FS, FilePath, joinPath, lookupEnv)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, joinPath, lookupEnv)
 import Run (Run)
 import Type.Row (type (+))
 

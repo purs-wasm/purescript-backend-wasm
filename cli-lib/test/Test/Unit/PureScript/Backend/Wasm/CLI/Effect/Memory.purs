@@ -4,7 +4,7 @@
 -- | *which* tool ran with *what* args, without running it), and `LOG` captures the rendered
 -- | messages. Everything folds into `Run.State` and runs purely — no disk, no child processes,
 -- | deterministic.
-module Test.Unit.PursWasm.CLI.Effect.Memory
+module Test.Unit.PureScript.Backend.Wasm.CLI.Effect.Memory
   ( World
   , FileEntry(..)
   , emptyWorld

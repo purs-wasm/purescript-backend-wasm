@@ -1,7 +1,7 @@
 -- | The `build` command: link every reachable module under `input` into one self-contained wasm
 -- | (runtime + foreign providers merged) and write it to `output`, emitting a JS loader when there
 -- | are host imports or exports needing marshalling. The 9-stage pipeline mirrors the prototype
--- | exactly; only the effects are abstract (`Run`) — `PursWasm.CLI.Node` runs it synchronously.
+-- | exactly; only the effects are abstract (`Run`) — `PureScript.Backend.Wasm.CLI.Node` runs it synchronously.
 module PursWasm.CLI.Build
   ( buildCmd
   ) where
@@ -35,19 +35,19 @@ import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
 import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
-import PursWasm.CLI.Build.ForeignSigs (buildForeignSigs)
+import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
-import PursWasm.CLI.Build.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
-import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
-import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
-import PursWasm.CLI.Effect.Log (br)
-import PursWasm.CLI.Effect.Log as Log
-import PursWasm.CLI.Externs (readExterns)
-import PursWasm.CLI.Lib (resolveLibPath)
-import PursWasm.CLI.Module (entryRoot, printModname)
+import PureScript.Backend.Wasm.CLI.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
+import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
+import PureScript.Backend.Wasm.CLI.Effect.Log (br)
+import PureScript.Backend.Wasm.CLI.Effect.Log as Log
+import PureScript.Backend.Wasm.CLI.Externs (readExterns)
+import PureScript.Backend.Wasm.CLI.Lib (resolveLibPath)
+import PureScript.Backend.Wasm.CLI.Module (entryRoot, printModname)
 import PursWasm.CLI.Options.Types (BuildOption, Platform(..))
-import PursWasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, resolveModuleSet, ulibManifestFile)
-import PursWasm.CLI.Ulib.Shadow (loadShadowMap)
+import PureScript.Backend.Wasm.CLI.Ulib.Manifest (LockView, Manifest, parseLock, reachedMismatches, readManifest, resolveModuleSet, ulibManifestFile)
+import PureScript.Backend.Wasm.CLI.Ulib.Shadow (loadShadowMap)
 import PursWasm.CLI.Version as Version
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
@@ -297,7 +297,7 @@ buildCmd cliRoot binaryenBinDir args = do
           Left err -> logAndThrow (i.name <> ": " <> err)
           Right m -> pure (Just (Tuple i.name m))
       let decodedModules = Array.fromFoldable (Map.values decoded)
-      either logAndThrow pure (checkWasmBaseCompat decodedModules)
+      either logAndThrow pure (checkWasmBaseCompat Version.version decodedModules)
       either logAndThrow pure (checkCorefnVersions decodedModules)
       let
         inputs = srcInfos <#> \i ->
@@ -343,7 +343,7 @@ buildCmd cliRoot binaryenBinDir args = do
         decodedModules <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
           Left err -> logAndThrow (i.name <> ": " <> err)
           Right m -> pure (Just m)
-        either logAndThrow pure (checkWasmBaseCompat decodedModules)
+        either logAndThrow pure (checkWasmBaseCompat Version.version decodedModules)
         either logAndThrow pure (checkCorefnVersions decodedModules)
         mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
         writeText mirPath (mirTrace opts decodedModules allSigs target)
@@ -358,7 +358,7 @@ buildCmd cliRoot binaryenBinDir args = do
       Nothing -> do
         info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
         either logAndThrow pure
-          (checkWasmBaseCompat (map (\i -> { name: i.mn, foreignNames: i.foreignNames }) srcInfos))
+          (checkWasmBaseCompat Version.version (map (\i -> { name: i.mn, foreignNames: i.foreignNames }) srcInfos))
         lifted <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
           Left err -> logAndThrow (i.name <> ": " <> err)
           Right m -> do

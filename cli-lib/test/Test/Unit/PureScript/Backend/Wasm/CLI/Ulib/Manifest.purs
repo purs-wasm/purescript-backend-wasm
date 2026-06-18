@@ -1,4 +1,4 @@
-module Test.Unit.PursWasm.CLI.Ulib.Manifest (spec) where
+module Test.Unit.PureScript.Backend.Wasm.CLI.Ulib.Manifest (spec) where
 
 import Prelude
 
@@ -6,8 +6,8 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Module (entryRoot)
-import PursWasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches, resolveModuleSet, shadowSet)
+import PureScript.Backend.Wasm.CLI.Module (entryRoot)
+import PureScript.Backend.Wasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches, resolveModuleSet, shadowSet)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -19,7 +19,7 @@ fixture = Map.fromFoldable
   ]
 
 spec :: Spec Unit
-spec = describe "PursWasm.CLI.Ulib.Manifest" do
+spec = describe "PureScript.Backend.Wasm.CLI.Ulib.Manifest" do
 
   describe "parseManifest" do
     it "parses package -> { version, modules }" do

@@ -12,7 +12,7 @@
 -- | A query failure (offline, no `spago`) is returned as `Left <message>` rather than thrown:
 -- | `ulib compat` treats it as non-fatal and falls back to the prior pin, so — unlike registry-dev,
 -- | which threads errors through a separate `EXCEPT` — the failure is part of the result value.
-module PursWasm.CLI.Effect.Registry
+module PureScript.Backend.Wasm.CLI.Effect.Registry
   ( RegistryF(..)
   , REGISTRY
   , _registry
@@ -31,7 +31,7 @@ import Data.Maybe (Maybe, fromMaybe)
 import Data.String (Pattern(..))
 import Data.String as Str
 import Foreign.Object as FO
-import PursWasm.CLI.Effect.Process (PROC, execFileCapture)
+import PureScript.Backend.Wasm.CLI.Effect.Process (PROC, execFileCapture)
 import Run (Run)
 import Run as Run
 import Type.Proxy (Proxy(..))

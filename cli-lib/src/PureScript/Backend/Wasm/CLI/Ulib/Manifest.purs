@@ -4,7 +4,7 @@
 -- | **version check** (`reachedMismatches`) compares each *reached* ulib package's resolved version
 -- | (`spago.lock`) to the manifest version. Self-contained (the `spago.lock` reader lives here, not in
 -- | the soon-to-be-retired `Ulib.Compat`) and pure where it can be.
-module PursWasm.CLI.Ulib.Manifest
+module PureScript.Backend.Wasm.CLI.Ulib.Manifest
   ( PkgEntry
   , Manifest
   , ulibManifestFile
@@ -41,8 +41,8 @@ import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as FO
 import PureScript.CoreFn (ModuleName)
-import PursWasm.CLI.Effect (FS, FilePath, readText)
-import PursWasm.CLI.Module (reachableClosure)
+import PureScript.Backend.Wasm.CLI.Effect (FS, FilePath, readText)
+import PureScript.Backend.Wasm.CLI.Module (reachableClosure)
 import Run (Run)
 import Type.Row (type (+))
 

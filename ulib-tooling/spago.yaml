@@ -2,10 +2,11 @@ package:
   name: ulib-tooling
   # Maintainer CLI for the ulib lib (ADR 0031 §5): `install` (compile the ulib sources into the lib),
   # `check` (externs interface compatibility), and `compat` (regenerate/verify ulib/compat.json). It
-  # depends on the `purs-wasm` package for the shared infra (effect layer, manifest, externs), so the
-  # maintainer machinery never ships in the lean user `purs-wasm build` binary.
+  # depends on `cli-lib` for the shared infra (effect layer, manifest, externs), so the maintainer
+  # machinery never ships in the lean user `purs-wasm build` binary — and so it does not drag in the
+  # `purs-wasm` orchestrator (ADR 0038).
   dependencies:
-    - purs-wasm
+    - cli-lib
     - aff
     - ansi
     - argonaut-codecs

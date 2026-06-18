@@ -5,7 +5,7 @@
 -- |   * `checkCorefnVersions` (ADR 0029) — every linked module (the user's app *or* a ulib shadow)
 -- |     must be compiled by a `purs` whose CoreFn this backend's decoder is verified against, so a
 -- |     breaking CoreFn change surfaces as a clear error rather than a silent miscompile.
-module PursWasm.CLI.Compat
+module PureScript.Backend.Wasm.CLI.Compat
   ( checkWasmBaseCompat
   , supportedCorefn
   , checkCorefnVersions
@@ -21,18 +21,19 @@ import Data.String as Str
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Intrinsics (foreignIntrinsic, qualifiedIntrinsic)
 import PureScript.CoreFn (ModuleName)
-import PursWasm.CLI.Version as Version
 
 -- | `Wasm.*` is `wasm-base`'s reserved namespace, and its foreigns are meant to resolve to *this*
 -- | backend's intrinsics. A `Wasm.*` foreign this backend does not recognise means the `wasm-base`
 -- | is newer than the backend supports — fail with a clear message rather than degrading silently.
-checkWasmBaseCompat :: forall r. Array { name :: ModuleName, foreignNames :: Array String | r } -> Either String Unit
-checkWasmBaseCompat modules = case Array.nub (modules >>= unsupported) of
+-- | The `backendVersion` is supplied by the caller (each binary has its own version string), so this
+-- | shared check stays decoupled from any one binary's `Version` module.
+checkWasmBaseCompat :: forall r. String -> Array { name :: ModuleName, foreignNames :: Array String | r } -> Either String Unit
+checkWasmBaseCompat backendVersion modules = case Array.nub (modules >>= unsupported) of
   [] -> Right unit
   bad -> Left
     ( Fmt.fmt
         @"This purs-wasm backend ({backend}) does not provide {n} `Wasm.*` primitive(s): {names}. Your `wasm-base` is newer than this backend supports — install a `wasm-base` compatible with it."
-        { backend: Version.version, n: Array.length bad, names: Str.joinWith ", " bad }
+        { backend: backendVersion, n: Array.length bad, names: Str.joinWith ", " bad }
     )
   where
   unsupported m

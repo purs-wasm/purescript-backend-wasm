@@ -43,12 +43,52 @@
       "cli-lib": {
         "path": "cli-lib",
         "core": {
-          "dependencies": []
+          "dependencies": [
+            "ansi",
+            "argonaut-core",
+            "argparse-basic",
+            "arraybuffer-types",
+            "arrays",
+            "bifunctors",
+            "compiler",
+            "console",
+            "control",
+            "dodo-printer",
+            "effect",
+            "either",
+            "exceptions",
+            "fmt",
+            "foldable-traversable",
+            "foreign-object",
+            "maybe",
+            "node-buffer",
+            "node-fs",
+            "node-path",
+            "node-process",
+            "ordered-collections",
+            "prelude",
+            "run",
+            "strings",
+            "tuples",
+            "typelevel-prelude"
+          ]
         },
         "test": {
           "dependencies": [
+            "arraybuffer-types",
+            "arrays",
+            "console",
+            "dodo-printer",
+            "effect",
+            "either",
+            "maybe",
+            "ordered-collections",
+            "prelude",
+            "run",
             "spec",
-            "spec-node"
+            "spec-node",
+            "strings",
+            "tuples"
           ]
         }
       },
@@ -266,6 +306,7 @@
             "argparse-basic",
             "arraybuffer-types",
             "arrays",
+            "cli-lib",
             "compiler",
             "console",
             "dodo-printer",
@@ -336,6 +377,7 @@
             "argonaut-core",
             "argparse-basic",
             "arrays",
+            "cli-lib",
             "compiler",
             "console",
             "dodo-printer",
@@ -352,7 +394,6 @@
             "node-process",
             "ordered-collections",
             "prelude",
-            "purs-wasm",
             "run",
             "strings",
             "transformers"

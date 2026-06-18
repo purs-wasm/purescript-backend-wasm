@@ -1,8 +1,52 @@
 package:
   name: cli-lib
-  dependencies: []
+  # Shared foundation for the compiler CLIs (ADR 0038): the abstract effect layer + Node interpreter,
+  # option globals, externs/foreign-sig readers, the ulib manifest/shadow resolution, and the
+  # compatibility guards. The user orchestrator `purs-wasm`, the per-module worker `purwc`, and the
+  # maintainer `ulib-tooling` are thin layers on top, so they share infra without depending on each
+  # other (this is what breaks the purs-wasm ⇄ purwc logical cycle).
+  dependencies:
+    - ansi
+    - argonaut-core
+    - argparse-basic
+    - arraybuffer-types
+    - arrays
+    - bifunctors
+    - compiler
+    - console
+    - control
+    - dodo-printer
+    - effect
+    - either
+    - exceptions
+    - fmt
+    - foldable-traversable
+    - foreign-object
+    - maybe
+    - node-buffer
+    - node-fs
+    - node-path
+    - node-process
+    - ordered-collections
+    - prelude
+    - run
+    - strings
+    - tuples
+    - typelevel-prelude
   test:
-    main: Test.PureScript.Backend.Wasm.CLI
+    main: Test.Unit.PureScript.Backend.Wasm.CLI
     dependencies:
       - spec
       - spec-node
+      - arraybuffer-types
+      - arrays
+      - console
+      - dodo-printer
+      - effect
+      - either
+      - maybe
+      - ordered-collections
+      - prelude
+      - run
+      - strings
+      - tuples

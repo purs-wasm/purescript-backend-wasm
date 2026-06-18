@@ -1,10 +1,10 @@
--- | The synchronous Node production interpreter for the CLI's effects (`PursWasm.CLI.Effect`).
+-- | The synchronous Node production interpreter for the CLI's effects (`PureScript.Backend.Wasm.CLI.Effect`).
 -- | Each per-effect `interpret` peels its effect into the `EFFECT` base row via Node's
 -- | *synchronous* APIs (`Node.FS.Sync` + `execFileSync`), so the CLI never touches `Aff` (ADR 0029
 -- | self-hosting note: a future WASI interpreter can replace this without changing command logic).
 -- | Failing reads are caught (`try`) and surfaced as `Nothing`, matching the effect algebra's
 -- | totality.
-module PursWasm.CLI.Node
+module PureScript.Backend.Wasm.CLI.Node
   ( runNode
   , defaultLoggerConfig
   ) where
@@ -22,17 +22,17 @@ import Node.FS.Perms (permsAll)
 import Node.FS.Sync as Sync
 import Node.Path as Path
 import Node.Process as Process
-import PursWasm.CLI.Effect.Env (ENV, Env(..))
-import PursWasm.CLI.Effect.Env as Env
-import PursWasm.CLI.Effect.Filesystem (FS, FilesystemF(..))
-import PursWasm.CLI.Effect.Filesystem as FS
-import PursWasm.CLI.Effect.Log (LOG, LogLevel(..), LoggerConfig)
-import PursWasm.CLI.Effect.Log as Log
-import PursWasm.CLI.Effect.Process (PROC, ProcF(..))
-import PursWasm.CLI.Effect.Process as Proc
-import PursWasm.CLI.Effect.Registry (REGISTRY)
-import PursWasm.CLI.Effect.Registry as Registry
-import PursWasm.CLI.Options.Types (GlobalOptions)
+import PureScript.Backend.Wasm.CLI.Effect.Env (ENV, Env(..))
+import PureScript.Backend.Wasm.CLI.Effect.Env as Env
+import PureScript.Backend.Wasm.CLI.Effect.Filesystem (FS, FilesystemF(..))
+import PureScript.Backend.Wasm.CLI.Effect.Filesystem as FS
+import PureScript.Backend.Wasm.CLI.Effect.Log (LOG, LogLevel(..), LoggerConfig)
+import PureScript.Backend.Wasm.CLI.Effect.Log as Log
+import PureScript.Backend.Wasm.CLI.Effect.Process (PROC, ProcF(..))
+import PureScript.Backend.Wasm.CLI.Effect.Process as Proc
+import PureScript.Backend.Wasm.CLI.Effect.Registry (REGISTRY)
+import PureScript.Backend.Wasm.CLI.Effect.Registry as Registry
+import PureScript.Backend.Wasm.CLI.Options.Types (GlobalOptions)
 import Run (EFFECT, Run, liftEffect, runBaseEffect)
 import Type.Row (type (+))
 

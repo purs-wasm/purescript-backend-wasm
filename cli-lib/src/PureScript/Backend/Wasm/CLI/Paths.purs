@@ -2,7 +2,7 @@
 -- | package works from any directory. `runtime/*` live under `cliRoot`; the binaryen binaries under
 -- | `binaryenBinDir` — the JS entry resolves that per environment (`<repo>/binaryen/node_modules/
 -- | binaryen/bin` in dev, `require.resolve('binaryen')` in the published package).
-module PursWasm.CLI.Build.Paths
+module PureScript.Backend.Wasm.CLI.Paths
   ( runtimeWasm
   , loaderGlue
   , wasmMergeBin

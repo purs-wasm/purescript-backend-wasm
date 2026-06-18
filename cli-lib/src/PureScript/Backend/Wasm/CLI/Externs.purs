@@ -2,7 +2,7 @@
 -- | `Nothing` if it is absent/unreadable/undecodable. Shared by the build pipeline (type-directed
 -- | lowering) and `ulib check` (interface comparison). The sync `decodeFirstSync` keeps the CLI
 -- | `Aff`-free (ADR 0029).
-module PursWasm.CLI.Externs
+module PureScript.Backend.Wasm.CLI.Externs
   ( readExterns
   ) where
 
@@ -19,7 +19,7 @@ import Node.Cbor (decodeFirstSync)
 import PureScript.ExternsFile (ExternsFile)
 import PureScript.ExternsFile.Decoder.Class (decoder)
 import PureScript.ExternsFile.Decoder.Monad (runDecoder)
-import PursWasm.CLI.Effect (FS, FilePath, readBinary)
+import PureScript.Backend.Wasm.CLI.Effect (FS, FilePath, readBinary)
 import Run (Run, EFFECT, liftEffect)
 import Type.Row (type (+))
 

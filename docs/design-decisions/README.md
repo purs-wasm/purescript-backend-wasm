@@ -85,6 +85,7 @@ language and are kept out of version control.)
 | 0035 | [Sharing/memoizing the NbE reducer, then reduction-aware inlining](0035-sharing-nbe-reduction-aware-inlining.md) | Accepted (Layers A+B + a Layer-C-lite size cap + the Specialize dedup-key fix landed 2026-06-17 — the optimized self-compile completes; full reduction-aware Layer C policy deferred) |
 | 0036 | [Parameterized join points for decision-tree leaves](0036-join-points-for-decision-tree-leaves.md) | Proposed (de-prioritized — measured duplication ~1.16×, not the `--no-opt` floor) |
 | 0037 | [Separate per-module codegen and linking (per-module wasm + `wasm-merge`)](0037-separate-per-module-codegen-and-linking.md) | Accepted; implemented (Phases 0–2 + Phase-3 codegen restructure — single-module compilation behind `--per-module-codegen`, parity-verified; per-module wasm cache pending) |
+| 0038 | [Separated compilation: the `purwc` worker, the `purs-wasm` orchestrator, and the shared `cli-lib`](0038-separated-compilation-purwc-worker-and-cli-lib.md) | Accepted; **Phase A implemented** (`cli-lib` extracted, three CLIs re-homed, behaviour-neutral); the standalone `purwc` worker (Phase B) + subprocess orchestrator (Phase C) designed, not yet implemented |
 
 ## Scope
 

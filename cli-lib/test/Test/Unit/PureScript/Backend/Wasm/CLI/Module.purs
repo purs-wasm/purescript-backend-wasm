@@ -1,16 +1,16 @@
-module Test.Unit.PursWasm.CLI.Module (spec) where
+module Test.Unit.PureScript.Backend.Wasm.CLI.Module (spec) where
 
 import Prelude
 
 import Data.Map as Map
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Module (entryRoot, printModname, reachableClosure)
+import PureScript.Backend.Wasm.CLI.Module (entryRoot, printModname, reachableClosure)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
 spec :: Spec Unit
-spec = describe "PursWasm.CLI.Module" do
+spec = describe "PureScript.Backend.Wasm.CLI.Module" do
 
   describe "printModname / entryRoot" do
     it "round-trips a dotted module name" do

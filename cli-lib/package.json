@@ -2,9 +2,9 @@
   "name": "cli-lib",
   "type": "module",
   "scripts": {
-    "compile": "spago build",
-    "test": "spago test",
-    "exec": "spago build && node index.dev.js",
+    "compile": "spago build -p cli-lib",
+    "test:unit": "spago test -p cli-lib --monochrome",
+    "test": "npm run test:unit",
     "format": "purs-tidy format-in-place src test",
     "check": "purs-tidy check src test"
   }

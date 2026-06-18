@@ -1,20 +1,20 @@
 -- | Unit tests for `loadShadowMap`, against the in-memory interpreter: a flat in-memory lib
 -- | directory tree (`$LIB/<Module>/`, ADR 0031 §2.2) resolves to the right `Module name -> Shadow`
 -- | map (corefn + foreign.wasm candidate paths), and an absent lib yields the empty map.
-module Test.Unit.PursWasm.CLI.Ulib.Shadow (spec) where
+module Test.Unit.PureScript.Backend.Wasm.CLI.Ulib.Shadow (spec) where
 
 import Prelude
 
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..), snd)
-import PursWasm.CLI.Ulib.Shadow (loadShadowMap)
+import PureScript.Backend.Wasm.CLI.Ulib.Shadow (loadShadowMap)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
-import Test.Unit.PursWasm.CLI.Effect.Memory (runMem, worldOfText)
+import Test.Unit.PureScript.Backend.Wasm.CLI.Effect.Memory (runMem, worldOfText)
 
 spec :: Spec Unit
-spec = describe "PursWasm.CLI.Ulib.Shadow.loadShadowMap" do
+spec = describe "PureScript.Backend.Wasm.CLI.Ulib.Shadow.loadShadowMap" do
 
   it "maps each <lib>/<Module>/corefn.json to its Shadow" do
     let

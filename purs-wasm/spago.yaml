@@ -6,6 +6,7 @@ package:
     - argonaut-codecs
     - argonaut-core
     - argparse-basic
+    - cli-lib
     - arraybuffer-types
     - arrays
     - compiler

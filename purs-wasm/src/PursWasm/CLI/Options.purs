@@ -1,6 +1,5 @@
 module PursWasm.CLI.Options
   ( parse
-  , withGlobals
   ) where
 
 import Prelude
@@ -8,8 +7,10 @@ import Prelude
 import ArgParse.Basic (ArgParser)
 import ArgParse.Basic as ArgParser
 import Data.Either (Either(..))
-import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Options.Types (BuildOption, Command(..), GlobalOptions, Platform(..))
+import Data.Tuple (Tuple)
+import PureScript.Backend.Wasm.CLI.Options (withGlobals)
+import PureScript.Backend.Wasm.CLI.Options.Types (GlobalOptions)
+import PursWasm.CLI.Options.Types (BuildOption, Command(..), Platform(..))
 import PursWasm.CLI.Version as Version
 
 -- | Read the `--platform` value, rejecting anything outside the three targets.
@@ -19,24 +20,6 @@ parsePlatform = case _ of
   "browser" -> Right Browser
   "standalone" -> Right Standalone
   other -> Left ("unknown platform '" <> other <> "' (expected: node | browser | standalone)")
-
--- | The options every command accepts (logging verbosity, …). Defined once and threaded onto each
--- | command by `withGlobals`, so there is no per-command copy.
-globalOptionsParser :: ArgParser GlobalOptions
-globalOptionsParser =
-  ArgParser.fromRecord
-    { verbose:
-        ArgParser.flag [ "--verbose" ]
-          "Print all messages, including debug-level logs."
-          # ArgParser.boolean
-    }
-
--- | Pair a command's own parser with the shared global options. ArgParse confines flags to the
--- | subcommand they follow, so the globals must live inside each leaf — but the flag definition
--- | stays in `globalOptionsParser` alone. Polymorphic in the command type so the maintainer CLI
--- | (`ulib-tooling`) reuses it for its own `Command`.
-withGlobals :: forall c. ArgParser c -> ArgParser (Tuple GlobalOptions c)
-withGlobals command = Tuple <$> globalOptionsParser <*> command
 
 buildOptionsParser :: ArgParser BuildOption
 buildOptionsParser =

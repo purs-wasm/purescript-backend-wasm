@@ -1,4 +1,4 @@
-module PursWasm.CLI.Effect.Process where
+module PureScript.Backend.Wasm.CLI.Effect.Process where
 
 import Prelude
 

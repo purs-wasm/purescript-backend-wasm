@@ -3,7 +3,7 @@
 -- | the `.purs` source for *private* `*Impl` foreigns externs omit (ADR 0016), and the curated
 -- | `ulib/<M>/foreign.wat` export signatures (ADR 0012, authoritative for the polymorphic foreigns
 -- | the merged provider satisfies). Keyed by `Module.ident`.
-module PursWasm.CLI.Build.ForeignSigs
+module PureScript.Backend.Wasm.CLI.ForeignSigs
   ( buildForeignSigs
   ) where
 
@@ -21,8 +21,8 @@ import PureScript.Backend.Wasm.SourceForeigns (parseForeignSigs)
 import PureScript.Backend.Wasm.Ulib (parseUlibSigs)
 import PureScript.CoreFn (ModuleName)
 import PureScript.ExternsFile (ExternsFile)
-import PursWasm.CLI.Effect (FS, FilePath, exists, joinPath, readText)
-import PursWasm.CLI.Module (printModname)
+import PureScript.Backend.Wasm.CLI.Effect (FS, FilePath, exists, joinPath, readText)
+import PureScript.Backend.Wasm.CLI.Module (printModname)
 import Run (Run)
 import Type.Row (type (+))
 

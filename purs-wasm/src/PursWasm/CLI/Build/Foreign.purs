@@ -16,10 +16,10 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String (Pattern(..))
 import Data.String as Str
-import PursWasm.CLI.Build.Paths (wasmAsBin)
-import PursWasm.CLI.Effect (FS, FilePath, PROC, execFile, exists, joinPath, readText, unlink, writeText)
-import PursWasm.CLI.Ulib.Manifest (headerWatFile)
-import PursWasm.CLI.Ulib.Shadow (Shadow)
+import PureScript.Backend.Wasm.CLI.Paths (wasmAsBin)
+import PureScript.Backend.Wasm.CLI.Effect (FS, FilePath, PROC, execFile, exists, joinPath, readText, unlink, writeText)
+import PureScript.Backend.Wasm.CLI.Ulib.Manifest (headerWatFile)
+import PureScript.Backend.Wasm.CLI.Ulib.Shadow (Shadow)
 import Run (Run)
 import Type.Row (type (+))
 

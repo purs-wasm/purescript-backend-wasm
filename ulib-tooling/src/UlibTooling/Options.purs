@@ -16,10 +16,10 @@ import ArgParse.Basic as ArgParser
 import Data.Either (Either)
 import Data.Maybe (Maybe)
 import Data.Tuple (Tuple)
-import PursWasm.CLI.Effect (FilePath)
-import PursWasm.CLI.Options (withGlobals)
-import PursWasm.CLI.Options.Types (GlobalOptions)
-import PursWasm.CLI.Version as Version
+import PureScript.Backend.Wasm.CLI.Effect (FilePath)
+import PureScript.Backend.Wasm.CLI.Options (withGlobals)
+import PureScript.Backend.Wasm.CLI.Options.Types (GlobalOptions)
+import UlibTooling.Version as Version
 
 type UlibInstallOption =
   { libPath :: Maybe FilePath

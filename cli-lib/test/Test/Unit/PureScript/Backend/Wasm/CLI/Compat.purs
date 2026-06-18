@@ -1,10 +1,10 @@
-module Test.Unit.PursWasm.CLI.Compat (spec) where
+module Test.Unit.PureScript.Backend.Wasm.CLI.Compat (spec) where
 
 import Prelude
 
 import Data.Either (Either(..), isLeft, isRight)
 import Data.String as Str
-import PursWasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
+import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -17,19 +17,19 @@ cv :: Array String -> String -> { name :: Array String, builtWith :: String }
 cv name builtWith = { name, builtWith }
 
 spec :: Spec Unit
-spec = describe "PursWasm.CLI.Compat" do
+spec = describe "PureScript.Backend.Wasm.CLI.Compat" do
 
   describe "checkWasmBaseCompat (ADR 0026)" do
     it "accepts Wasm.* foreigns that resolve to intrinsics" do
-      isRight (checkWasmBaseCompat [ wb [ "Wasm", "Array" ] [ "length", "unsafeNew" ] ])
+      isRight (checkWasmBaseCompat "test" [ wb [ "Wasm", "Array" ] [ "length", "unsafeNew" ] ])
         `shouldEqual` true
 
     it "rejects an unrecognised Wasm.* foreign" do
-      isLeft (checkWasmBaseCompat [ wb [ "Wasm", "Array" ] [ "totallyBogusPrim" ] ])
+      isLeft (checkWasmBaseCompat "test" [ wb [ "Wasm", "Array" ] [ "totallyBogusPrim" ] ])
         `shouldEqual` true
 
     it "ignores non-Wasm modules (their foreigns resolve elsewhere)" do
-      isRight (checkWasmBaseCompat [ wb [ "Data", "Foo" ] [ "totallyBogusPrim" ] ])
+      isRight (checkWasmBaseCompat "test" [ wb [ "Data", "Foo" ] [ "totallyBogusPrim" ] ])
         `shouldEqual` true
 
   describe "checkCorefnVersions (ADR 0029)" do

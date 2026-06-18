@@ -5,7 +5,7 @@ import Prelude
 import Effect (Effect)
 import Effect.Console as Console
 import Fmt as Fmt
-import PureScript.Backend.Wasm.CLI (FilePath)
+import PureScript.Backend.Wasm.CLI.Effect.Filesystem (FilePath)
 
 main :: FilePath -> FilePath -> Effect Unit
 main cliRoot binaryenBinDir = do

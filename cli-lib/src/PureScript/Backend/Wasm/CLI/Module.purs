@@ -1,7 +1,7 @@
 -- | Module-name helpers and file-level reachability. `reachableClosure` prunes the input dir to
 -- | the modules an entry transitively needs (over the cheap dotted import map) before the
 -- | expensive full decode — the compiler prunes again at the IR level, but this bounds the decode.
-module PursWasm.CLI.Module
+module PureScript.Backend.Wasm.CLI.Module
   ( printModname
   , entryRoot
   , reachableClosure

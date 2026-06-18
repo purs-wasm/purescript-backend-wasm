@@ -2,7 +2,7 @@
 -- | ADR 0031 §5) is *optional* — absent means "fall back to the default" — so the algebra returns
 -- | `Maybe String` rather than throwing on an unset var. The Node interpreter reads `process.env`;
 -- | the in-memory test interpreter serves a fixed map.
-module PursWasm.CLI.Effect.Env
+module PureScript.Backend.Wasm.CLI.Effect.Env
   ( Env(..)
   , ENV
   , _env

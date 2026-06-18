@@ -1,7 +1,7 @@
 -- | ulib lib scan (ADR 0028 / 0031): map each bundled-lib module to its shadow `corefn.json` and
 -- | kept-foreign `foreign.wasm` candidate paths. The build's `Manifest.resolveModuleSet` (manifest +
 -- | lock) then decides, per module, whether to take the lib corefn over the registry one.
-module PursWasm.CLI.Ulib.Shadow
+module PureScript.Backend.Wasm.CLI.Ulib.Shadow
   ( Shadow
   , loadShadowMap
   ) where
@@ -14,8 +14,8 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Effect (FS, FilePath, exists, joinPath, readDir)
-import PursWasm.CLI.Ulib.Manifest (isLibModuleDir)
+import PureScript.Backend.Wasm.CLI.Effect (FS, FilePath, exists, joinPath, readDir)
+import PureScript.Backend.Wasm.CLI.Ulib.Manifest (isLibModuleDir)
 import Run (Run)
 import Type.Row (type (+))
 

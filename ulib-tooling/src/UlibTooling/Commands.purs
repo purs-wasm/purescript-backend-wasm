@@ -16,12 +16,12 @@ import Data.String as Str
 import Data.Traversable (for)
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Ulib.Interface (compatible, diffInterface, interfaceOf)
-import PursWasm.CLI.Build.Paths (wasmAsBin)
-import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
-import PursWasm.CLI.Effect.Log as Log
-import PursWasm.CLI.Externs (readExterns)
-import PursWasm.CLI.Lib (resolveLibPath)
-import PursWasm.CLI.Ulib.Manifest (isLibModuleDir, manifestModules, readManifest, ulibManifestFile)
+import PureScript.Backend.Wasm.CLI.Paths (wasmAsBin)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
+import PureScript.Backend.Wasm.CLI.Effect.Log as Log
+import PureScript.Backend.Wasm.CLI.Externs (readExterns)
+import PureScript.Backend.Wasm.CLI.Lib (resolveLibPath)
+import PureScript.Backend.Wasm.CLI.Ulib.Manifest (isLibModuleDir, manifestModules, readManifest, ulibManifestFile)
 import UlibTooling.Options (UlibCheckOption, UlibInstallOption)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
