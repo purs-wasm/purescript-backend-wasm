@@ -147,3 +147,62 @@ output before the build is actually split:
 - **Cache the lowered ANF only, keeping whole-program codegen.** Skips lowering on a hit, but
   lowering is not the ~30-min bottleneck (codegen is), so the win is small; the ANF cache is
   worthwhile only as the per-module codegen *input* (Phase 2), not on its own.
+
+## Addendum (2026-06-18): the cross-module-unboxing recovery path
+
+The Decision fixes the module boundary to boxed and the "Carry representations in `.pmi`"
+alternative above was rejected *for now*. This addendum records the staged ladder for
+recovering cross-module unboxing later, should a real workload need it, and the one
+structural fact that orders that ladder. It changes no decision — the boxed boundary stands;
+this is the map for if/when we revisit it.
+
+**The organizing fact — representation flows in two directions, asymmetrically.** The rep
+analysis (`Lower.Unbox.assignProgramReps`) infers a result rep and parameter reps with
+*opposite* data-flow:
+
+- a **result** rep is fixed by the function's own body (the join of the atoms it returns) —
+  it flows callee → caller, the *same* direction as separate compilation (a module compiles
+  against its dependencies' interfaces);
+- a **parameter** rep is the join over *every* call site's argument type — it flows
+  caller → callee, *against* compilation.
+
+Unboxing a parameter is sound only if every caller passes that scalar (a boxed `eqref` fed to
+an `i32` parameter traps at the cast), which a separately-compiled callee cannot prove. So:
+
+> **Result reps are publishable in `.pmi` today, soundly and without a link-time fixpoint.
+> Parameter reps are inherently whole-program or speculative.** This asymmetry — not the menu
+> of techniques — sets the priority order.
+
+**The recovery ladder (cost-ascending).** Each rung spends some of the incrementality the
+boxed boundary buys (whose virtue is precisely that `.pmi` carries *no* rep decisions, so a
+dependency's internal rep change never invalidates its dependents); take a rung only when a
+measurement demands it.
+
+1. **Boxed boundary** — the current decision. No rep in the interface; maximal incrementality.
+2. **Result reps in `.pmi`** — sound (callee→caller), no fixpoint, smallest change; recovers
+   the unboxed-result half. Reach for this first if a cross-module scalar path regresses.
+3. **Worker/wrapper for an exported recursive function** — the external entry goes through the
+   boxed wrapper, the self-recursion through an unboxed worker, so the function's *own loop*
+   runs unboxed. This recovers an *exported recursive scalar* function's loop; it does **not**
+   by itself recover a hot caller in module B calling a small cross-module leaf in A (B can
+   only call A's boxed wrapper — to call the unboxed worker, the worker's signature must be
+   published, i.e. rung 4). Worker/wrapper is the safe container; published reps are what fill
+   it for external callers.
+4. **Parameter reps in `.pmi` (full interface-rep ABI)** — recovers the unboxed-parameter half,
+   but requires either a link-time fixpoint over the interface reps (a whole-program step, not
+   purely incremental) or a speculative commit with residual boxing where the join is unknown,
+   and it makes the rep part of cache invalidation. Only if a measured hot cross-module
+   *parameter* path still regresses after rungs 2–3.
+5. **Link-time specialization (ThinLTO-style cloning)** — emit specialized variants and select
+   at link. Note this is *not* the cheap "rewrite imports/exports, no relowering" that link-time
+   symbol resolution suggests: `wasm-merge` does not rewrite representations, so unboxing a
+   cross-module call at link time needs the unboxed variant present on both sides — i.e. it is
+   cloning/specialization, not mere call rewriting. Research-grade; last.
+
+**Two clarifications on the performance model.** (a) Cross-module *inlining* survives the
+per-module model (via the summaries — dict-elim, general inline, caller-homed specialization),
+so a small leaf is inlined away and its boundary disappears; the boxed-boundary cost applies
+only to a call that *survives inlining* and is hot and scalar — rare, and inlining is the first
+line of defense before any rep-ABI scheme. (b) The inter-module *wasm* boundary (this ADR) is
+distinct from the *foreign* (JS) boundary: a benchmark like `mapFoldArray` is slow at the
+foreign boundary (ADR 0026 / WasmBase territory), which the boxed *module* ABI does not touch.
