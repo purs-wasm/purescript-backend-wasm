@@ -147,6 +147,10 @@ type PerModuleArtifacts =
   , glue :: B.Module
   , cafInit :: Maybe B.Function
   , foreignModules :: Array String
+  -- the cross-module function export names (qualified keys) each module emitted purely for
+  -- `wasm-merge` to resolve cross-module calls; after merge these are redundant, so the caller
+  -- internalises them and lets the optimiser DCE any now-unused (ADR 0037 ⑥, Slice 2.2c).
+  , crossModuleExports :: Array String
   }
 
 -- | Per-module compilation (ADR 0037 Phase 2, Slice 2.2): lower each module to a fragment, codegen
@@ -184,6 +188,11 @@ compilePerModule _opts roots foreignSigs' foreignNames externs optimizedModules 
                 , glue: glue.mod
                 , cafInit: glue.cafInit
                 , foreignModules: Array.nub (built >>= _.foreignModules)
+                -- internalise post-merge: the cross-module function exports (resolved by merge) AND
+                -- each module's `caf_init$M` (the link glue imports + calls them, so after merge the
+                -- export is redundant). The glue's own host-facing `caf_init` is a different name, so
+                -- it is kept. Result: the merged export surface matches the whole-program oracle.
+                , crossModuleExports: Set.toUnfoldable lowered.crossModuleRefs <> map _.cafInitExport cafInits
                 }
             )
   where

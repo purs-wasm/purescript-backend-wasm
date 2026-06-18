@@ -6,6 +6,10 @@ export const createModule = () => new binaryen.Module();
 
 export const disposeImpl = (mod) => () => mod.dispose();
 
+// Read a wasm binary back into a Module (the inverse of emitBinary). Used to post-process the
+// merged wasm in the per-module build (ADR 0037): internalise resolved cross-module exports + opt.
+export const readBinaryImpl = (bytes) => () => binaryen.readBinary(bytes);
+
 // --- Types ------------------------------------------------------------------
 
 export const i32 = binaryen.i32;
@@ -289,6 +293,10 @@ export const addFunctionImpl =
 export const addFunctionExportImpl =
   (mod) => (internalName) => (externalName) => () =>
     mod.addFunctionExport(internalName, externalName);
+
+// Remove an export by its external name (internalise it). Used after wasm-merge resolves a
+// cross-module function export, so the now-redundant export no longer pins the function (ADR 0037).
+export const removeExportImpl = (mod) => (externalName) => () => mod.removeExport(externalName);
 
 // Set the module's start function (run automatically at instantiation).
 export const setStartImpl = (mod) => (fn) => () => mod.setStart(fn);

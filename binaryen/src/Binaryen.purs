@@ -69,6 +69,8 @@ module Binaryen
   , validate
   , emitText
   , emitBinary
+  , readBinary
+  , removeExport
   -- Wasm GC
   , HeapType
   , TypeBuilder
@@ -598,3 +600,17 @@ foreign import emitBinaryImpl :: Module -> Effect Uint8Array
 -- | Emit the module as a wasm binary.
 emitBinary :: Module -> Effect Uint8Array
 emitBinary = emitBinaryImpl
+
+foreign import readBinaryImpl :: Uint8Array -> Effect Module
+
+-- | Read a wasm binary back into a `Module` (the inverse of `emitBinary`), for post-processing a
+-- | merged wasm in-memory (e.g. internalising cross-module exports then re-optimising, ADR 0037).
+readBinary :: Uint8Array -> Effect Module
+readBinary = readBinaryImpl
+
+foreign import removeExportImpl :: Module -> String -> Effect Unit
+
+-- | Remove an export by its external name (internalise it). After `wasm-merge` resolves a
+-- | cross-module function export, removing it lets the optimiser DCE the function if now unused.
+removeExport :: Module -> String -> Effect Unit
+removeExport = removeExportImpl
