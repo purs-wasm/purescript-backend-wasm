@@ -317,6 +317,11 @@ export const globalSetImpl = (mod) => (name) => (value) => () =>
 
 export const optimizeImpl = (mod) => () => mod.optimize();
 
+// Run a specific list of optimization passes (rather than the full `-O` pipeline). Used post-merge
+// to DCE internalised cross-module exports cheaply (`remove-unused-module-elements`) without the
+// cost of re-optimising the whole merged module (ADR 0037 Phase 3).
+export const runPassesImpl = (mod) => (passes) => () => mod.runPasses(passes);
+
 // --- Validation & emission --------------------------------------------------
 
 export const validateImpl = (mod) => () => mod.validate() !== 0;

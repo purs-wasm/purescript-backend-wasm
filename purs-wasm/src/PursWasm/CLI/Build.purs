@@ -426,14 +426,14 @@ buildCmd cliRoot binaryenBinDir args = do
       execFile (wasmMergeBin binaryenBinDir) (appMerges <> [ runtimeWasm cliRoot, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
       for_ l.cleanup unlink
       for_ providers \p -> when p.assembled (maybe (pure unit) unlink p.wasm)
-      -- Per-module modules are emitted unoptimised so their GC types still canonicalise under merge
-      -- (ADR 0037); post-merge, where the types are unified, read the merged wasm back, internalise
-      -- the cross-module function exports (now resolved — they only existed for `wasm-merge`, and the
-      -- oracle never exported dependency-module functions), then optimise: DCE drops any now-unused,
-      -- so the export surface + size match the whole-program build. The whole-program path already
-      -- optimised in-memory before merge, so this is per-module only.
+      -- Each per-module wasm is already optimised independently (ADR 0037 Phase 3 — verified to keep
+      -- GC types canonical under merge), so the merged wasm needs no whole-program re-optimise. Post
+      -- merge, internalise the cross-module function exports (now resolved — they only existed for
+      -- `wasm-merge`; the oracle never exported dependency-module functions) and run a cheap DCE pass
+      -- (`remove-unused-module-elements`) to drop the now-unreachable, matching the oracle's surface.
+      -- The whole-program path already optimised before merge, so this is per-module only.
       when (args.perModuleCodegen && opts.optimize) do
-        info (Log.blue "Internalizing cross-module exports + optimizing merged wasm…")
+        info (Log.blue "Internalizing cross-module exports + DCE…")
         readBinary wasmPath >>= case _ of
           Nothing -> logAndThrow ("merged wasm not found: " <> wasmPath)
           Just merged -> do
@@ -443,7 +443,7 @@ buildCmd cliRoot binaryenBinDir args = do
               -- GC before emitting or the GC type/supertype encoding is written invalid.
               B.setFeaturesGC mod
               for_ l.crossModuleExports (B.removeExport mod)
-              B.optimize mod
+              B.runPasses mod [ "remove-unused-module-elements" ]
               out <- B.emitBinary mod
               B.dispose mod
               pure out

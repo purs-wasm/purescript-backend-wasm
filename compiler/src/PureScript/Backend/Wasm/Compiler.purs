@@ -169,7 +169,7 @@ compilePerModule
   -> Array ExternsFile
   -> Array M.Module
   -> Effect (Either String PerModuleArtifacts)
-compilePerModule _opts roots foreignSigs' foreignNames externs optimizedModules =
+compilePerModule opts roots foreignSigs' foreignNames externs optimizedModules =
   case lowerProgramFragments (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
     Left err -> pure (Left ("linking failed: " <> show err))
     Right lowered -> do
@@ -206,6 +206,12 @@ compilePerModule _opts roots foreignSigs' foreignNames externs optimizedModules 
       B.dispose single.mod
       pure (Left ("per-module codegen: " <> dotted <> " failed validation:\n" <> wat))
     else do
+      -- Optimise each module independently (ADR 0037 Phase 3): verified to preserve cross-module GC
+      -- type canonicalisation under merge, so the merged wasm needs no whole-program re-optimise —
+      -- only a cheap post-merge DCE of the internalised exports. This makes the optimised per-module
+      -- wasm a cacheable artifact (a changed module re-optimises alone). Imports/exports (the boxed
+      -- cross-module ABI) are preserved, so merge resolution is unaffected.
+      when opts.optimize (B.optimize single.mod)
       bytes <- B.emitBinary single.mod
       B.dispose single.mod
       pure (Right { moduleName: dotted, bytes, cafInitExport: single.cafInitExport, foreignModules: single.foreignModules })

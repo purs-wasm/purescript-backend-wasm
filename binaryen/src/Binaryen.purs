@@ -66,6 +66,7 @@ module Binaryen
   , globalGet
   , globalSet
   , optimize
+  , runPasses
   , validate
   , emitText
   , emitBinary
@@ -582,6 +583,13 @@ foreign import optimizeImpl :: Module -> Effect Unit
 
 optimize :: Module -> Effect Unit
 optimize = optimizeImpl
+
+foreign import runPassesImpl :: Module -> Array String -> Effect Unit
+
+-- | Run a specific list of optimization passes (instead of the full `-O` pipeline) — e.g. just
+-- | `remove-unused-module-elements` to DCE internalised exports cheaply (ADR 0037 Phase 3).
+runPasses :: Module -> Array String -> Effect Unit
+runPasses = runPassesImpl
 
 foreign import validateImpl :: Module -> Effect Boolean
 
