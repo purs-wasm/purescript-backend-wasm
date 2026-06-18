@@ -4,9 +4,11 @@
 module PureScript.Backend.Wasm.Compiler
   ( CompileOptions
   , CompiledModule
+  , LinkCore
   , parseModule
   , linkModule
   , finishLink
+  , linkPerModule
   , effectfulForeigns
   , compileModules
   , compileModulesText
@@ -119,11 +121,13 @@ effectfulForeigns foreignSigs' =
   , arities: effectfulForeignAritiesFromSigs foreignSigs'
   }
 
--- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
--- | module, and package it with the cache misses to persist. `foreignNames` is the qualified
--- | CoreFn-declared foreign set (for lowering's opaque-import fallback, ADR 0016).
-finishLink
-  :: CompileOptions
+-- | The back half of linking — lower the optimized MIR, build and validate the Binaryen
+-- | module, package it with the cache misses — as a pluggable interface, so the CLI can choose
+-- | the whole-program `finishLink` (the oracle) or the per-module `linkPerModule` (ADR 0037
+-- | Phase 2) without the driver knowing which. `foreignNames` is the qualified CoreFn-declared
+-- | foreign set (lowering's opaque-import fallback, ADR 0016); the rest mirror `finishLink`.
+type LinkCore =
+  CompileOptions
   -> Array ModuleName
   -> Object ForeignSig
   -> Set String
@@ -131,6 +135,19 @@ finishLink
   -> Array M.Module
   -> Array CacheWrite
   -> Effect (Either String CompiledModule)
+
+-- | Per-module compilation core (ADR 0037 Phase 2): lower + codegen each module to its own
+-- | wasm and `wasm-merge` them. **Slice 2.0 stub** — delegates to the whole-program
+-- | `finishLink` so `purwc` produces identical output while the per-module engine is built out
+-- | behind this seam (Slices 2.1–2.4 progressively replace the body). The differential harness
+-- | compares a `linkPerModule` build against a `finishLink` build for behaviour parity.
+linkPerModule :: LinkCore
+linkPerModule = finishLink
+
+-- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
+-- | module, and package it with the cache misses to persist. `foreignNames` is the qualified
+-- | CoreFn-declared foreign set (for lowering's opaque-import fallback, ADR 0016).
+finishLink :: LinkCore
 finishLink opts roots foreignSigs' foreignNames externs optimizedModules cacheWrites =
   case lowerModules opts.perModuleRep opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
     Left err -> pure (Left ("linking failed: " <> show err))

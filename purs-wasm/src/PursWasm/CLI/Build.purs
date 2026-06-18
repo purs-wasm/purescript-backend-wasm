@@ -27,7 +27,7 @@ import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
 import Partial.Unsafe (unsafeCrashWith)
-import PureScript.Backend.Wasm.Compiler (effectfulForeigns, finishLink, linkModule, mirTrace, parseModule, printMir)
+import PureScript.Backend.Wasm.Compiler (effectfulForeigns, finishLink, linkModule, linkPerModule, mirTrace, parseModule, printMir)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache, optimizeIncrementalM)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
@@ -192,6 +192,11 @@ buildCmd cliRoot binaryenBinDir args = do
       Just _ -> logAndThrow "--executable requires the entry module's `main` to have type `Effect Unit`."
       Nothing -> logAndThrow "--executable: no `main` export found in the entry module(s)."
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt, perModuleRep: args.perModuleRep }
+  -- The lower+codegen core (ADR 0037 Phase 2): the whole-program `finishLink` (oracle), or the
+  -- per-module `linkPerModule` under `--per-module-codegen`. Only this core differs between the
+  -- two; the surrounding driver is shared, so the builds are differential-tested for behaviour
+  -- parity (Slice 2.0). At Slice 2.2 the per-module engine moves to the standalone `purwc`.
+  let link = if args.perModuleCodegen then linkPerModule else finishLink
   -- One bundle per build, written flat under `--output` (no per-module subdir): the build emits a
   -- single linked wasm + optional loader, not per-module artifacts (ADR 0009), so a module-named
   -- directory would be misleading.
@@ -286,7 +291,7 @@ buildCmd cliRoot binaryenBinDir args = do
         inputs
       -- liftEffect progressEndImpl
       br *> info (Log.blue "Linking (lower + codegen)…")
-      liftEffect (finishLink opts roots allSigs foreignNames externs optimized.modules optimized.writes)
+      liftEffect (link opts roots allSigs foreignNames externs optimized.modules optimized.writes)
     else case args.dumpMir of
       -- `--dump-mir` needs the whole CoreFn for the trace, so keep the decode-everything path
       -- (a debugging build, where peak memory is not a concern).
@@ -315,7 +320,7 @@ buildCmd cliRoot binaryenBinDir args = do
           Right m -> do
             either logAndThrow pure (checkCorefnVersions [ m ])
             pure (Just (liftModule m))
-        liftEffect (finishLink opts roots allSigs foreignNames externs lifted [])
+        liftEffect (link opts roots allSigs foreignNames externs lifted [])
   case linkResult of
     Left err -> logAndThrow err
     Right built -> do

@@ -102,6 +102,12 @@ buildOptionsParser =
           \signatures are unboxed (ADR 0037). Experimental; for A/B measurement ahead of\n\
           \per-module codegen. The build is still whole-program."
           # ArgParser.boolean
+    , perModuleCodegen:
+        ArgParser.flag [ "--per-module-codegen" ]
+          "Use the per-module lower+codegen core (ADR 0037 Phase 2) instead of the\n\
+          \whole-program one. Experimental; differential-tested against the default for\n\
+          \behaviour parity. The per-module engine moves to the standalone `purwc` later."
+          # ArgParser.boolean
     , dumpMir:
         ArgParser.argument [ "--dump-mir" ]
           "Dump the given module's middle IR (MIR) at the optimizer's snapshot points\n\
