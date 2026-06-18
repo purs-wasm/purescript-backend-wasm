@@ -35,7 +35,7 @@ import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Codegen (buildModule)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
-import PureScript.Backend.Wasm.Lower (lowerModules)
+import PureScript.Backend.Wasm.Lower (lowerModules, lowerModulesPerModule)
 import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
@@ -136,13 +136,26 @@ type LinkCore =
   -> Array CacheWrite
   -> Effect (Either String CompiledModule)
 
--- | Per-module compilation core (ADR 0037 Phase 2): lower + codegen each module to its own
--- | wasm and `wasm-merge` them. **Slice 2.0 stub** — delegates to the whole-program
--- | `finishLink` so `purwc` produces identical output while the per-module engine is built out
--- | behind this seam (Slices 2.1–2.4 progressively replace the body). The differential harness
--- | compares a `linkPerModule` build against a `finishLink` build for behaviour parity.
+-- | Per-module compilation core (ADR 0037 Phase 2). **Slice 2.1**: the *lowering* is per-module
+-- | (`lowerModulesPerModule` — fresh code-fn numbering per module, boxed cross-module boundary),
+-- | recombined into one `Program` that the still-whole-program `buildModule` codegens. Slices
+-- | 2.2+ split the codegen too (per-module wasm + `wasm-merge`) and move the engine to `purwc`.
+-- | Behaviour-parity with `finishLink` is the contract (the differential harness); bytes differ
+-- | by construction. `cacheWrites` is threaded straight through (it is produced by the optimizer,
+-- | not by lowering).
 linkPerModule :: LinkCore
-linkPerModule = finishLink
+linkPerModule opts roots foreignSigs' foreignNames externs optimizedModules cacheWrites =
+  case lowerModulesPerModule (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right program -> do
+      built <- buildModule program
+      when opts.optimize (B.optimize built.mod)
+      ok <- B.validate built.mod
+      if not ok then do
+        wat <- B.emitText built.mod
+        B.dispose built.mod
+        pure (Left ("emitted module failed validation:\n" <> wat))
+      else pure (Right { mod: built.mod, foreignModules: built.foreignModules, cafInit: built.cafInit, cacheWrites })
 
 -- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
 -- | module, and package it with the cache misses to persist. `foreignNames` is the qualified

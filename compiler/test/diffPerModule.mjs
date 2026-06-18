@@ -5,8 +5,12 @@
 //
 //   * wasm bytes (sha256): while the per-module core is a stub that delegates to whole-program
 //     (Slice 2.0) the two are byte-IDENTICAL; once the per-module engine diverges (Slices 2.1+)
-//     bytes differ and behaviour becomes the contract.
-//   * behaviour: for a program with a runnable `main`, run both loaders and compare stdout.
+//     bytes differ (per-module code-fn numbering, boxed cross-module boundary) and BEHAVIOUR is
+//     the contract.
+//   * behaviour: a set of probes — run `main` (loader-having programs) and/or call exported
+//     entries with fixed args — is run against both bundles and the {stdout, result, error}
+//     outcome compared. This survives byte divergence and covers loader-less / export-driven
+//     programs (metatheory, effect-prim) that have no `main`.
 //
 // This is the behaviour-neutral gate for retiring the whole-program path. Run all, or a subset:
 //   node compiler/test/diffPerModule.mjs               # whole corpus
@@ -20,15 +24,29 @@ import { join } from "node:path";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 
-// name → spago package + entry module. `hasMain` programs are also behaviour-compared (their
-// `main` is run through the emitted loader and stdout captured, as examplesRun.mjs does).
+// name → spago package + entry module, plus behaviour probes: `main: true` runs the loader's
+// `main` (capturing stdout); `calls` invokes exported entries with fixed args (capturing the
+// returned value). An exported `Effect a` is a `() => a` thunk; a pure value/function is called
+// or read as-is. Probes are compared by outcome, so the same args must be deterministic.
 const CORPUS = [
-  { name: "helloworld", pkg: "examples-helloworld", entry: "Examples.HelloWorld.Main", hasMain: true },
-  { name: "effect-ref", pkg: "examples-effect-ref", entry: "Examples.EffRef.Main", hasMain: true },
-  { name: "effect-prim", pkg: "examples-effect-prim", entry: "Examples.EffPrim.Main", hasMain: true },
-  { name: "record-meta", pkg: "examples-recordmeta", entry: "Examples.RecordMeta", hasMain: true },
-  { name: "run", pkg: "examples-run", entry: "Examples.Run.Main", hasMain: true },
-  { name: "metatheory", pkg: "examples-metatheory", entry: "Examples.Metatheory.Main", hasMain: true },
+  { name: "helloworld", pkg: "examples-helloworld", entry: "Examples.HelloWorld.Main", main: true },
+  { name: "effect-ref", pkg: "examples-effect-ref", entry: "Examples.EffRef.Main", main: true },
+  {
+    name: "effect-prim",
+    pkg: "examples-effect-prim",
+    entry: "Examples.EffPrim.Main",
+    calls: ["forETest", "foreachETest", "whileETest", "untilETest", "effFnTest", "unsafeTest", "voidTest", "mapTest"].map(
+      (fn) => ({ fn, args: [] }),
+    ),
+  },
+  { name: "record-meta", pkg: "examples-recordmeta", entry: "Examples.RecordMeta", main: true },
+  { name: "run", pkg: "examples-run", entry: "Examples.Run.Main", main: true },
+  {
+    name: "metatheory",
+    pkg: "examples-metatheory",
+    entry: "Examples.Metatheory.Main",
+    calls: [0, 1, 2, 3].map((i) => ({ fn: "runSample", args: [i] })),
+  },
 ];
 
 const want = process.argv.slice(2);
@@ -38,29 +56,47 @@ const sh = (cmd, args) => execFileSync(cmd, args, { cwd: repo, stdio: ["ignore",
 const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
 const tmp = (tag) => mkdtempSync(join(tmpdir(), `pmdiff-${tag}-`));
 
-// Run the bundle's `main` through its loader, capturing console output AND any error, so the
-// *outcome* (stdout + thrown message) is what gets compared — two bundles that throw the same
-// error are still behaviour-equal. Returns null if no loader/`main` (nothing to compare).
-async function runMain(bundleDir) {
+// Run the entry's probes (main + exported calls) through its loader, returning a JSON outcome
+// (per-probe stdout / result / error). Returns null if the program has no probes. A load-time
+// throw (e.g. instantiation) is itself part of the outcome, so two bundles that fail identically
+// are still behaviour-equal.
+async function behaviour(bundleDir, entry) {
+  if (!entry.main && !(entry.calls && entry.calls.length)) return null;
   const mjs = join(bundleDir, "index.mjs");
-  if (!existsSync(mjs)) return null;
+  if (!existsSync(mjs)) return JSON.stringify({ noLoader: true });
+  const outcomes = [];
   const out = [];
   const orig = console.log;
   console.log = (...a) => out.push(a.join(" "));
-  let error = null;
   try {
-    const m = await import(pathToFileURL(mjs).href);
-    if (typeof m.exports?.main !== "function") {
-      console.log = orig;
-      return null;
+    const mod = await import(pathToFileURL(mjs).href);
+    if (entry.main) {
+      out.length = 0;
+      let error = null;
+      try {
+        mod.exports.main();
+      } catch (e) {
+        error = String(e?.message ?? e);
+      }
+      outcomes.push({ probe: "main", stdout: out.join("\n"), error });
     }
-    m.exports.main();
-  } catch (e) {
-    error = String(e?.message ?? e);
-  } finally {
+    for (const c of entry.calls ?? []) {
+      let result = null;
+      let error = null;
+      try {
+        const fn = mod.exports[c.fn];
+        result = typeof fn === "function" ? fn(...c.args) : fn;
+      } catch (e) {
+        error = String(e?.message ?? e);
+      }
+      outcomes.push({ probe: `${c.fn}(${c.args.join(",")})`, result, error });
+    }
+  } catch (loadErr) {
     console.log = orig;
+    return JSON.stringify({ loadError: String(loadErr?.message ?? loadErr) });
   }
-  return JSON.stringify({ out: out.join("\n"), error });
+  console.log = orig;
+  return JSON.stringify(outcomes);
 }
 
 console.log("Building purs-wasm…");
@@ -86,22 +122,20 @@ for (const c of corpus) {
     const hashB = sha(join(bundleB, "index.wasm"));
     const bytesEq = hashA === hashB;
 
-    let behaviour = "n/a";
-    if (c.hasMain) {
-      const outA = await runMain(bundleA);
-      const outB = await runMain(bundleB);
-      if (outA === null && outB === null) behaviour = "n/a (no loader/main)";
-      else if (outA === outB) behaviour = "match";
-      else {
-        behaviour = "MISMATCH";
-        console.log(`\n    oracle stdout:\n${outA}\n    purwc stdout:\n${outB}`);
-      }
+    const behA = await behaviour(bundleA, c);
+    const behB = await behaviour(bundleB, c);
+    let behaviourTag;
+    if (behA === null && behB === null) behaviourTag = "n/a (no probes)";
+    else if (behA === behB) behaviourTag = "match";
+    else {
+      behaviourTag = "MISMATCH";
+      console.log(`\n    oracle:\n      ${behA}\n    per-module:\n      ${behB}`);
     }
 
-    const wasmTag = bytesEq ? "identical" : `DIFFER (${hashA.slice(0, 8)} vs ${hashB.slice(0, 8)})`;
-    const ok = behaviour !== "MISMATCH"; // bytes may legitimately differ; behaviour must not
+    const wasmTag = bytesEq ? "identical" : `differ (${hashA.slice(0, 8)} vs ${hashB.slice(0, 8)})`;
+    const ok = behaviourTag !== "MISMATCH"; // bytes may legitimately differ; behaviour must not
     if (!ok) failures++;
-    console.log(`wasm ${wasmTag} | behaviour ${behaviour}`);
+    console.log(`wasm ${wasmTag} | behaviour ${behaviourTag}`);
   } catch (e) {
     failures++;
     console.log(`ERROR\n    ${String(e.stderr ?? e.message ?? e).split("\n").join("\n    ")}`);

@@ -33,6 +33,7 @@
 module PureScript.Backend.Wasm.Lower
   ( lowerModule
   , lowerModules
+  , lowerModulesPerModule
   , module ReExport
   ) where
 
@@ -724,3 +725,98 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
 -- | cross-module references, so `perModuleRep` is irrelevant here (passed `false`).
 lowerModule :: Boolean -> Module -> Either LowerError Program
 lowerModule optimize m = lowerModules false optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]
+
+-- | Per-module lowering (ADR 0037 Phase 2 / Slice 2.1): lower each module's reachable functions
+-- | **independently** — a fresh code-fn counter per module (so a module's `$codeN` numbering is a
+-- | pure function of that module, stable for the Phase-3 wasm cache), and a per-module
+-- | `assignProgramReps` with the module's cross-module-visible functions pinned to the boxed
+-- | boundary (③) — then concatenate the fragments into one `Program`. The whole-program tables
+-- | (ctors / funcs / labels / cross-module refs) are still derived over all in-memory modules
+-- | here; only the *lowering* is per-module (codegen is still whole-program at Slice 2.1, fed the
+-- | recombined `Program`). Behaviourally equal to `lowerModules true true …` (the
+-- | `--per-module-rep` path); the per-module code-fn numbering + boxed boundary make the bytes
+-- | differ, so the differential harness checks behaviour, not bytes.
+lowerModulesPerModule
+  :: Object (Array Rep)
+  -> Object ForeignImport
+  -> Set String
+  -> Array (Array String)
+  -> Array Module
+  -> Either LowerError Program
+lowerModulesPerModule fieldReps foreignSigs foreignNames roots modules = do
+  let
+    dictCtors = collectDictCtors modules
+    labelIds = collectLabels modules
+    info =
+      { knownFuncs: collectFuncs dictCtors modules
+      , ctors: collectCtors fieldReps modules
+      , dictCtors
+      , enumCtors: collectEnumCtors modules
+      , labelIds
+      , foreignSigs
+      , foreignNames
+      }
+    entries = modules >>= \m ->
+      functionDecls dictCtors m <#> \(Tuple ident expr) ->
+        { key: qualifiedKey m.name ident, moduleName: m.name, expr }
+    functions = Object.fromFoldable (entries <#> \e -> Tuple e.key e.expr)
+    rootKeys = Array.mapMaybe (\e -> if Array.elem e.moduleName roots then Just e.key else Nothing) entries
+    reachable = reachableFunctions functions rootKeys
+    keyModule = Object.fromFoldable (entries <#> \e -> Tuple e.key e.moduleName)
+    -- functions referenced from a *different* module → fixed to the boxed ABI (③), so every
+    -- module agrees on a cross-module callee's representation without seeing the others' bodies.
+    crossModuleRefs = Set.fromFoldable
+      ( entries >>= \e ->
+          Array.mapMaybe
+            ( \ref -> case Object.lookup ref keyModule of
+                Just refMod | refMod /= e.moduleName -> Just ref
+                _ -> Nothing
+            )
+            (qualifiedRefs e.expr)
+      )
+  case Array.head (labelCollisions labelIds) of
+    Just clash -> Left (LabelHashCollision clash)
+    Nothing -> pure unit
+  perModuleFuncs <- traverse (lowerOneModule info reachable crossModuleRefs roots) modules
+  let allFuncs = Array.concat perModuleFuncs
+  let
+    exportSigs = Object.fromFoldable do
+      fn <- allFuncs
+      ident <- maybe [] pure fn.export
+      let FuncName key = fn.name
+      sig <- maybe [] pure (Object.lookup key foreignSigs)
+      pure (Tuple ident sig)
+  pure
+    { funcs: allFuncs
+    , labels: Object.toUnfoldable labelIds
+    , exportSigs
+    }
+
+-- | Lower one module's reachable functions to rep-assigned `IRFunc`s: a fresh lowering state (so
+-- | code functions are numbered per module — see `lowerModulesPerModule`), then a per-module
+-- | `assignProgramReps` pinning this module's cross-module-visible functions to the boxed
+-- | boundary. A cross-module *callee* is absent from this module's signature map, so it already
+-- | defaults to boxed; the pin covers this module's own functions that *other* modules call.
+lowerOneModule
+  :: ModuleInfo
+  -> Object Unit
+  -> Set String
+  -> Array (Array String)
+  -> Module
+  -> Either LowerError (Array IRFunc)
+lowerOneModule info reachable crossModuleRefs roots m = do
+  let
+    isRoot = Array.elem m.name roots
+    toLower = Array.filter (\(Tuple ident _) -> Object.member (qualifiedKey m.name ident) reachable)
+      (functionDecls info.dictCtors m)
+  Tuple funcs st <- runStateT
+    (traverse (lowerTopFunc info m.name isRoot) toLower)
+    { slot: 0, lifted: [], nextCode: 0 }
+  let mFuncs = funcs <> st.lifted
+  let
+    pins = Set.fromFoldable
+      ( Array.mapMaybe
+          (\fn -> let FuncName k = fn.name in if Set.member k crossModuleRefs then Just fn.name else Nothing)
+          mFuncs
+      )
+  pure (assignProgramReps pins mFuncs)
