@@ -33,7 +33,6 @@
 module PureScript.Backend.Wasm.Lower
   ( lowerModule
   , lowerModules
-  , lowerModulesPerModule
   , lowerProgramFragments
   , ModuleFragment
   , LoweredProgram
@@ -728,31 +727,6 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
 -- | cross-module references, so `perModuleRep` is irrelevant here (passed `false`).
 lowerModule :: Boolean -> Module -> Either LowerError Program
 lowerModule optimize m = lowerModules false optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]
-
--- | Per-module lowering (ADR 0037 Phase 2 / Slice 2.1): lower each module's reachable functions
--- | **independently** — a fresh code-fn counter per module (so a module's `$codeN` numbering is a
--- | pure function of that module, stable for the Phase-3 wasm cache), and a per-module
--- | `assignProgramReps` with the module's cross-module-visible functions pinned to the boxed
--- | boundary (③) — then concatenate the fragments into one `Program`. The whole-program tables
--- | (ctors / funcs / labels / cross-module refs) are still derived over all in-memory modules
--- | here; only the *lowering* is per-module (codegen is still whole-program at Slice 2.1, fed the
--- | recombined `Program`). Behaviourally equal to `lowerModules true true …` (the
--- | `--per-module-rep` path); the per-module code-fn numbering + boxed boundary make the bytes
--- | differ, so the differential harness checks behaviour, not bytes.
-lowerModulesPerModule
-  :: Object (Array Rep)
-  -> Object ForeignImport
-  -> Set String
-  -> Array (Array String)
-  -> Array Module
-  -> Either LowerError Program
-lowerModulesPerModule fieldReps foreignSigs foreignNames roots modules = do
-  lowered <- lowerProgramFragments fieldReps foreignSigs foreignNames roots modules
-  pure
-    { funcs: lowered.fragments >>= _.funcs
-    , labels: lowered.labels
-    , exportSigs: Object.fromFoldable (lowered.fragments >>= \f -> Object.toUnfoldable f.exportSigs)
-    }
 
 -- | One module's lowered functions plus its export signatures, kept separate (NOT recombined) so
 -- | the per-module codegen (ADR 0037 Phase 2, Slice 2.2) can emit it to its own wasm.

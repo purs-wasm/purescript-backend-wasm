@@ -8,7 +8,6 @@ module PureScript.Backend.Wasm.Compiler
   , parseModule
   , linkModule
   , finishLink
-  , linkPerModule
   , compilePerModule
   , PerModuleArtifacts
   , effectfulForeigns
@@ -37,7 +36,7 @@ import Foreign.Object (Object)
 import PureScript.Backend.Wasm.Codegen (buildLinkGlue, buildModule, buildModuleSingle)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
-import PureScript.Backend.Wasm.Lower (lowerModules, lowerModulesPerModule, lowerProgramFragments)
+import PureScript.Backend.Wasm.Lower (lowerModules, lowerProgramFragments)
 import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
@@ -137,27 +136,6 @@ type LinkCore =
   -> Array M.Module
   -> Array CacheWrite
   -> Effect (Either String CompiledModule)
-
--- | Per-module compilation core (ADR 0037 Phase 2). **Slice 2.1**: the *lowering* is per-module
--- | (`lowerModulesPerModule` — fresh code-fn numbering per module, boxed cross-module boundary),
--- | recombined into one `Program` that the still-whole-program `buildModule` codegens. Slices
--- | 2.2+ split the codegen too (per-module wasm + `wasm-merge`) and move the engine to `purwc`.
--- | Behaviour-parity with `finishLink` is the contract (the differential harness); bytes differ
--- | by construction. `cacheWrites` is threaded straight through (it is produced by the optimizer,
--- | not by lowering).
-linkPerModule :: LinkCore
-linkPerModule opts roots foreignSigs' foreignNames externs optimizedModules cacheWrites =
-  case lowerModulesPerModule (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
-    Left err -> pure (Left ("linking failed: " <> show err))
-    Right program -> do
-      built <- buildModule program
-      when opts.optimize (B.optimize built.mod)
-      ok <- B.validate built.mod
-      if not ok then do
-        wat <- B.emitText built.mod
-        B.dispose built.mod
-        pure (Left ("emitted module failed validation:\n" <> wat))
-      else pure (Right { mod: built.mod, foreignModules: built.foreignModules, cafInit: built.cafInit, cacheWrites })
 
 -- | What `compilePerModule` produces for the caller to link (ADR 0037 Phase 2): each module's
 -- | already-emitted wasm bytes (to write under `<output>/_build/<module>.wasm` and `wasm-merge`),
