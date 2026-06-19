@@ -353,6 +353,7 @@
         "path": "purwc",
         "core": {
           "dependencies": [
+            "argonaut-core",
             "argparse-basic",
             "arrays",
             "cli-lib",
@@ -361,6 +362,7 @@
             "effect",
             "either",
             "fmt",
+            "foreign-object",
             "maybe",
             "node-path",
             "node-process",

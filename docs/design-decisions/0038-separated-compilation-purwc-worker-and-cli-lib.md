@@ -27,9 +27,22 @@
   sides), so even an adversarial construction kept the `.pmi` identical; if it ever bites it is
   perf/`.pmi`-size only, never correctness. Deferred perf refinement: over-export only the module's
   *exported* functions (not all), to avoid boxing internal helpers — needs the CoreFn export list
-  threaded to lowering. Phase C (orchestrator: dependency-graph driving + pre-merge label-collision
-  check + retire `.pmo`/`--per-module-codegen`) remains.
-- Date: 2026-06-18 (Phase B M1 + M2a + M2b + M3: 2026-06-19)
+  threaded to lowering. Phase C C1 (2026-06-19) — **the orchestrator works**: `purs-wasm build
+  --orchestrate` topo-orders the module set, spawns `purwc compile` as a SUBPROCESS per module (each
+  reading its dependencies' `.pmi` from the shared `_build` dir), runs the cross-module
+  label-collision check over the union of `.pmi` labels, builds the CAF-init link glue in-process
+  (`buildLinkGlue`), and assembles the same `Linked` record the in-process per-module core produces —
+  so the entire existing packaging tail (foreign resolution, `wasm-merge`, post-merge
+  internalise+DCE, JS loader) is reused unchanged. The worker emits a small `<M>.link.json` sidecar
+  (cafInitExport / foreignModules / crossModuleExports — orchestrator-facing, kept out of the `.pmi`).
+  Verified on all 4 fixtures (leaf, cross-module call, transitive+ctor, foreign re-export): the
+  `--orchestrate` `index.wasm` is behaviour-identical to the whole-program oracle and to the M3 manual
+  merge. C1 is sequential, non-ulib (fails fast on ulib-shadowed modules), dev-only (`node
+  <cliRoot>/purwc/index.dev.js`). C2+ (the remaining work): parallel subprocesses (an async
+  `child_process` FFI — Aff-free, the self-host path), ulib-shadowed modules, per-module `.wasm`
+  cache reuse, make `--orchestrate` the default + retire `--per-module-codegen`/in-process
+  `compilePerModule`/`.pmo`, and a `purwc` production bundle + path resolution.
+- Date: 2026-06-18 (Phase B M1 + M2a + M2b + M3 + Phase C C1: 2026-06-19)
 
 ## Context
 

@@ -42,6 +42,7 @@ type BuildOption =
   , force :: Boolean
   , perModuleRep :: Boolean
   , perModuleCodegen :: Boolean
+  , orchestrate :: Boolean
   , dumpMir :: Maybe String
   }
 

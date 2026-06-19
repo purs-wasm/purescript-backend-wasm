@@ -10,12 +10,14 @@ import Prelude
 
 import Ansi.Codes as Ansi
 import Binaryen as B
+import Data.Argonaut.Core (toArray, toObject, toString)
+import Data.Argonaut.Parser (jsonParser)
 import Data.Array as Array
 import Data.Either (Either(..), either, hush)
 import Data.Foldable (for_)
 import Data.Int (toNumber)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe, isNothing, maybe)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
 import Data.Number.Format (fixed, toStringWith)
 import Data.Set as Set
 import Data.String (joinWith)
@@ -27,10 +29,12 @@ import Effect (Effect)
 import Fmt as Fmt
 import Foreign.Object as Object
 import Partial.Unsafe (unsafeCrashWith)
+import PureScript.Backend.Wasm.Codegen (buildLinkGlue)
 import PureScript.Backend.Wasm.Compiler (compilePerModule, effectfulForeigns, finishLink, linkModule, mirTrace, moduleInterface, parseModule, printMir)
 import PureScript.Backend.Wasm.Externs (ctorFieldReps)
+import PureScript.Backend.Wasm.Lower.Collect (labelCollisions)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
-import PureScript.Backend.Wasm.MiddleEnd (liftModule, noCache, optimizeIncrementalM)
+import PureScript.Backend.Wasm.MiddleEnd (CacheWrite, liftModule, noCache, optimizeIncrementalM)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
@@ -81,6 +85,123 @@ warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
             )
         )
   _, _ -> pure unit
+
+-- | The common shape the packaging tail consumes, whichever core produced it (whole-program
+-- | `finishLink`, in-process per-module `compilePerModule`, or the Phase-C subprocess orchestrator).
+type Linked =
+  { foreignModules :: Array String
+  , cafInit :: Maybe B.Function
+  , cafOwner :: B.Module
+  , ownerPath :: FilePath
+  , ownerMergeName :: String
+  , preWritten :: Array (Tuple FilePath String)
+  , cleanup :: Array FilePath
+  , cacheWrites :: Array CacheWrite
+  , crossModuleExports :: Array String
+  }
+
+-- | The per-module link metadata a `purwc` worker emits as a `.link.json` sidecar (ADR 0038 Phase
+-- | C): what the orchestrator needs to build the link glue, resolve foreigns, and internalise
+-- | cross-module exports after `wasm-merge`. Kept out of the `.pmi` (the dependent-facing interface).
+type LinkMeta =
+  { cafInitExport :: Maybe String
+  , foreignModules :: Array String
+  , crossModuleExports :: Array String
+  }
+
+-- | Parse a `.link.json` sidecar (defensive — a corrupt/absent sidecar is a build error, not a
+-- | silent miscompile, surfaced by the caller).
+decodeLinkMeta :: String -> Maybe LinkMeta
+decodeLinkMeta txt = do
+  obj <- toObject =<< hush (jsonParser txt)
+  let strs k = fromMaybe [] (Array.mapMaybe toString <$> (toArray =<< Object.lookup k obj))
+  pure
+    { cafInitExport: toString =<< Object.lookup "cafInitExport" obj
+    , foreignModules: strs "foreignModules"
+    , crossModuleExports: strs "crossModuleExports"
+    }
+
+-- | Order modules so each comes after the modules it imports (within the set). Transcribes
+-- | `MiddleEnd.topoImports` over the cheaply-extracted import map, so the orchestrator can compile a
+-- | dependency before its dependents (the worker reads each dependency's `.pmi` from `--deps`).
+topoBySrcImports
+  :: forall a
+   . Array { name :: String, imports :: Array String | a }
+  -> Array { name :: String, imports :: Array String | a }
+topoBySrcImports inputs = Array.mapMaybe (\n -> Map.lookup n byName) ordered.out
+  where
+  byName = Map.fromFoldable (map (\i -> Tuple i.name i) inputs)
+  names = Set.fromFoldable (map _.name inputs)
+  depsOf n = case Map.lookup n byName of
+    Nothing -> []
+    Just i -> Array.filter (\d -> d /= n && Set.member d names) (Array.nub i.imports)
+  ordered = Array.foldl visit { seen: Set.empty, out: [] } (map _.name inputs)
+  visit acc n
+    | Set.member n acc.seen = acc
+    | otherwise =
+        let
+          after = Array.foldl visit (acc { seen = Set.insert n acc.seen }) (depsOf n)
+        in
+          after { out = Array.snoc after.out n }
+
+-- | ADR 0038 Phase C (C1): drive the `purwc` worker as a subprocess per module (dependency order),
+-- | each reading its dependencies' `.pmi` interfaces from the shared `_build` dir, then assemble the
+-- | same `Linked` record the in-process per-module core produces — so the existing packaging tail
+-- | (foreign resolution, merge, internalise+DCE, loader) is reused unchanged. The link glue and the
+-- | cross-module label-collision check are done in-process here (Binaryen + `labelCollisions`).
+orchestrateModules
+  :: forall r a
+   . FilePath
+  -> BuildOption
+  -> FilePath
+  -> Array { name :: String, imports :: Array String | a }
+  -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
+orchestrateModules cliRoot args buildDir srcInfos = do
+  let ordered = topoBySrcImports srcInfos
+  mkdirP buildDir
+  purwcPath <- joinPath [ cliRoot, "purwc", "index.dev.js" ]
+  for_ ordered \m -> do
+    info (Log.cyan (Fmt.fmt @" >  compiling {name} (purwc)" { name: m.name }))
+    execFile "node"
+      ( [ purwcPath, "compile", "-e", m.name, "-I", args.input, "--deps", buildDir, "-O", buildDir ]
+          <> (if args.debug then [ "-g" ] else [])
+          <> (if args.noOpt then [ "--no-opt" ] else [])
+      )
+  metas <- for ordered \m -> do
+    mTxt <- readText =<< joinPath [ buildDir, m.name <> ".link.json" ]
+    case mTxt >>= decodeLinkMeta of
+      Just lm -> pure { name: m.name, meta: lm }
+      Nothing -> logAndThrow ("orchestrate: missing/corrupt link metadata for " <> m.name)
+  pmis <- for ordered \m -> do
+    mb <- readBinary =<< joinPath [ buildDir, m.name <> ".pmi" ]
+    case mb >>= (hush <<< decodePmi) of
+      Just e -> pure e
+      Nothing -> logAndThrow ("orchestrate: missing/corrupt .pmi for " <> m.name)
+  -- Cross-module label-collision check (the worker dropped the whole-program check in M2b; the
+  -- orchestrator runs it over the union of every module's `.pmi` labels, before the merge).
+  let allLabels = Object.fromFoldable (pmis >>= \e -> (Object.toUnfoldable e.labels :: Array (Tuple String Int)))
+  case Array.head (labelCollisions allLabels) of
+    Just clash -> pure (Left ("label hash collision across modules: " <> joinWith ", " clash))
+    Nothing -> do
+      glue <- liftEffect
+        (buildLinkGlue (Array.mapMaybe (\m -> (\e -> { moduleName: m.name, cafInitExport: e }) <$> m.meta.cafInitExport) metas))
+      gluePath <- joinPath [ buildDir, "link.glue.wasm" ]
+      preWritten <- for ordered \m -> do
+        p <- joinPath [ buildDir, m.name <> ".wasm" ]
+        pure (Tuple p m.name)
+      pure
+        ( Right
+            { foreignModules: Array.nub (metas >>= _.meta.foreignModules)
+            , cafInit: glue.cafInit
+            , cafOwner: glue.mod
+            , ownerPath: gluePath
+            , ownerMergeName: "link"
+            , preWritten
+            , cleanup: ([] :: Array FilePath)
+            , cacheWrites: ([] :: Array CacheWrite)
+            , crossModuleExports: Array.nub (metas >>= _.meta.crossModuleExports)
+            }
+        )
 
 buildCmd :: forall r. FilePath -> FilePath -> BuildOption -> Run (ENV + FS + PROC + LOG + EFFECT + r) Unit
 buildCmd cliRoot binaryenBinDir args = do
@@ -137,6 +258,13 @@ buildCmd cliRoot binaryenBinDir args = do
         , extra: if Array.null injected then "" else Fmt.fmt @" (+{k} ulib internal)" { k: Array.length injected }
         }
     )
+  -- ADR 0038 Phase C (C1): the subprocess orchestrator targets non-ulib programs whose corefn all
+  -- lives under `--input` (a ulib-shadowed module's corefn is in the lib, which `purwc -I` can't
+  -- find), and has no in-process optimized MIR for `--dump-mir`. Fail fast otherwise.
+  when args.orchestrate do
+    when (isJust args.dumpMir) (logAndThrow "--orchestrate does not support --dump-mir (C1).")
+    when (not (Array.null injected) || not (Set.isEmpty libSourced))
+      (logAndThrow "--orchestrate (C1) does not support ulib-shadowed modules; build without a ulib lib, or use --per-module-codegen.")
   -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
   -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
   -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
@@ -252,7 +380,8 @@ buildCmd cliRoot binaryenBinDir args = do
         built <- liftEffect (finishLink opts roots allSigs foreignNames externs modules cacheWrites)
         pure (map wholeLinked built)
   linkResult <-
-    if useCache then do
+    if args.orchestrate then orchestrateModules cliRoot args cacheDir srcInfos
+    else if useCache then do
       -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
       -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.
       cachedMap <-
@@ -441,7 +570,7 @@ buildCmd cliRoot binaryenBinDir args = do
       -- `wasm-merge`; the oracle never exported dependency-module functions) and run a cheap DCE pass
       -- (`remove-unused-module-elements`) to drop the now-unreachable, matching the oracle's surface.
       -- The whole-program path already optimised before merge, so this is per-module only.
-      when (args.perModuleCodegen && opts.optimize) do
+      when ((args.perModuleCodegen || args.orchestrate) && opts.optimize) do
         info (Log.blue "Internalizing cross-module exports + DCE…")
         readBinary wasmPath >>= case _ of
           Nothing -> logAndThrow ("merged wasm not found: " <> wasmPath)

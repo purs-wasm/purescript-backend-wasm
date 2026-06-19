@@ -91,6 +91,13 @@ buildOptionsParser =
           \whole-program one. Experimental; differential-tested against the default for\n\
           \behaviour parity. The per-module engine moves to the standalone `purwc` later."
           # ArgParser.boolean
+    , orchestrate:
+        ArgParser.flag [ "--orchestrate" ]
+          "ADR 0038 Phase C: drive the standalone `purwc` worker as a subprocess per module\n\
+          \(in dependency order, each reading its dependencies' .pmi interfaces only) and link\n\
+          \the results, instead of compiling in-process. Experimental (C1: sequential, non-ulib,\n\
+          \dev only)."
+          # ArgParser.boolean
     , dumpMir:
         ArgParser.argument [ "--dump-mir" ]
           "Dump the given module's middle IR (MIR) at the optimizer's snapshot points\n\

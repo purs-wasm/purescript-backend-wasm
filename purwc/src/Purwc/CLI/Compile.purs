@@ -16,15 +16,18 @@ module Purwc.CLI.Compile
 
 import Prelude
 
+import Data.Argonaut.Core (fromArray, fromObject, fromString, jsonNull, stringify)
 import Data.Array as Array
 import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Set as Set
 import Data.String as Str
 import Data.Traversable (for)
+import Data.Tuple (Tuple(..))
 import Fmt as Fmt
+import Foreign.Object as Object
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames)
-import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, writeBinary)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log as Log
 import PureScript.Backend.Wasm.CLI.Externs (readExterns)
 import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
@@ -106,6 +109,18 @@ compileCmd cliRoot binaryenBinDir args = do
       wasmPath <- joinPath [ args.outDir, target <> ".wasm" ]
       writeBinary wasmPath art.bytes
       info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: wasmPath })
+      -- The orchestrator-facing link metadata (ADR 0038 Phase C): the per-module facts the
+      -- `purs-wasm` orchestrator needs to build the link glue, resolve foreigns, and internalise
+      -- cross-module exports after `wasm-merge`. Kept out of the `.pmi` (which is the dependent-facing
+      -- interface); a small ephemeral JSON sidecar, read once by the orchestrator.
+      linkPath <- joinPath [ args.outDir, target <> ".link.json" ]
+      writeText linkPath
+        ( stringify $ fromObject $ Object.fromFoldable
+            [ Tuple "cafInitExport" (maybe jsonNull fromString art.cafInitExport)
+            , Tuple "foreignModules" (fromArray (map fromString art.foreignModules))
+            , Tuple "crossModuleExports" (fromArray (map fromString art.crossModuleExports))
+            ]
+        )
       when args.text do
         watPath <- joinPath [ args.outDir, target <> ".wat" ]
         execFile (wasmDisBin binaryenBinDir) [ wasmPath, "-o", watPath, "--all-features" ]

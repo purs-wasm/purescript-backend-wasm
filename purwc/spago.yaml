@@ -1,6 +1,7 @@
 package:
   name: purwc
   dependencies:
+    - argonaut-core
     - argparse-basic
     - arrays
     - cli-lib
@@ -9,6 +10,7 @@ package:
     - effect
     - either
     - fmt
+    - foreign-object
     - maybe
     - node-path
     - node-process

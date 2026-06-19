@@ -106,12 +106,13 @@ for (const c of CORPUS) {
     const corefn = tmp(`cf`);
     const oracleOut = tmp(`oracle`);
     const purwcOut = tmp(`purwc`);
-    tmps.push(corefn, oracleOut, purwcOut);
+    const orchOut = tmp(`orch`);
+    tmps.push(corefn, oracleOut, purwcOut, orchOut);
 
     sh("spago", ["build", "-p", c.pkg, "--output", corefn]);
     // oracle: whole-program per-module core → _build/<M>.{pmi,wasm} + merged index.wasm
     sh("node", ["purs-wasm/index.dev.js", "build", "--per-module-codegen", "-e", c.entry, "-I", corefn, "-O", oracleOut, "--force"]);
-    // candidate: compile each module in dep order; a dependent reads earlier modules' .pmi (--deps)
+    // candidate A: compile each module in dep order; a dependent reads earlier modules' .pmi (--deps)
     for (const m of c.modules) {
       sh("node", ["purwc/index.dev.js", "compile", "-e", m, "-I", corefn, "--deps", purwcOut, "-O", purwcOut]);
     }
@@ -120,6 +121,8 @@ for (const c of CORPUS) {
     // merge the per-module wasms (by dotted module name, matching the cross-module import fields)
     const mergeArgs = c.modules.flatMap((m) => [join(purwcOut, `${m}.wasm`), m]);
     sh(wasmMerge, [...mergeArgs, "-o", join(purwcOut, "merged.wasm"), "--all-features"]);
+    // candidate B: the real Phase-C orchestrator (purs-wasm spawns purwc per module + links)
+    sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", c.entry, "-I", corefn, "-O", orchOut, "--force"]);
 
     // every module's `.pmi` must byte-match the oracle's (interface is dependent-independent);
     // the per-module `.wasm` byte match is reported but NOT required (over-export divergence).
@@ -129,12 +132,13 @@ for (const c of CORPUS) {
     const imports = c.imports ?? {};
     const behA = await behaviour(join(oracleOut, "index.wasm"), c.calls, imports);
     const behB = await behaviour(join(purwcOut, "merged.wasm"), c.calls, imports);
-    const behEq = behA === behB;
+    const behC = await behaviour(join(orchOut, "index.wasm"), c.calls, imports);
+    const behEq = behA === behB && behA === behC;
 
     if (!pmiEq || !behEq || wrotePmo) failures++;
     const pmoTag = wrotePmo ? " | .pmo:WROTE(should not!)" : "";
-    console.log(`pmi ${pmiEq ? "✓ byte-identical" : "✗ DIFFER"} | wasm ${wasmEq ? "byte-identical" : "diverges (over-export, ok)"} | behaviour ${behEq ? "match" : "MISMATCH"}${pmoTag}`);
-    if (!behEq) console.log(`    oracle: ${behA}\n    purwc:  ${behB}`);
+    console.log(`pmi ${pmiEq ? "✓ byte-identical" : "✗ DIFFER"} | wasm ${wasmEq ? "byte-identical" : "diverges (over-export, ok)"} | manual-merge+orchestrate behaviour ${behEq ? "match" : "MISMATCH"}${pmoTag}`);
+    if (!behEq) console.log(`    oracle:      ${behA}\n    manualMerge: ${behB}\n    orchestrate: ${behC}`);
   } catch (e) {
     failures++;
     console.log(`ERROR: ${e?.message ?? e}`);
