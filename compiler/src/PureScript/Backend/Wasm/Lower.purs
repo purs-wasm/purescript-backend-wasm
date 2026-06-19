@@ -50,6 +50,7 @@ import Data.Char (toCharCode)
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
 import Control.Alt ((<|>))
+import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Set (Set)
 import Data.Set as Set
@@ -69,6 +70,7 @@ import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo, ModuleInfo, ctorSig, peelAbs, qualifiedFuncName, qualifiedKey, qualifiedKeyOf)
 import PureScript.Backend.Wasm.Lower.Unbox (assignProgramReps)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (freeVars)
+import PureScript.Backend.Wasm.MiddleEnd.Subst (substMany)
 import PureScript.Backend.Wasm.MiddleEnd.IR (Bind(..), Module)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn (Binder(..), Literal(..), Qualified(..))
@@ -451,6 +453,16 @@ lowerCoreLetK env binds body finish = case Array.uncons binds of
           { codeName, captures } <- liftLambda (Just r.ident) env param (reAbs rest recBody)
           bindRhs (RMkClosure codeName captures) \fAtom ->
             lowerCoreLetK (env { locals = Object.insert r.ident fAtom env.locals }) tail body finish
+    [ r ]
+      -- A single recursive binding that is neither a syntactic lambda (closure path above)
+      -- nor a known callable (eta path in `lowerRecBind`) is a recursive *value* — tie its
+      -- knot through `newWithSelf` rather than `LetRec`, which only patches closures. A
+      -- *saturated constructor* is the exception: that is genuine recursive *data* (ADR 0006,
+      -- CAF-globalized at top level; a cyclic local one diverges), so leave it to the reject
+      -- path rather than silently allocating a self-referential cell with a null placeholder.
+      | Nothing <- recBindEtaArity env (recBindFunctionForm r.expr)
+      , not (recBindIsData env (recBindFunctionForm r.expr)) ->
+          lowerRecValueLet env r tail body finish
     _ -> do
       -- Mutual recursion: pre-allocate a slot per binding so each member's closure
       -- can refer to its siblings (as forward references resolved by the `LetRec`
@@ -463,6 +475,58 @@ lowerCoreLetK env binds body finish = case Array.uncons binds of
       recBindsIR <- traverse (lowerRecBind env') bound
       rest <- lowerCoreLetK env' tail body finish
       pure (LetRec recBindsIR rest)
+
+-- | Legalize a single-binding recursive *value* `let` — `let rec go = rhs in body` whose
+-- | RHS denotes a value, not a function (so neither the closure path nor the eta path in
+-- | `lowerRecBind` applies; e.g. `Control.Lazy.fix f = go where go = f (defer \_ -> go)`).
+-- | Lowering's `LetRec` knot-tying only back-patches closures, so we instead tie the knot
+-- | through the `Effect.Ref.newWithSelf` primitive (ADR 0017): allocate a self-referential
+-- | cell whose content is `rhs` with each self-reference rewritten to `read self`, then
+-- | bind `go` to `read cell`. The rewrite is then re-fed through `lowerCoreLetK` as two
+-- | ordinary `NonRec` bindings.
+-- |
+-- | Sound only when the self-reference is *lazy* — guarded behind a thunk, as `defer` is.
+-- | A strict self-reference reads the null placeholder and traps, which is the faithful
+-- | image of a binding that already diverges under this IR's strict evaluation.
+lowerRecValueLet
+  :: Env
+  -> M.RecBinding
+  -> Array Bind
+  -> M.Expr
+  -> (Env -> M.Expr -> Lower AnfExpr)
+  -> Lower AnfExpr
+lowerRecValueLet env r tail body finish = do
+  Slot nCell <- fresh
+  Slot nSelf <- fresh
+  let cellId = "$reccell" <> show nCell
+  let selfId = "$recself" <> show nSelf
+  let rhs' = substMany (Map.singleton r.ident (readRef selfId)) r.expr
+  lowerCoreLetK env
+    ( [ NonRec Nothing cellId (newWithSelf (M.Abs [ selfId ] rhs'))
+      , NonRec Nothing r.ident (readRef cellId)
+      ] <> tail
+    )
+    body
+    finish
+  where
+  -- The trailing `LitInt 0` is the perform-unit the effectful-intrinsic ABI expects (ADR 0018).
+  effectRef name args = M.App (M.Var (Qualified (Just [ "Effect", "Ref" ]) name)) (args <> [ M.Lit (LitInt 0) ])
+  readRef v = effectRef "read" [ M.Var (Qualified Nothing v) ]
+  newWithSelf fn = effectRef "newWithSelf" [ fn ]
+
+-- | Does a recursive binding's defining expression denote genuine recursive *data* — a
+-- | saturated (or over-applied) constructor, or a `Constructor` node — rather than a value
+-- | that could be tied lazily? Such a binding builds a cyclic data structure, which under
+-- | this IR's strict evaluation is either a top-level CAF (globalized, ADR 0006) or a
+-- | divergent local; either way it is not legalized through the `newWithSelf` knot-tie.
+recBindIsData :: Env -> M.Expr -> Boolean
+recBindIsData env = case _ of
+  M.Constructor _ _ _ -> true
+  M.App (M.Var q) args
+    | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors -> Array.length args >= info.arity
+  M.Var q
+    | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors -> info.arity == 0
+  _ -> false
 
 -- | Lower one member of a mutually-recursive `let` group, given its pre-allocated
 -- | slot. Captures are resolved in an environment where every group member is

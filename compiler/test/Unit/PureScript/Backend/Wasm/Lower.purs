@@ -198,6 +198,21 @@ spec = describe "PureScript.Backend.Wasm.Lower (lowering)" do
         Left _ -> pure unit
         Right _ -> fail "expected lowering to reject a saturated recursive constructor as a value"
 
+    it "legalizes a recursive *value* let through the newWithSelf knot-tie" do
+      -- f g = let go = g go in go
+      -- `go` is a recursive *value* — not a syntactic lambda, and `g` is an unknown local
+      -- (not a constructor), so it is neither closure-lifted nor eta-expanded, and `LetRec`
+      -- cannot patch a non-closure. Lowering ties the knot through `Effect.Ref.newWithSelf`
+      -- and `read` (emitted as primitives), so it lowers rather than being rejected (the
+      -- shape `Control.Lazy.fix f = go where go = f (defer \_ -> go)` reduces to).
+      let f = def "f" (lam "g" (letRec "go" (appE (lv "g") (lv "go")) (lv "go")))
+      case lower [ f ] of
+        Left err -> fail (show err)
+        Right prog -> case exported "f" prog of
+          Nothing -> fail "expected an exported function f"
+          -- the knot-tie emits the `newWithSelf`/`read` Ref primitives
+          Just fn -> Array.any isPrim (allRhs fn.body) `shouldEqual` true
+
   describe "data types" do
     it "assigns constructor tags by declaration order and erases the constructors" do
       -- data D = A | B Int ; mkA = A ; mkB x = B x
