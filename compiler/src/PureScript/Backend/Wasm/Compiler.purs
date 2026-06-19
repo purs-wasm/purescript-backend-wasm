@@ -41,7 +41,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Codegen (buildLinkGlue, buildModule, buildModuleSingle)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
-import PureScript.Backend.Wasm.Lower (lowerModules, lowerProgramFragments)
+import PureScript.Backend.Wasm.Lower (DepInterface, lowerModuleWithInterfaces, lowerModules, lowerProgramFragments)
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels)
 import PureScript.Backend.Wasm.Lower.IR (Rep)
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
@@ -238,58 +238,49 @@ type ModuleArtifact =
   , crossModuleExports :: Array String
   }
 
--- | Lower + codegen ONE module in isolation (ADR 0038 Phase B). `target` is the module's finalized
--- | MIR; the target is its own root; deps are non-roots. Reuses `lowerProgramFragments` over
--- | `[deps…, target]` and codegens only the target's fragment via `buildModuleSingle` (cross-module
--- | calls → imports, this module's referenced functions → exports). Emits NO link glue and does NO
--- | merge — those are the orchestrator's job (Phase C). At M1 there are no dependencies, so this is
--- | byte-identical to the whole-program per-module oracle for a dependency-free module.
--- |
--- | `depFinalMods` is PROVISIONAL. Lowering the target needs, for every cross-module callee it
--- | references, that callee's *signature* — `collectFuncs` (key→arity), `collectCtors`
--- | (tag/arity/fieldReps), `collectDictCtors`/`collectEnumCtors` — or `lowerApp` throws
--- | `unknown callee`. The optimize summary alone is insufficient (`DictElim.summarize` drops whole
--- | large-pure-function decls, losing their arity). It is NOT the bodies that are needed, only the
--- | signatures; `keyHomeModule` is derivable from the qualified key. So ADR 0038 M2 replaces this
--- | `Array M.Module` with a `.pmi`-derived lowering interface, making the worker consume `.pmi`
--- | ONLY — never a dependency's object code. Passing full finalMods here is the M1 stopgap.
+-- | Lower + codegen ONE module in isolation (ADR 0038 Phase B M2b). `target` is the module's
+-- | finalized MIR; `deps` are its dependencies' lowering INTERFACES — loaded from their `.pmi`, never
+-- | their `.pmo`. `lowerModuleWithInterfaces` builds the lowering context by merging the target's own
+-- | `collect*` tables with the dep interfaces, then codegens only the target via `buildModuleSingle`
+-- | (cross-module calls → imports, the target's functions → over-exported for merge). Emits NO link
+-- | glue and does NO merge — the orchestrator's job (Phase C). A dependency-free module is
+-- | byte-identical to the whole-program per-module oracle; a dependency-having one is
+-- | behaviour-identical (over-export makes its rep-pinning, hence bytes, diverge).
 compileModuleWasm
   :: CompileOptions
   -> Object ForeignSig
   -> Set String
   -> Array ExternsFile
-  -> Array M.Module
+  -> Array DepInterface
   -> M.Module
   -> Effect (Either String ModuleArtifact)
-compileModuleWasm opts foreignSigs' foreignNames externs depFinalMods target =
-  case lowerProgramFragments (ctorFieldReps externs) foreignSigs' foreignNames [ target.name ] (Array.snoc depFinalMods target) of
+compileModuleWasm opts foreignSigs' foreignNames externs deps target =
+  case lowerModuleWithInterfaces (ctorFieldReps externs) foreignSigs' foreignNames deps target of
     Left err -> pure (Left ("linking failed: " <> show err))
-    Right lowered -> case Array.find (\f -> f.moduleName == target.name) lowered.fragments of
-      Nothing -> pure (Left ("internal: target fragment not lowered: " <> joinWith "." target.name))
-      Just f -> do
-        let dotted = joinWith "." f.moduleName
-        let meta = { moduleName: dotted, keyHomeModule: lowered.keyHomeModule, crossModuleRefs: lowered.crossModuleRefs }
-        single <- buildModuleSingle meta { funcs: f.funcs, labels: lowered.labels, exportSigs: f.exportSigs }
-        ok <- B.validate single.mod
-        if not ok then do
-          wat <- B.emitText single.mod
-          B.dispose single.mod
-          pure (Left ("per-module codegen: " <> dotted <> " failed validation:\n" <> wat))
-        else do
-          when opts.optimize (B.optimize single.mod)
-          bytes <- B.emitBinary single.mod
-          B.dispose single.mod
-          -- Over-export the cross-module-referenced keys HOMED in this module (merge resolves them;
-          -- the orchestrator internalises + DCEs post-merge) plus this module's own `caf_init$M`.
-          let homed = Set.toUnfoldable (Set.filter (\k -> Object.lookup k lowered.keyHomeModule == Just dotted) lowered.crossModuleRefs)
-          pure
-            ( Right
-                { bytes
-                , cafInitExport: single.cafInitExport
-                , foreignModules: single.foreignModules
-                , crossModuleExports: homed <> maybe [] (\e -> [ e ]) single.cafInitExport
-                }
-            )
+    Right lowered -> do
+      let dotted = joinWith "." target.name
+      let meta = { moduleName: dotted, keyHomeModule: lowered.keyHomeModule, crossModuleRefs: lowered.crossModuleRefs }
+      single <- buildModuleSingle meta { funcs: lowered.fragment.funcs, labels: lowered.labels, exportSigs: lowered.fragment.exportSigs }
+      ok <- B.validate single.mod
+      if not ok then do
+        wat <- B.emitText single.mod
+        B.dispose single.mod
+        pure (Left ("per-module codegen: " <> dotted <> " failed validation:\n" <> wat))
+      else do
+        when opts.optimize (B.optimize single.mod)
+        bytes <- B.emitBinary single.mod
+        B.dispose single.mod
+        -- Over-export the cross-module-referenced keys HOMED in this module (merge resolves them;
+        -- the orchestrator internalises + DCEs post-merge) plus this module's own `caf_init$M`.
+        let homed = Set.toUnfoldable (Set.filter (\k -> Object.lookup k lowered.keyHomeModule == Just dotted) lowered.crossModuleRefs)
+        pure
+          ( Right
+              { bytes
+              , cafInitExport: single.cafInitExport
+              , foreignModules: single.foreignModules
+              , crossModuleExports: homed <> maybe [] (\e -> [ e ]) single.cafInitExport
+              }
+          )
 
 -- | The lowering-interface tables of ONE module (ADR 0038 Phase B): the symbol signatures a
 -- | dependent merges into its `ModuleInfo` to lower this module's cross-module callees — derived

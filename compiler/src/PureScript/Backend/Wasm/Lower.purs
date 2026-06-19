@@ -34,8 +34,11 @@ module PureScript.Backend.Wasm.Lower
   ( lowerModule
   , lowerModules
   , lowerProgramFragments
+  , lowerModuleWithInterfaces
   , ModuleFragment
   , LoweredProgram
+  , DepInterface
+  , LoweredTarget
   , module ReExport
   ) where
 
@@ -50,7 +53,8 @@ import Control.Alt ((<|>))
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Set (Set)
 import Data.Set as Set
-import Data.String (joinWith)
+import Data.String (Pattern(..), joinWith)
+import Data.String as Str
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), fst, snd)
 import Foreign.Object (Object)
@@ -850,3 +854,74 @@ lowerOneModule info reachable crossModuleRefs roots m = do
           mFuncs
       )
   pure (assignProgramReps pins mFuncs)
+
+-- | A dependency's lowering interface (ADR 0038 Phase B M2b): the symbol tables a dependent merges
+-- | into its `ModuleInfo` to resolve cross-module callees — loaded from the dep's `.pmi`, never its
+-- | `.pmo`. Keys are module-qualified, so merging is a left-biased `Object.union`. (No `labels`: a
+-- | dependent hashes its OWN labels; a dep's labels matter only to the orchestrator's pre-merge
+-- | collision check.)
+type DepInterface =
+  { funcs :: Object Int
+  , ctors :: Object CtorInfo
+  , dictCtors :: Object Unit
+  , enumCtors :: Object Unit
+  , foreignSigs :: Object ForeignImport
+  , foreignNames :: Array String
+  }
+
+-- | One target module lowered against its dependency interfaces, with the link facts a per-module
+-- | codegen needs. `crossModuleRefs` over-exports ALL the target's own functions (a single-module
+-- | worker cannot see which a dependent calls; the orchestrator internalises + DCEs the unused after
+-- | merge), so a dependency-having module's wasm is BEHAVIOUR-identical to the whole-program oracle,
+-- | not byte-identical.
+type LoweredTarget =
+  { fragment :: ModuleFragment
+  , labels :: Array (Tuple String Int)
+  , keyHomeModule :: Object String
+  , crossModuleRefs :: Set String
+  }
+
+-- | Lower ONE target module against its dependencies' INTERFACES (ADR 0038 Phase B M2b) — no access
+-- | to any dependency body. `info` is the target's own `collect*` tables merged with the dep
+-- | interfaces (qualified keys ⇒ a plain `Object.union`); only the target's reachable functions are
+-- | lowered. A cross-module callee resolves via `info` (`knownFuncs`/`ctors`/`foreignSigs`); a callee
+-- | absent from every table is a hard `unknown callee` error (so the dep `.pmi` must be complete).
+-- | No whole-program label-collision check (that is the orchestrator's pre-merge job, Phase C); only
+-- | a local self-check.
+lowerModuleWithInterfaces
+  :: Object (Array Rep)
+  -> Object ForeignImport
+  -> Set String
+  -> Array DepInterface
+  -> Module
+  -> Either LowerError LoweredTarget
+lowerModuleWithInterfaces fieldReps foreignSigs foreignNames deps target = do
+  let
+    tDict = collectDictCtors [ target ]
+    tLabels = collectLabels [ target ]
+    info =
+      { knownFuncs: foldl (\acc d -> Object.union acc d.funcs) (collectFuncs tDict [ target ]) deps
+      , ctors: foldl (\acc d -> Object.union acc d.ctors) (collectCtors fieldReps [ target ]) deps
+      , dictCtors: foldl (\acc d -> Object.union acc d.dictCtors) tDict deps
+      , enumCtors: foldl (\acc d -> Object.union acc d.enumCtors) (collectEnumCtors [ target ]) deps
+      , labelIds: tLabels
+      , foreignSigs: foldl (\acc d -> Object.union acc d.foreignSigs) foreignSigs deps
+      , foreignNames: foldl (\acc d -> Set.union acc (Set.fromFoldable d.foreignNames)) foreignNames deps
+      }
+    decls = functionDecls tDict target
+    rootKeys = map (\(Tuple ident _) -> qualifiedKey target.name ident) decls
+    functions = Object.fromFoldable (decls <#> \(Tuple ident e) -> Tuple (qualifiedKey target.name ident) e)
+    reachable = reachableFunctions functions rootKeys
+    -- over-export every own function (the worker cannot see its dependents); merge-time DCE prunes.
+    crossModuleRefs = Set.fromFoldable rootKeys
+    dotted = joinWith "." target.name
+    homeOf k = maybe k (\i -> Str.take i k) (Str.lastIndexOf (Pattern ".") k)
+    keyHomeModule = Object.fromFoldable
+      ( map (\k -> Tuple k dotted) rootKeys
+          <> (deps >>= \d -> map (\k -> Tuple k (homeOf k)) (Object.keys d.funcs))
+      )
+  case Array.head (labelCollisions tLabels) of
+    Just clash -> Left (LabelHashCollision clash)
+    Nothing -> pure unit
+  fragment <- lowerOneFragment info reachable crossModuleRefs [ target.name ] info.foreignSigs target
+  pure { fragment, labels: Object.toUnfoldable tLabels, keyHomeModule, crossModuleRefs }

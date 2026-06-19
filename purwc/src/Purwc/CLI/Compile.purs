@@ -1,21 +1,30 @@
 -- | The `compile` command (ADR 0038 Phase B): compile ONE module in isolation — load its
--- | `corefn.json` + `externs.cbor`, optimize it against its dependencies' `.pmi` summaries
--- | (`compileModuleMir`), write its `.pmi`/`.pmo`, then lower + codegen it (`compileModuleWasm`) and
--- | write its `.wasm` (and `.wat` on `--text`). The worker emits NO link glue and does NO merge —
--- | those are the `purs-wasm` orchestrator's job (Phase C). This is the M1 slice: dependency loading
--- | is deferred (M2), so `depSummaries`/`depFinalMods` are empty here.
+-- | `corefn.json` + `externs.cbor` and its dependencies' `.pmi` INTERFACES (from `--deps`), optimize
+-- | it against the deps' summaries (`compileModuleMir`), then lower + codegen it against the deps'
+-- | lowering interfaces (`compileModuleWasm`), writing its `.pmi` + `.wasm` (+ `.wat` on `--text`).
+-- | The worker reads ONLY `.pmi` from its dependencies — never their `.pmo` — and emits NO link glue
+-- | and does NO merge (the `purs-wasm` orchestrator's job, Phase C). It writes NO `.pmo`: that object
+-- | half is being retired now the per-module `.wasm` is the compiled output and the `.pmi` is the
+-- | complete interface.
+-- |
+-- | `--deps` is expected to hold exactly this module's transitive dependency `.pmi`s (the orchestrator
+-- | provides the closure). The summary fold is order-independent (each summary already encodes its
+-- | module's final optimization context), so no topological ordering is needed here.
 module Purwc.CLI.Compile
   ( compileCmd
   ) where
 
 import Prelude
 
-import Data.Either (Either(..))
+import Data.Array as Array
+import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Set as Set
+import Data.String as Str
+import Data.Traversable (for)
 import Fmt as Fmt
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames)
-import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, mkdirP, readText, writeBinary)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, writeBinary)
 import PureScript.Backend.Wasm.CLI.Effect.Log as Log
 import PureScript.Backend.Wasm.CLI.Externs (readExterns)
 import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
@@ -26,8 +35,7 @@ import PureScript.Backend.Wasm.Compiler (compileModuleWasm, effectfulForeigns, m
 import PureScript.Backend.Wasm.Externs (ctorFieldReps)
 import PureScript.Backend.Wasm.MiddleEnd (compileModuleMir, liftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (encodePmi)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (encodePmo)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (PmiEntry, decodePmi, encodePmi)
 import Purwc.CLI.Options.Types (CompileOption)
 import Run (EFFECT, Run, liftEffect)
 import Type.Row (type (+))
@@ -50,18 +58,30 @@ compileCmd cliRoot binaryenBinDir args = do
   let foreignNames = corefnForeignNames src
 
   -- The target's externs (type info / ctor field reps) + its foreign calling-convention signatures.
-  -- M1 has no dependencies, so only the target contributes.
   libPath <- resolveLibPath cliRoot Nothing
   externs <- map (maybe [] (\e -> [ e ])) (readExterns =<< joinPath [ args.input, target, "externs.cbor" ])
   allSigs <- buildForeignSigs args.input libPath externs [ { name: mn, foreignNames } ]
   let eff = effectfulForeigns allSigs
   let foreignNameSet = Set.fromFoldable (map (\base -> target <> "." <> base) foreignNames)
 
-  -- Optimize the single module (no dependency summaries in M1), then persist its interface/object.
-  let out = compileModuleMir eff.names eff.arities { sourceHash, lifted: liftModule decoded, depSummaries: [] }
+  -- The dependency interfaces (`.pmi` ONLY). The summary half feeds the optimizer's context; the
+  -- lowering-table half feeds codegen's cross-module callee resolution.
+  depEntries <- loadDepInterfaces args.depsDir
+  let depSummaries = map _.summary depEntries
+  let
+    depInterfaces = depEntries <#> \e ->
+      { funcs: e.funcs
+      , ctors: e.ctors
+      , dictCtors: e.dictCtors
+      , enumCtors: e.enumCtors
+      , foreignSigs: e.foreignSigs
+      , foreignNames: e.foreignNames
+      }
+
+  -- Optimize the single module against its dependency summaries, then persist its interface.
+  let out = compileModuleMir eff.names eff.arities { sourceHash, lifted: liftModule decoded, depSummaries }
   mkdirP args.outDir
   pmiPath <- joinPath [ args.outDir, target <> ".pmi" ]
-  pmoPath <- joinPath [ args.outDir, target <> ".pmo" ]
   let iface = moduleInterface (ctorFieldReps externs) allSigs (Set.toUnfoldable foreignNameSet) out.finalMod
   writeBinary pmiPath
     ( encodePmi
@@ -78,10 +98,9 @@ compileCmd cliRoot binaryenBinDir args = do
         , labels: iface.labels
         }
     )
-  writeBinary pmoPath (encodePmo out.finalMod)
 
-  -- Lower + codegen the single module (no dependency finalMods in M1) and write its wasm.
-  liftEffect (compileModuleWasm opts allSigs foreignNameSet externs [] out.finalMod) >>= case _ of
+  -- Lower + codegen the single module against its dependency interfaces, and write its wasm.
+  liftEffect (compileModuleWasm opts allSigs foreignNameSet externs depInterfaces out.finalMod) >>= case _ of
     Left err -> logAndThrow err
     Right art -> do
       wasmPath <- joinPath [ args.outDir, target <> ".wasm" ]
@@ -92,3 +111,18 @@ compileCmd cliRoot binaryenBinDir args = do
         execFile (wasmDisBin binaryenBinDir) [ wasmPath, "-o", watPath, "--all-features" ]
         info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: watPath })
       info $ Log.strong (Log.green (Fmt.fmt @"✓ compiled {m}" { m: target }))
+
+-- | Load every `.pmi` under `depsDir` (the transitive dependency interfaces). An empty `depsDir` or
+-- | an unreadable/corrupt `.pmi` simply contributes nothing — a missing dependency surfaces later as
+-- | a hard `unknown callee` from lowering, not a silent miscompile.
+loadDepInterfaces :: forall r. FilePath -> Run (FS + EFFECT + r) (Array PmiEntry)
+loadDepInterfaces depsDir
+  | depsDir == "" = pure []
+  | otherwise =
+      do
+        names <- maybe [] (Array.filter (isSuffix ".pmi")) <$> readDir depsDir
+        map Array.catMaybes $ for names \name -> do
+          bytes <- readBinary =<< joinPath [ depsDir, name ]
+          pure (bytes >>= (hush <<< decodePmi))
+      where
+      isSuffix suf s = Str.drop (Str.length s - Str.length suf) s == suf

@@ -1,21 +1,24 @@
 # 0038. Separated compilation: the `purwc` worker, the `purs-wasm` orchestrator, and the shared `cli-lib`
 
-- Status: Accepted; **Phase A + Phase B M1 + M2a implemented**. Phase A (2026-06-18) — `cli-lib`
+- Status: Accepted; **Phase A + Phase B M1/M2a/M2b implemented**. Phase A (2026-06-18) — `cli-lib`
   extracted, three CLIs re-homed (behaviour-neutral). Phase B M0+M1 (2026-06-19) — the two
   single-module compiler APIs (`MiddleEnd.compileModuleMir` = optimize one module against its
   dependency summaries; `Compiler.compileModuleWasm` = lower+codegen one module) and the `purwc
-  compile` worker CLI, verified byte-identical to the per-module oracle on a dependency-free fixture.
-  Phase B M2a (2026-06-19) — **`.pmi` extended to the complete module interface** (`.pmi` v2): besides
-  the optimization summary it now carries the lowering interface (`funcs`/`ctors`/`dictCtors`/
+  compile` worker CLI. Phase B M2a — **`.pmi` extended to the complete module interface** (`.pmi` v2):
+  besides the optimization summary it carries the lowering interface (`funcs`/`ctors`/`dictCtors`/
   `enumCtors`/`foreignSigs`/`foreignNames`) + `labels`, all derived from a module's own finalized MIR
-  (`Compiler.moduleInterface`) and written at both `.pmi` sites — so a dependent can lower against an
-  interface, never a dependency's `.pmo`. **Course correction**: the M1 stopgap of feeding deps' full
-  `.pmo` to `compileModuleWasm` is being replaced by `.pmi`-only consumption (`.pmo` is being retired —
-  no consumer remains once lowering reads the interface). Phase B M2b (consume the interface:
-  `lowerModuleWithInterfaces` + `.pmi`-only `compileModuleWasm` + purwc `--deps` + drop worker `.pmo`,
-  verified on a 2-module fixture by behaviour parity), M3, and Phase C (orchestrator + pre-merge
-  label-collision check + retire `.pmo`/`--per-module-codegen`) remain.
-- Date: 2026-06-18 (Phase B M1 + M2a: 2026-06-19)
+  (`Compiler.moduleInterface`). Phase B M2b — the worker now **consumes `.pmi` interfaces ONLY**, never
+  a dependency's `.pmo`: `Lower.lowerModuleWithInterfaces` builds the lowering `ModuleInfo` by merging
+  the target's own `collect*` tables with the dependencies' `.pmi` interface tables (`DepInterface`);
+  `compileModuleWasm` takes `Array DepInterface` (was `Array M.Module`); `purwc compile --deps` loads
+  each dependency `.pmi` once (summary → optimizer context, interface tables → codegen context); and
+  **the worker stops writing `.pmo`**. Verified on a 2-module cross-module fixture
+  (`Purwc.Fixture.User` → `Dep`): each module's `.pmi` is byte-identical to the oracle and the merged
+  program is behaviour-identical to the whole-program build (a per-module `.wasm` legitimately diverges
+  in bytes — the worker over-exports all its functions since it cannot see its dependents, pinning more
+  to the boxed ABI; behaviour-safe). M3 and Phase C (orchestrator: dependency-graph driving +
+  pre-merge label-collision check + retire `.pmo`/`--per-module-codegen`) remain.
+- Date: 2026-06-18 (Phase B M1 + M2a + M2b: 2026-06-19)
 
 ## Context
 
