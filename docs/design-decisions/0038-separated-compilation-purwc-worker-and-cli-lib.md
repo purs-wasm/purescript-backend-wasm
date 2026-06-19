@@ -37,12 +37,25 @@
   (cafInitExport / foreignModules / crossModuleExports — orchestrator-facing, kept out of the `.pmi`).
   Verified on all 4 fixtures (leaf, cross-module call, transitive+ctor, foreign re-export): the
   `--orchestrate` `index.wasm` is behaviour-identical to the whole-program oracle and to the M3 manual
-  merge. C1 is sequential, non-ulib (fails fast on ulib-shadowed modules), dev-only (`node
-  <cliRoot>/purwc/index.dev.js`). C2+ (the remaining work): parallel subprocesses (an async
-  `child_process` FFI — Aff-free, the self-host path), ulib-shadowed modules, per-module `.wasm`
-  cache reuse, make `--orchestrate` the default + retire `--per-module-codegen`/in-process
-  `compilePerModule`/`.pmo`, and a `purwc` production bundle + path resolution.
-- Date: 2026-06-18 (Phase B M1 + M2a + M2b + M3 + Phase C C1: 2026-06-19)
+  merge. Phase C ulib (2026-06-19) — `--orchestrate` now handles **ulib-shadowed modules** (and real
+  Prelude programs generally). Three fixes: (1) **staging** — the orchestrator writes every module's
+  resolved corefn (lib-shadow or registry) + externs + cache-db into one `_build/stage` dir so the
+  worker finds all modules under one `-I` (a shadowed module's corefn is in the lib, not the user
+  output); (2) **`isEntry`** — `compileModuleWasm`/`lowerModuleWithInterfaces` decouple "reachability
+  root" (every module keeps + over-exports its functions) from "host-ABI root" (only the program
+  entry emits the i32 export shim under BARE ident names), so library modules sharing a method name
+  (`conj`, `append`, …) no longer collide as bare exports at `wasm-merge` (purwc gets a `--entry`
+  flag; the orchestrator sets it for the entry); (3) **effectful-foreigns from deps** — purwc's
+  `compileModuleMir` now seeds the impurify pass with the dependencies' `Effect` foreigns (from their
+  `.pmi` foreignSigs), not just the target's, so a top-level `Effect` binding calling a dependency
+  foreign (e.g. `Effect.Console.log`) is not mis-globalised/performed at CAF-init. Verified: `purs-wasm
+  build --orchestrate` of `examples-helloworld` (Prelude + JS foreign + lib shadows) is
+  behaviour-identical to the whole-program build (entry `.pmi` byte-identical; `main()` prints "Hello
+  from WASM World!" and the dead `sub` is gone). Remaining (C2+): parallel subprocesses (async
+  `child_process` FFI — Aff-free, the self-host path), per-module `.wasm` cache reuse, make
+  `--orchestrate` the default + retire `--per-module-codegen`/in-process `compilePerModule`/`.pmo`, a
+  `purwc` production bundle + path resolution, and the over-export→exported-only perf refinement.
+- Date: 2026-06-18 (Phase B M1 + M2a + M2b + M3 + Phase C C1 + ulib: 2026-06-19)
 
 ## Context
 

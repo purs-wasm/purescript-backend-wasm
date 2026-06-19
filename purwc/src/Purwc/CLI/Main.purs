@@ -16,6 +16,7 @@ import Effect.Class.Console as Console
 import Node.Path (FilePath)
 import Node.Process as Process
 import PureScript.Backend.Wasm.CLI.Node (runNode)
+import Purwc.CLI.Batch (batchCmd)
 import Purwc.CLI.Compile (compileCmd)
 import Purwc.CLI.Options (parse)
 import Purwc.CLI.Options.Types (Command(..))
@@ -29,3 +30,4 @@ main cliRoot binaryenBinDir = do
     Left err -> Console.error (ArgParser.printArgError err)
     Right (Tuple globals cmd) -> runNode globals $ case cmd of
       Compile args -> compileCmd cliRoot binaryenBinDir args
+      Batch args -> batchCmd cliRoot binaryenBinDir args

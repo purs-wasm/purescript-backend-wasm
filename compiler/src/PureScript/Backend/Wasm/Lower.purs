@@ -887,15 +887,20 @@ type LoweredTarget =
 -- | lowered. A cross-module callee resolves via `info` (`knownFuncs`/`ctors`/`foreignSigs`); a callee
 -- | absent from every table is a hard `unknown callee` error (so the dep `.pmi` must be complete).
 -- | No whole-program label-collision check (that is the orchestrator's pre-merge job, Phase C); only
--- | a local self-check.
+-- | a local self-check. `isEntry` decouples the two roles of "root": every module is its own
+-- | REACHABILITY root (keep + over-export all its functions, as a library module a dependent may
+-- | call), but only the program ENTRY is a HOST-ABI root — so only the entry emits the i32 export
+-- | shim under bare ident names. A library module exports only its qualified cross-module keys, so
+-- | modules sharing a method name (`conj`, `append`, …) never collide as bare exports at merge time.
 lowerModuleWithInterfaces
   :: Object (Array Rep)
   -> Object ForeignImport
   -> Set String
   -> Array DepInterface
+  -> Boolean
   -> Module
   -> Either LowerError LoweredTarget
-lowerModuleWithInterfaces fieldReps foreignSigs foreignNames deps target = do
+lowerModuleWithInterfaces fieldReps foreignSigs foreignNames deps isEntry target = do
   let
     tDict = collectDictCtors [ target ]
     tLabels = collectLabels [ target ]
@@ -923,5 +928,7 @@ lowerModuleWithInterfaces fieldReps foreignSigs foreignNames deps target = do
   case Array.head (labelCollisions tLabels) of
     Just clash -> Left (LabelHashCollision clash)
     Nothing -> pure unit
-  fragment <- lowerOneFragment info reachable crossModuleRefs [ target.name ] info.foreignSigs target
+  -- host-ABI (bare) exports only for the program entry; reachability/over-export are unchanged.
+  let hostRoots = if isEntry then [ target.name ] else []
+  fragment <- lowerOneFragment info reachable crossModuleRefs hostRoots info.foreignSigs target
   pure { fragment, labels: Object.toUnfoldable tLabels, keyHomeModule, crossModuleRefs }

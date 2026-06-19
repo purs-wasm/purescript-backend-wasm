@@ -76,9 +76,17 @@ nodeChildProcessHandler :: forall r. ProcF ~> Run (EFFECT + r)
 nodeChildProcessHandler = case _ of
   ExecFile cmd args next -> liftEffect (execFileImpl cmd args) $> next
   ExecFileCapture cmd args k -> k <$> liftEffect (lmap message <$> try (execFileCaptureImpl cmd args))
+  ExecFileInput cmd args input next -> liftEffect (execFileInputImpl cmd args input) $> next
+  ReadStdin k -> k <$> liftEffect readStdinImpl
 
 -- | Run an external tool synchronously (`execFileSync`, stdio inherited; throws on non-zero exit).
 foreign import execFileImpl :: String -> Array String -> Effect Unit
+
+-- | Like `execFileImpl` but pipes `input` to the child's stdin (stdout/stderr inherited).
+foreign import execFileInputImpl :: String -> Array String -> String -> Effect Unit
+
+-- | Read this process's entire stdin synchronously (`fs.readFileSync(0)`).
+foreign import readStdinImpl :: Effect String
 
 -- | Run an external tool synchronously and return its captured stdout (`execFileSync` with
 -- | `encoding: utf8`); throws on failure, which the handler turns into `Left` via `try`.

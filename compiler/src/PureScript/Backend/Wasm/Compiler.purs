@@ -252,10 +252,11 @@ compileModuleWasm
   -> Set String
   -> Array ExternsFile
   -> Array DepInterface
+  -> Boolean
   -> M.Module
   -> Effect (Either String ModuleArtifact)
-compileModuleWasm opts foreignSigs' foreignNames externs deps target =
-  case lowerModuleWithInterfaces (ctorFieldReps externs) foreignSigs' foreignNames deps target of
+compileModuleWasm opts foreignSigs' foreignNames externs deps isEntry target =
+  case lowerModuleWithInterfaces (ctorFieldReps externs) foreignSigs' foreignNames deps isEntry target of
     Left err -> pure (Left ("linking failed: " <> show err))
     Right lowered -> do
       let dotted = joinWith "." target.name

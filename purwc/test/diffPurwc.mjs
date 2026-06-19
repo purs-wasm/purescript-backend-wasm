@@ -19,7 +19,7 @@
 //
 //   node purwc/test/diffPurwc.mjs
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -112,9 +112,10 @@ for (const c of CORPUS) {
     sh("spago", ["build", "-p", c.pkg, "--output", corefn]);
     // oracle: whole-program per-module core → _build/<M>.{pmi,wasm} + merged index.wasm
     sh("node", ["purs-wasm/index.dev.js", "build", "--per-module-codegen", "-e", c.entry, "-I", corefn, "-O", oracleOut, "--force"]);
-    // candidate A: compile each module in dep order; a dependent reads earlier modules' .pmi (--deps)
+    // candidate A: compile each module in dep order; a dependent reads earlier modules' .pmi (--deps).
+    // Only the entry is compiled with --entry (host-ABI bare exports); libraries export keys only.
     for (const m of c.modules) {
-      sh("node", ["purwc/index.dev.js", "compile", "-e", m, "-I", corefn, "--deps", purwcOut, "-O", purwcOut]);
+      sh("node", ["purwc/index.dev.js", "compile", "-e", m, "-I", corefn, "--deps", purwcOut, "-O", purwcOut, ...(m === c.entry ? ["--entry"] : [])]);
     }
     // ensure the worker wrote NO .pmo
     const wrotePmo = c.modules.some((m) => existsSync(join(purwcOut, `${m}.pmo`)));
@@ -143,6 +144,44 @@ for (const c of CORPUS) {
     failures++;
     console.log(`ERROR: ${e?.message ?? e}`);
   }
+}
+
+// ── ulib regression (ADR 0038 Phase C2): a real Prelude + foreign program with lib shadows. The
+// orchestrator stages the lib-shadowed corefn, treats only the entry as a host-ABI root, and feeds
+// the optimizer the dependencies' effectful foreigns. Run `main` through each loader, compare stdout.
+async function mainStdout(bundleDir) {
+  const mjs = join(bundleDir, "index.mjs");
+  if (!existsSync(mjs)) return JSON.stringify({ noLoader: true });
+  const out = [];
+  const orig = console.log;
+  console.log = (...a) => out.push(a.join(" "));
+  try {
+    const mod = await import(`${pathToFileURL(mjs).href}?t=${bundleDir}`);
+    mod.exports.main();
+  } catch (e) {
+    console.log = orig;
+    return JSON.stringify({ error: String(e?.message ?? e) });
+  }
+  console.log = orig;
+  return JSON.stringify(out);
+}
+
+process.stdout.write("• ulib: examples-helloworld (Prelude + foreign + lib shadows): ");
+try {
+  const cf = tmp("ulibcf"), ora = tmp("ulibora"), orc = tmp("uliborc");
+  tmps.push(cf, ora, orc);
+  sh("spago", ["build", "-p", "examples-helloworld", "--output", cf]);
+  sh("node", ["purs-wasm/index.dev.js", "build", "-e", "Examples.HelloWorld.Main", "-I", cf, "-O", ora, "--force"]);
+  sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.HelloWorld.Main", "-I", cf, "-O", orc]);
+  const sA = await mainStdout(ora);
+  const sB = await mainStdout(orc);
+  const ok = sA === sB && sB.includes("Hello from WASM World") && !sB.includes("should not be printed");
+  if (!ok) failures++;
+  console.log(`main() stdout ${sA === sB ? "match" : "MISMATCH"}${ok ? "" : "  <-- FAIL"}`);
+  if (sA !== sB) console.log(`    oracle: ${sA}\n    orchestrate: ${sB}`);
+} catch (e) {
+  failures++;
+  console.log(`ERROR: ${e?.message ?? e}`);
 }
 
 for (const t of tmps) rmSync(t, { recursive: true, force: true });

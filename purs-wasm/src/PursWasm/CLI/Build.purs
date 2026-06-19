@@ -45,7 +45,7 @@ import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PureScript.Backend.Wasm.CLI.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames, corefnImports)
-import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, execFileInput, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log (br)
 import PureScript.Backend.Wasm.CLI.Effect.Log as Log
 import PureScript.Backend.Wasm.CLI.Externs (readExterns)
@@ -152,21 +152,31 @@ topoBySrcImports inputs = Array.mapMaybe (\n -> Map.lookup n byName) ordered.out
 orchestrateModules
   :: forall r a
    . FilePath
+  -> FilePath
   -> BuildOption
   -> FilePath
   -> Array { name :: String, imports :: Array String | a }
   -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
-orchestrateModules cliRoot args buildDir srcInfos = do
+orchestrateModules cliRoot purwcInput args buildDir srcInfos = do
   let ordered = topoBySrcImports srcInfos
+  let entryNames = Set.fromFoldable args.entryModules
   mkdirP buildDir
   purwcPath <- joinPath [ cliRoot, "purwc", "index.dev.js" ]
-  for_ ordered \m -> do
-    info (Log.cyan (Fmt.fmt @" >  compiling {name} (purwc)" { name: m.name }))
-    execFile "node"
-      ( [ purwcPath, "compile", "-e", m.name, "-I", args.input, "--deps", buildDir, "-O", buildDir ]
-          <> (if args.debug then [ "-g" ] else [])
-          <> (if args.noOpt then [ "--no-opt" ] else [])
-      )
+  -- Drive ONE long-lived `purwc compile-batch` over the whole topo-ordered work-list (each module
+  -- `*`-prefixed if it is the program entry), streamed on stdin. One process compiles every module in
+  -- order, so the dominant per-spawn cost (Binaryen.js init ~1.3 s) is paid once for the batch, not
+  -- per module (ADR 0038 Phase C2). Topo order keeps each dependency's `.pmi` on disk before a
+  -- dependent reads it from `--deps` (= the shared `_build`).
+  info (Log.cyan (Fmt.fmt @" >  compiling {n} module(s) (purwc batch)" { n: Array.length ordered }))
+  let
+    workList = joinWith "\n" $ ordered <#> \m ->
+      (if Set.member m.name entryNames then "*" else "") <> m.name
+  execFileInput "node"
+    ( [ purwcPath, "compile-batch", "-I", purwcInput, "--deps", buildDir, "-O", buildDir ]
+        <> (if args.debug then [ "-g" ] else [])
+        <> (if args.noOpt then [ "--no-opt" ] else [])
+    )
+    workList
   metas <- for ordered \m -> do
     mTxt <- readText =<< joinPath [ buildDir, m.name <> ".link.json" ]
     case mTxt >>= decodeLinkMeta of
@@ -202,6 +212,36 @@ orchestrateModules cliRoot args buildDir srcInfos = do
             , crossModuleExports: Array.nub (metas >>= _.meta.crossModuleExports)
             }
         )
+
+-- | Stage every selected module's resolved `corefn.json` (lib-shadowed or registry) + its
+-- | `externs.cbor` (a registry/user module's from the user output, a lib-internal module's from the
+-- | lib) + the user `cache-db.json`, into one directory — so the `purwc` worker finds ALL modules
+-- | under a single `-I`, including ulib-shadowed modules whose corefn lives in the lib, not the user
+-- | output (ADR 0038 Phase C2). Keeps `purwc` a pure worker: the ulib resolution stays in the
+-- | orchestrator; the worker just reads a uniform input directory.
+stageOrchestrateInput
+  :: forall r a
+   . FilePath
+  -> FilePath
+  -> FilePath
+  -> Set.Set String
+  -> Array { name :: String, src :: String | a }
+  -> Run (FS + EFFECT + r) Unit
+stageOrchestrateInput stageDir userInput libPath allModNames srcInfos = do
+  mkdirP stageDir
+  for_ srcInfos \i -> do
+    mdir <- joinPath [ stageDir, i.name ]
+    mkdirP mdir
+    cfPath <- joinPath [ mdir, "corefn.json" ]
+    writeText cfPath i.src
+    exSrc <- joinPath [ if Set.member i.name allModNames then userInput else libPath, i.name, "externs.cbor" ]
+    mEx <- readBinary exSrc
+    exDst <- joinPath [ mdir, "externs.cbor" ]
+    maybe (pure unit) (writeBinary exDst) mEx
+  -- the user `cache-db.json` (ADR 0016 private-foreign reconstruction); absent for many projects.
+  mDb <- readText =<< joinPath [ userInput, "cache-db.json" ]
+  dbDst <- joinPath [ stageDir, "cache-db.json" ]
+  maybe (pure unit) (writeText dbDst) mDb
 
 buildCmd :: forall r. FilePath -> FilePath -> BuildOption -> Run (ENV + FS + PROC + LOG + EFFECT + r) Unit
 buildCmd cliRoot binaryenBinDir args = do
@@ -258,13 +298,10 @@ buildCmd cliRoot binaryenBinDir args = do
         , extra: if Array.null injected then "" else Fmt.fmt @" (+{k} ulib internal)" { k: Array.length injected }
         }
     )
-  -- ADR 0038 Phase C (C1): the subprocess orchestrator targets non-ulib programs whose corefn all
-  -- lives under `--input` (a ulib-shadowed module's corefn is in the lib, which `purwc -I` can't
-  -- find), and has no in-process optimized MIR for `--dump-mir`. Fail fast otherwise.
-  when args.orchestrate do
-    when (isJust args.dumpMir) (logAndThrow "--orchestrate does not support --dump-mir (C1).")
-    when (not (Array.null injected) || not (Set.isEmpty libSourced))
-      (logAndThrow "--orchestrate (C1) does not support ulib-shadowed modules; build without a ulib lib, or use --per-module-codegen.")
+  -- ADR 0038 Phase C: the subprocess orchestrator stages every module's corefn into one `-I` for the
+  -- worker (incl. ulib-shadowed modules, whose corefn is in the lib). It has no in-process optimized
+  -- MIR, so `--dump-mir` is unsupported.
+  when (args.orchestrate && isJust args.dumpMir) (logAndThrow "--orchestrate does not support --dump-mir.")
   -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
   -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
   -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
@@ -379,8 +416,10 @@ buildCmd cliRoot binaryenBinDir args = do
       else do
         built <- liftEffect (finishLink opts roots allSigs foreignNames externs modules cacheWrites)
         pure (map wholeLinked built)
+  stageDir <- joinPath [ cacheDir, "stage" ]
+  when args.orchestrate (stageOrchestrateInput stageDir args.input libPath allModNames srcInfos)
   linkResult <-
-    if args.orchestrate then orchestrateModules cliRoot args cacheDir srcInfos
+    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir srcInfos
     else if useCache then do
       -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
       -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.

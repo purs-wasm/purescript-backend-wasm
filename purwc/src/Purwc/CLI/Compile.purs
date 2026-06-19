@@ -64,7 +64,6 @@ compileCmd cliRoot binaryenBinDir args = do
   libPath <- resolveLibPath cliRoot Nothing
   externs <- map (maybe [] (\e -> [ e ])) (readExterns =<< joinPath [ args.input, target, "externs.cbor" ])
   allSigs <- buildForeignSigs args.input libPath externs [ { name: mn, foreignNames } ]
-  let eff = effectfulForeigns allSigs
   let foreignNameSet = Set.fromFoldable (map (\base -> target <> "." <> base) foreignNames)
 
   -- The dependency interfaces (`.pmi` ONLY). The summary half feeds the optimizer's context; the
@@ -80,6 +79,12 @@ compileCmd cliRoot binaryenBinDir args = do
       , foreignSigs: e.foreignSigs
       , foreignNames: e.foreignNames
       }
+  -- The effectful-foreign set (for impurify) must include the DEPENDENCIES' foreigns, not just the
+  -- target's: the target may call a dependency's `Effect` foreign (e.g. `Effect.Console.log`), and
+  -- without knowing it is effectful the optimizer mis-globalizes a top-level `Effect` binding
+  -- (performing it at CAF-init). The deps' foreign sigs come from their `.pmi` (ADR 0038 M2a).
+  let allSigsWithDeps = Array.foldl Object.union allSigs (map _.foreignSigs depEntries)
+  let eff = effectfulForeigns allSigsWithDeps
 
   -- Optimize the single module against its dependency summaries, then persist its interface.
   let out = compileModuleMir eff.names eff.arities { sourceHash, lifted: liftModule decoded, depSummaries }
@@ -103,7 +108,7 @@ compileCmd cliRoot binaryenBinDir args = do
     )
 
   -- Lower + codegen the single module against its dependency interfaces, and write its wasm.
-  liftEffect (compileModuleWasm opts allSigs foreignNameSet externs depInterfaces out.finalMod) >>= case _ of
+  liftEffect (compileModuleWasm opts allSigs foreignNameSet externs depInterfaces args.programEntry out.finalMod) >>= case _ of
     Left err -> logAndThrow err
     Right art -> do
       wasmPath <- joinPath [ args.outDir, target <> ".wasm" ]
