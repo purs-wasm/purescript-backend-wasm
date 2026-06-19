@@ -16,9 +16,20 @@
   (`Purwc.Fixture.User` → `Dep`): each module's `.pmi` is byte-identical to the oracle and the merged
   program is behaviour-identical to the whole-program build (a per-module `.wasm` legitimately diverges
   in bytes — the worker over-exports all its functions since it cannot see its dependents, pinning more
-  to the boxed ABI; behaviour-safe). M3 and Phase C (orchestrator: dependency-graph driving +
-  pre-merge label-collision check + retire `.pmo`/`--per-module-codegen`) remain.
-- Date: 2026-06-18 (Phase B M1 + M2a + M2b: 2026-06-19)
+  to the boxed ABI; behaviour-safe). Phase B M3 (2026-06-19) — **scale-verified** (no code change): the
+  `.pmi`-only architecture is correct across a 3-module transitive chain (Top→Mid→Base), cross-module
+  constructor construct/match (a `Box` with a field — tag/arity/fieldReps resolved from the dep `.pmi`),
+  and a re-exported `foreign import` (resolved via the dep `.pmi`'s `foreignSigs`, with the precise
+  `i32→i32` marshalling, NOT the opaque fallback) — every module's `.pmi` byte-identical to the oracle,
+  all merged programs behaviour-identical. The `summaryInlineKeys` locality concern was measured benign:
+  the divergence needs a *large, non-collapsible* binding used 2+ times by dependents and 0 locally, but
+  the optimizer's case-of-case collapse makes such bindings small (kept by the size criterion on both
+  sides), so even an adversarial construction kept the `.pmi` identical; if it ever bites it is
+  perf/`.pmi`-size only, never correctness. Deferred perf refinement: over-export only the module's
+  *exported* functions (not all), to avoid boxing internal helpers — needs the CoreFn export list
+  threaded to lowering. Phase C (orchestrator: dependency-graph driving + pre-merge label-collision
+  check + retire `.pmo`/`--per-module-codegen`) remains.
+- Date: 2026-06-18 (Phase B M1 + M2a + M2b + M3: 2026-06-19)
 
 ## Context
 

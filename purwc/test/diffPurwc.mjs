@@ -44,18 +44,39 @@ const CORPUS = [
     modules: ["Purwc.Fixture.Dep", "Purwc.Fixture.User"],
     calls: [{ fn: "twice", args: [0] }, { fn: "twice", args: [1] }, { fn: "twice", args: [2] }],
   },
+  {
+    // transitive dep (Top→Mid→Base) + cross-module constructor construct/match (Box)
+    name: "top→mid→base (transitive + cross-module ctor)",
+    pkg: "purwc-fixtures",
+    entry: "Purwc.Fixture.Top",
+    modules: ["Purwc.Fixture.Base", "Purwc.Fixture.Mid", "Purwc.Fixture.Top"],
+    calls: [
+      { fn: "rotate4", args: [0] }, { fn: "rotate4", args: [1] }, { fn: "rotate4", args: [2] },
+      { fn: "viaBox", args: [0] }, { fn: "viaBox", args: [1] }, { fn: "viaBox", args: [2] },
+    ],
+  },
+  {
+    // a dependent calling a foreign declared in ANOTHER module — resolved via the dep `.pmi`'s
+    // foreignSigs (a foreign has no MIR binding, so it is absent from `funcs`).
+    name: "foreign re-export (cross-module foreign call)",
+    pkg: "purwc-fixtures",
+    entry: "Purwc.Fixture.ForeignUser",
+    modules: ["Purwc.Fixture.ForeignDep", "Purwc.Fixture.ForeignUser"],
+    imports: { "Purwc.Fixture.ForeignDep": { bumpInt: (x) => x + 1 } },
+    calls: [{ fn: "useBump", args: [0] }, { fn: "useBump", args: [5] }],
+  },
 ];
 
 const sh = (cmd, args) => execFileSync(cmd, args, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] });
 const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
 const tmp = (tag) => mkdtempSync(join(tmpdir(), `purwcdiff-${tag}-`));
 
-// Instantiate a standalone (import-free) wasm and run its i32 probes, as a JSON outcome.
-async function behaviour(wasmPath, calls) {
+// Instantiate a wasm (with any `imports` it needs — e.g. a JS foreign) and run its i32 probes.
+async function behaviour(wasmPath, calls, imports = {}) {
   if (!existsSync(wasmPath)) return JSON.stringify({ missing: wasmPath });
   let ex;
   try {
-    const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), {});
+    const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), imports);
     ex = instance.exports;
   } catch (e) {
     return JSON.stringify({ loadError: String(e?.message ?? e) });
@@ -105,8 +126,9 @@ for (const c of CORPUS) {
     const pmiEq = c.modules.every((m) => sha(join(purwcOut, `${m}.pmi`)) === sha(join(oracleOut, "_build", `${m}.pmi`)));
     const wasmEq = c.modules.every((m) => sha(join(purwcOut, `${m}.wasm`)) === sha(join(oracleOut, "_build", `${m}.wasm`)));
 
-    const behA = await behaviour(join(oracleOut, "index.wasm"), c.calls);
-    const behB = await behaviour(join(purwcOut, "merged.wasm"), c.calls);
+    const imports = c.imports ?? {};
+    const behA = await behaviour(join(oracleOut, "index.wasm"), c.calls, imports);
+    const behB = await behaviour(join(purwcOut, "merged.wasm"), c.calls, imports);
     const behEq = behA === behB;
 
     if (!pmiEq || !behEq || wrotePmo) failures++;
