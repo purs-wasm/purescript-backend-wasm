@@ -145,7 +145,7 @@ useNbE = true
 -- | (5×10⁵–2×10⁶), so only pathological declarations fall back; the guard measures the *actual*
 -- | reduced size, so a large-but-shared normal form (which quote CSEs back down) is kept inlined.
 normalFormSizeCap :: Int
-normalFormSizeCap = 200_000
+normalFormSizeCap = 8_000
 
 reduce :: Ctx -> M.Expr -> M.Expr
 reduce ctx e =

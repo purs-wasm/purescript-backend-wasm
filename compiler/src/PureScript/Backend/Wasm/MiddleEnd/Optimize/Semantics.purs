@@ -190,11 +190,69 @@ trivialSem = case _ of
   SCtorApp _ [] -> true
   _ -> false
 
+-- | The per-application inline-size budget (ADR 0035 Layer C). Inlining a top-level binding is
+-- | worthwhile only when applying it *reduces* — fires β / projection / known-`case` to shrink the
+-- | code. The pathological case is the derived `genericShow` / `genericEq` of a large ADT applied to
+-- | an *opaque* value: every dictionary projection fires, materialising the whole generic-dispatch
+-- | machinery, yet the terminal `case <opaque> of …` stays stuck — so the result is bulk, not
+-- | reduction (a hand-written `show` of the same type is ~30× smaller). When the β-result of an
+-- | inline-set binding's application exceeds this budget, keep it a plain **call** to the binding
+-- | (`NTop`) rather than inlining the materialised bulk — the same shape `--no-opt` emits, and the
+-- | reduction-aware decision [ADR 0020](0020) deferred to stage 3. The guard fires only on inline-set
+-- | bindings (`SShared`), so a genuine recursive function — already a call, never in the inline set —
+-- | is untouched; and a result that merely *shares* a large value (CSE'd by `quote`) counts small.
+perAppInlineBudget :: Int
+perAppInlineBudget = 2048
+
+-- | Whether a semantic value's reified size would exceed `budget`, measured with bounded fuel (so a
+-- | huge result short-circuits cheaply). A shared value (`SShared`) counts as 1 — `quote` CSEs it to
+-- | a single hoisted binding — and an un-applied lambda body is opaque (counts 1), so this bounds the
+-- | *stuck materialised* structure (the genericShow blow-up) rather than reducible closures.
+exceedsBudget :: Int -> Sem -> Boolean
+exceedsBudget budget s0 = sizeFuel budget s0 < 0
+  where
+  sizeFuel fuel s
+    | fuel < 0 = fuel
+    | otherwise = case s of
+        SLam _ _ -> fuel - 1
+        SShared _ _ -> fuel - 1
+        SLit lit -> litFuel (fuel - 1) lit
+        SRecord fs -> Array.foldl (\f (Tuple _ v) -> sizeFuel f v) (fuel - 1) fs
+        SCtorApp _ as -> Array.foldl sizeFuel (fuel - 1) as
+        SLet _ rhs _ -> sizeFuel (fuel - 1) rhs
+        SLetRec rs k -> sizeFuel (Array.foldl (\f r -> sizeFuel f r.expr) (fuel - 1) rs) k
+        SNeu n -> neuFuel (fuel - 1) n
+  litFuel fuel = case _ of
+    LitArray es -> Array.foldl sizeFuel fuel es
+    LitObject kvs -> Array.foldl (\f (Tuple _ v) -> sizeFuel f v) fuel kvs
+    _ -> fuel
+  neuFuel fuel n
+    | fuel < 0 = fuel
+    | otherwise = case n of
+        NLocal _ -> fuel
+        NTop _ -> fuel
+        NCtorDecl _ -> fuel
+        NApp h as -> Array.foldl sizeFuel (sizeFuel fuel h) as
+        NAccessor _ x -> sizeFuel fuel x
+        NUpdate x _ kvs -> Array.foldl (\f (Tuple _ v) -> sizeFuel f v) (sizeFuel fuel x) kvs
+        NCase ss alts -> Array.foldl altFuel (Array.foldl sizeFuel fuel ss) alts
+        NPerform x -> sizeFuel fuel x
+  altFuel fuel alt = case alt.result of
+    Right e -> sizeFuel fuel e
+    Left gs -> Array.foldl (\f g -> sizeFuel (sizeFuel f g.guard) g.expression) fuel gs
+
 apply :: Sem -> Array Sem -> Sem
 apply head args
   | Array.null args = head
   | otherwise = case head of
-      SShared _ s -> apply s args
+      -- ADR 0035 Layer C: an inline-set binding (`q`) applied to arguments inlines only when the
+      -- β-result actually reduces (stays within budget); a result that merely materialises stuck
+      -- bulk (the `genericShow` of an opaque value) is kept a plain call to `q`, not copied.
+      SShared q s ->
+        let
+          r = apply s args
+        in
+          if exceedsBudget perAppInlineBudget r then SNeu (NApp (SNeu (NTop q)) args) else r
       SLam ps fn ->
         let
           np = Array.length ps
@@ -416,8 +474,10 @@ quote pctx sem = case sem of
   -- A *trivial* body (alias / literal / nullary constructor) is inlined instead, since unfolding it
   -- never grows code and keeps a direct intrinsic / literal at the use site.
   SShared q s ->
-    let s' = unShared s
-    in if trivialSem s' then quote pctx s' else pure (M.Var q)
+    let
+      s' = unShared s
+    in
+      if trivialSem s' then quote pctx s' else pure (M.Var q)
   SNeu n -> quoteNeu pctx n
 
 quoteNeu :: PCtx -> Neu -> Q M.Expr
