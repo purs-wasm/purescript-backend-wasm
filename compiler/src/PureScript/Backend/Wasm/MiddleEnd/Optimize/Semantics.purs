@@ -61,12 +61,14 @@ data Sem
   -- a recursive group, never unfolded: bindings (bodies already evaluated with the group
   -- names opaque) plus the continuation semantic value.
   | SLetRec (Array RecB) Sem
-  -- a value shared across use sites, tagged with the memo key it was unfolded from (ADR 0035
-  -- Layer B). Transparent to *reduction* — `unShared` strips it wherever a value is consumed
-  -- (β / projection / match / perform) so it never blocks a redex — but opaque to `quote`, which
-  -- CSEs it: the first occurrence is bound once to a hoisted `let` and the rest reference it,
-  -- killing the M2 re-quote explosion. The key is the inline binding's name (already unique).
-  | SShared String Sem
+  -- a top-level inline candidate that was unfolded, tagged with the qualified binding it came from
+  -- (ADR 0035 Layer B/C). Transparent to *reduction* — `unShared` strips it wherever a value is
+  -- consumed (β / projection / match / perform) so it never blocks a redex. The tag survives to
+  -- `quote` only when the value was used as a *value*, never consumed by a redex: there ADR 0035
+  -- Layer C reifies it as a plain **call** to the original binding (`M.Var q`) — shared at the top
+  -- level, never copied — rather than materialising the (re-quoted) body. A *trivial* body (an
+  -- alias / literal / nullary constructor — unfolding never grows code) is still inlined instead.
+  | SShared (Qualified String) Sem
   | SNeu Neu
 
 type RecB = { meta :: Maybe Meta, ident :: String, expr :: Sem }
@@ -158,9 +160,11 @@ eval ctx memo = go
     q@(Qualified (Just _) _) -> case qkey q of
       Just k
         -- unfold a binding in the inline set (ADR 0020), but **once** per `normalize`: every
-        -- reference shares the memoized `Sem` (ADR 0035 Layer A) instead of re-evaluating the
-        -- body. `memo` has an entry for exactly the inline-set keys (`ctx.inline`).
-        | Just lz <- Map.lookup k memo -> SShared k (force lz)
+        -- reference shares the memoized `Sem` (ADR 0035 Layer A) instead of re-evaluating the body.
+        -- `memo` has an entry for exactly the inline-set keys (`ctx.inline`). The unfolded value is
+        -- `SShared`-tagged with `q` so a use site that *consumes* it fires the redex (`unShared`)
+        -- while one that uses it *as a value* reifies to a call to `q` at `quote` (ADR 0035 Layer C).
+        | Just lz <- Map.lookup k memo -> SShared q (force lz)
         | Set.member k ctx.dataCtors -> SCtorApp q []
         | otherwise -> SNeu (NTop q)
       Nothing -> SNeu (NTop q)
@@ -174,6 +178,17 @@ unShared :: Sem -> Sem
 unShared = case _ of
   SShared _ s -> unShared s
   s -> s
+
+-- | A semantic value whose unfolding never grows code — an alias to another binding, a literal, or a
+-- | nullary constructor. ADR 0035 Layer C still inlines such a value at an unconsumed (value) use
+-- | site; anything larger is reified as a plain call to its top-level binding.
+trivialSem :: Sem -> Boolean
+trivialSem = case _ of
+  SNeu (NTop _) -> true
+  SNeu (NLocal _) -> true
+  SLit _ -> true
+  SCtorApp _ [] -> true
+  _ -> false
 
 apply :: Sem -> Array Sem -> Sem
 apply head args
@@ -394,20 +409,15 @@ quote pctx sem = case sem of
     rs' <- traverse (\r -> (\e -> { meta: r.meta, ident: r.ident, expr: e }) <$> quote pctx r.expr) rs
     body' <- quote pctx body
     pure (M.Let [ M.Rec rs' ] body')
-  -- CSE a shared value (ADR 0035 Layer B): quote it **once** into a hoisted `let` (recorded in
-  -- `defs`) and emit a reference; every later occurrence of the same key reuses the binding. The
-  -- name is reserved before quoting the body, so a (defensive) self/mutual reference reuses it
-  -- rather than recursing forever.
-  SShared k s -> do
-    st <- get
-    case Map.lookup k st.shared of
-      Just name -> pure (M.Var (Qualified Nothing name))
-      Nothing -> do
-        name <- fresh "$shared"
-        modify_ \st' -> st' { shared = Map.insert k name st'.shared }
-        e <- quote pctx s
-        modify_ \st' -> st' { defs = Tuple name e : st'.defs }
-        pure (M.Var (Qualified Nothing name))
+  -- ADR 0035 Layer C: an unfolded candidate that survived to `quote` was used *as a value* (a
+  -- consuming use site would have stripped the `SShared` tag and fired a redex). Reify it as a plain
+  -- **call** to the original top-level binding — shared at the top level, never copying the body —
+  -- which also avoids the M2 re-quote explosion (the body is quoted once, in its own declaration).
+  -- A *trivial* body (alias / literal / nullary constructor) is inlined instead, since unfolding it
+  -- never grows code and keeps a direct intrinsic / literal at the use site.
+  SShared q s ->
+    let s' = unShared s
+    in if trivialSem s' then quote pctx s' else pure (M.Var q)
   SNeu n -> quoteNeu pctx n
 
 quoteNeu :: PCtx -> Neu -> Q M.Expr

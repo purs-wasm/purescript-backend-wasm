@@ -78,14 +78,16 @@ language and are kept out of version control.)
 | 0028 | [ulib as a compiler-bundled library layer: lib-first shadowing of registry modules](0028-ulib-library-layer-shadowing.md) | Superseded by 0031 |
 | 0029 | [ulib lib distribution and purs-compiler pinning](0029-ulib-lib-distribution-and-purs-pinning.md) | Accepted (refined by 0031) |
 | 0030 | [`Data.String` over UTF-8: code-point semantics, byte access via `Wasm.String`](0030-data-string-over-utf8.md) | Accepted |
-| 0031 | [ulib as a single library-module layer: last-wins artifact merge, retiring the shadow/wat duality](0031-ulib-unified-library-modules.md) | Accepted |
+| 0031 | [ulib as a single library-module layer: last-wins artifact merge, retiring the shadow/wat duality](0031-ulib-unified-library-modules.md) | Superseded by 0039 |
 | 0032 | [Caller-homed specialization for per-module, incremental builds](0032-caller-homed-specialization-for-incremental-builds.md) | Accepted |
-| 0033 | [Shipping `ulib` as precompiled MIR (`.pmo`) artifacts](0033-precompiled-ulib-pmo-artifacts.md) | Proposed |
+| 0033 | [Shipping `ulib` as precompiled MIR (`.pmo`) artifacts](0033-precompiled-ulib-pmo-artifacts.md) | Superseded by 0040 |
 | 0034 | [Split the module cache into `.pmi` interface and `.pmo` object](0034-pmi-interface-pmo-object-split.md) | Accepted |
 | 0035 | [Sharing/memoizing the NbE reducer, then reduction-aware inlining](0035-sharing-nbe-reduction-aware-inlining.md) | Accepted (Layers A+B + a Layer-C-lite size cap + the Specialize dedup-key fix landed 2026-06-17 — the optimized self-compile completes; full reduction-aware Layer C policy deferred) |
 | 0036 | [Parameterized join points for decision-tree leaves](0036-join-points-for-decision-tree-leaves.md) | Proposed (de-prioritized — measured duplication ~1.16×, not the `--no-opt` floor) |
 | 0037 | [Separate per-module codegen and linking (per-module wasm + `wasm-merge`)](0037-separate-per-module-codegen-and-linking.md) | Accepted; implemented (Phases 0–2 + Phase-3 codegen restructure — single-module compilation behind `--per-module-codegen`, parity-verified; per-module wasm cache pending) |
 | 0038 | [Separated compilation: the `purwc` worker, the `purs-wasm` orchestrator, and the shared `cli-lib`](0038-separated-compilation-purwc-worker-and-cli-lib.md) | Accepted; **Phase A implemented** (`cli-lib` extracted, three CLIs re-homed, behaviour-neutral); the standalone `purwc` worker (Phase B) + subprocess orchestrator (Phase C) designed, not yet implemented |
+| 0039 | [ulib as a patch on registry packages, with content-based lenient versioning](0039-ulib-as-registry-package-patch.md) | Proposed (supersedes 0031; depends on 0035 Layer C + 0040) |
+| 0040 | [A global content-addressed library cache (`$PURS_WASM_LIB`)](0040-global-content-addressed-library-cache.md) | Proposed (supersedes 0033; depends on 0035 Layer C) |
 
 ## Scope
 

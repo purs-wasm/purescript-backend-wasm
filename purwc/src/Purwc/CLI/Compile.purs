@@ -68,7 +68,11 @@ compileCmd cliRoot binaryenBinDir args = do
 
   -- The dependency interfaces (`.pmi` ONLY). The summary half feeds the optimizer's context; the
   -- lowering-table half feeds codegen's cross-module callee resolution.
-  depEntries <- loadDepInterfaces args.depsDir
+  -- EXCLUDE this module's OWN `.pmi` if a stale copy sits in the shared deps/out dir (the orchestrator
+  -- uses one `_build` dir for both `--deps` and `-O`): optimizing a module against its own previous
+  -- summary re-inlines its own bindings (e.g. the derived `genericShow` instances) into itself, which
+  -- the whole-program optimizer never does — a 9× code-size blowup that then stalls Binaryen.
+  depEntries <- Array.filter (\e -> e.summary.name /= mn) <$> loadDepInterfaces args.depsDir
   let depSummaries = map _.summary depEntries
   let
     depInterfaces = depEntries <#> \e ->
