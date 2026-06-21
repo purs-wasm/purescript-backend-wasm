@@ -28,6 +28,7 @@ import Data.Enum (fromEnum)
 import Data.Int.Bits (and, shr)
 import Data.Maybe (fromMaybe)
 import Data.String.CodePoints (toCodePointArray)
+import Partial.Unsafe (unsafeCrashWith)
 import Data.Traversable (traverse)
 import Effect (Effect)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, repType)
@@ -63,6 +64,15 @@ unboxIntExpr :: Ctx -> B.Expression -> Effect B.Expression
 unboxIntExpr ctx e = do
   c <- B.refCast ctx.mod e ctx.rt.refInt
   B.structGet ctx.mod 0 c B.i32 false
+
+-- | Box an `i64` expression into an `eqref` (`struct.new $Int`).
+boxInt64 :: Ctx -> B.Expression -> Effect B.Expression
+boxInt64 ctx e = B.structNew ctx.mod ctx.rt.int64Ht [ e ]
+
+unboxInt64Expr :: Ctx -> B.Expression -> Effect B.Expression
+unboxInt64Expr ctx e = do
+  c <- B.refCast ctx.mod e ctx.rt.refInt64
+  B.structGet ctx.mod 0 c B.i64 false
 
 -- | Box an `f64` expression into an `eqref` (`struct.new $Num`).
 boxNum :: Ctx -> B.Expression -> Effect B.Expression
@@ -113,7 +123,10 @@ coerce ctx from to e
       Boxed, I32 -> unboxIntExpr ctx e
       F64, Boxed -> boxNum ctx e
       Boxed, F64 -> unboxNumExpr ctx e
-      _, _ -> pure e
+      I64, Boxed -> boxInt64 ctx e
+      Boxed, I64 -> unboxInt64Expr ctx e
+      -- Make coerce's silent catch-all loud
+      _, _ -> unsafeCrashWith ("coerce: unhandled rep transition " <> show from <> " -> " <> show to)
 
 -- | Generate an `Atom` at its natural representation.
 genAtom :: Ctx -> Atom -> Effect B.Expression

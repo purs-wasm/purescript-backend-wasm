@@ -432,14 +432,20 @@ addCafGlobals ctx globals = forEachArr_ (Map.toUnfoldable globals :: Array (Tupl
     initE <- defaultConst ctx rep
     B.addGlobal ctx.mod (cafGlobalName name) (repType ctx rep) true initE
 
--- | A throwaway value of the given rep (`0` / `0.0` / a boxed `0`, a GC const expression like a
--- | nullary constructor). Used to initialise a mutable CAF global (overwritten at instantiation)
--- | and to fill an `Effect` export's dropped perform-unit param.
+-- | A throwaway value of the given rep, used to initialise a mutable CAF global
+-- | (overwritten at instantiation) and to fill an `Effect` export's dropped
+-- | perform-unit param. Scalars get a zero of their own rep; a boxed (`eqref`)
+-- | global gets a dummy boxed `0` (a GC const expression, like a nullary
+-- | constructor). Enumerated, not catch-all: a missing rep here silently produced
+-- | a `(ref $Int)` for an i64 global, which is the exact class of bug that aborts
+-- | deep in binaryen rather than here. Fail loudly instead.
 defaultConst :: Ctx -> Rep -> Effect B.Expression
 defaultConst ctx = case _ of
   I32 -> B.i32Const ctx.mod 0
+  I64 -> B.i64Const ctx.mod 0 0
   F64 -> B.f64Const ctx.mod 0.0
-  _ -> B.i32Const ctx.mod 0 >>= \z -> B.structNew ctx.mod ctx.rt.intHt [ z ]
+  Boxed -> B.i32Const ctx.mod 0 >>= \z -> B.structNew ctx.mod ctx.rt.intHt [ z ]
+  CloRef -> throwException (error "Codegen.defaultConst: a CAF global cannot be a bare closure ref")
 
 -- | Synthesize the init function that computes each CAF once, in dependency order,
 -- | storing it in its global, and **export** it as `caf_init`. The CAF still has its own
@@ -802,7 +808,7 @@ rhsRep ctx = case _ of
 genRhs :: Ctx -> Rhs -> Effect B.Expression
 genRhs ctx = case _ of
   RAtom atom -> genAtom ctx atom
-  RPrim intr args -> genPrim ctx intr args
+  RPrim intr args -> genPrim ctx intr args >>= checkedPrim ctx intr
   -- a reference to a globalized CAF (ADR 0006) reads its global instead of calling
   -- the binding; the value was computed once by the init function
   RCallKnown name args
@@ -875,3 +881,40 @@ genRhs ctx = case _ of
     cloOperand <- genAtomAs ctx Boxed headAtom >>= \h -> B.refCast ctx.mod h ctx.rt.refClo
     argE <- genAtomAs ctx Boxed argAtom
     B.callRef ctx.mod codeF [ cloOperand, argE ] ctx.rt.codeHt
+
+-- | Whether to verify, at codegen, that what `genPrim` actually emitted agrees
+-- | with what `primRep` claims it produces (ADR 0002). Flip to `false` for a
+-- | check-free build. The check is compile-time and O(1) per prim node.
+repContractChecks :: Boolean
+repContractChecks = true
+
+-- | The contract `Codegen.Prim`/`Lower.Reps` depend on but never state in one
+-- | place: the wasm type `genPrim` emits for an intrinsic must match `primRep`
+-- | for it. A scalar rep demands that exact scalar; a `Boxed`/`CloRef` rep demands
+-- | a reference. A violation here is the class of bug that otherwise mislabels a
+-- | value and aborts deep in binaryen's `visitRefCast`; caught here it names the
+-- | intrinsic and both reps instead.
+checkedPrim :: Ctx -> Intrinsic -> B.Expression -> Effect B.Expression
+checkedPrim _ intr e =
+  if not repContractChecks || ok then pure e else throwException (error msg)
+  where
+  declared = primRep intr
+  actual = B.getExpressionType e
+  scalar t = B.typeEq t B.i32 || B.typeEq t B.i64 || B.typeEq t B.f64
+  ok = case declared of
+    I32 -> B.typeEq actual B.i32
+    I64 -> B.typeEq actual B.i64
+    F64 -> B.typeEq actual B.f64
+    Boxed -> not (scalar actual)
+    CloRef -> not (scalar actual)
+  msg =
+    "Codegen: primRep/genPrim disagree for " <> show intr
+      <> ": primRep says "
+      <> show declared
+      <> " but genPrim emitted "
+      <> describe actual
+  describe t
+    | B.typeEq t B.i32 = "i32"
+    | B.typeEq t B.i64 = "i64"
+    | B.typeEq t B.f64 = "f64"
+    | otherwise = "a reference type (eqref / i31 / struct)"

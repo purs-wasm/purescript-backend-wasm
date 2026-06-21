@@ -61,6 +61,19 @@ data Intrinsic
   | StrLen -- String -> Int (UTF-8 byte length, `array.len`)
   | StrConcat -- String -> String -> String (allocate + copy both byte arrays)
   | StrEq -- String -> String -> Boolean (length then byte-by-byte compare)
+  | Int64And
+  | Int64Or
+  | Int64Xor
+  | Int64Complement
+  | Int64Shl
+  | Int64ShrS
+  | Int64ShrU
+  | Int64RotL
+  | Int64RotR
+  | Int64Eq
+  | Int64Lt
+  | Int64FromInt
+  | Int64ToInt
   -- | `Wasm.String` (WasmBase, ADR 0026/0030) first-order **byte-level** `$Str` primitives, so the
   -- | `Data.String.*` code-point operations can be written in PureScript over them (UTF-8
   -- | decode/encode in PureScript) and thus run standalone on wasm — the Rust `.as_bytes()` analog.
@@ -143,9 +156,9 @@ data Intrinsic
   -- | applying it to the unit (the erased `Partial` dictionary). Native so the wasm
   -- | closure never crosses to the JS foreign (which would call it as `f()`).
   | UnsafePartial
-  -- | `Data.Int.Bits` 32-bit bitwise ops (JS `& | ^ << >> >>> ~`), each a single
-  -- | i32 instruction. `IntShr` is *arithmetic* (sign-propagating, JS `>>`);
-  -- | `IntZshr` is *logical* (zero-fill, JS `>>>`); `IntComplement x` = `x ^ -1`.
+  -- `Data.Int.Bits` 32-bit bitwise ops (JS `& | ^ << >> >>> ~`), each a single
+  -- i32 instruction. `IntShr` is *arithmetic* (sign-propagating, JS `>>`);
+  -- `IntZshr` is *logical* (zero-fill, JS `>>>`); `IntComplement x` = `x ^ -1`.
   | IntAnd
   | IntOr
   | IntXor
@@ -301,6 +314,19 @@ qualifiedIntrinsic = case _ of
   "Wasm.Int.lt" -> Just (Tuple IntLt 2)
   "Wasm.Int.div" -> Just (Tuple IntDiv 2)
   "Wasm.Int.mod" -> Just (Tuple IntMod 2)
+  "Wasm.Int64.and" -> Just (Tuple Int64And 2)
+  "Wasm.Int64.or" -> Just (Tuple Int64Or 2)
+  "Wasm.Int64.xor" -> Just (Tuple Int64Xor 2)
+  "Wasm.Int64.complement" -> Just (Tuple Int64Complement 1)
+  "Wasm.Int64.shl" -> Just (Tuple Int64Shl 2)
+  "Wasm.Int64.shr" -> Just (Tuple Int64ShrS 2)
+  "Wasm.Int64.zshr" -> Just (Tuple Int64ShrU 2)
+  "Wasm.Int64.rotl" -> Just (Tuple Int64RotL 2)
+  "Wasm.Int64.rotr" -> Just (Tuple Int64RotR 2)
+  "Wasm.Int64.eq" -> Just (Tuple Int64Eq 2)
+  "Wasm.Int64.lt" -> Just (Tuple Int64Lt 2)
+  "Wasm.Int64.fromInt" -> Just (Tuple Int64FromInt 1)
+  "Wasm.Int64.toInt" -> Just (Tuple Int64ToInt 1)
   -- `Data.Int.Bits` 32-bit bitwise ops (the `integers` package foreigns: bare
   -- `and`/`or`/`xor`/`shl`/`shr`/`zshr`/`complement`, qualified here because the
   -- bare names are too generic). Pure, so absent from `effectfulForeignNames`.

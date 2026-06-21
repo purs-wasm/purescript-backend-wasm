@@ -265,6 +265,32 @@ genPrim ctx intr args = case intr, args of
   IntShl, [ a, b ] -> intBinop B.i32Shl a b
   IntShr, [ a, b ] -> intBinop B.i32ShrS a b
   IntZshr, [ a, b ] -> intBinop B.i32ShrU a b
+  Int64And, [ a, b ] -> i64Binop B.i64And a b
+  Int64Or, [ a, b ] -> i64Binop B.i64Or a b
+  Int64Xor, [ a, b ] -> i64Binop B.i64Xor a b
+  Int64Shl, [ a, b ] -> i64Binop B.i64Shl a b
+  Int64ShrS, [ a, b ] -> i64Binop B.i64ShrS a b
+  Int64ShrU, [ a, b ] -> i64Binop B.i64ShrU a b
+  Int64RotL, [ a, b ] -> i64Binop B.i64RotL a b
+  Int64RotR, [ a, b ] -> i64Binop B.i64RotR a b
+  Int64Complement, [ a ] -> do
+    ea <- i64Arg a
+    m1 <- B.i32Const ctx.mod (-1) >>= B.i64ExtendI32S ctx.mod
+    B.i64Xor ctx.mod ea m1
+  Int64Eq, [ a, b ] -> do
+    ea <- i64Arg a
+    eb <- i64Arg b
+    B.i64Eq ctx.mod ea eb >>= B.i31New ctx.mod
+  Int64Lt, [ a, b ] -> do
+    ea <- i64Arg a
+    eb <- i64Arg b
+    B.i64LtS ctx.mod ea eb >>= B.i31New ctx.mod
+  Int64FromInt, [ a ] -> do
+    ea <- intArg a
+    B.i64ExtendI32S ctx.mod ea
+  Int64ToInt, [ a ] -> do
+    ea <- i64Arg a
+    B.i32WrapI64 ctx.mod ea
   IntComplement, [ a ] -> do
     ea <- intArg a
     m1 <- B.i32Const ctx.mod (-1)
@@ -303,6 +329,11 @@ genPrim ctx intr args = case intr, args of
     ea <- intArg a
     eb <- intArg b
     B.call ctx.mod name [ ea, eb ] B.i32
+  i64Arg = genAtomAs ctx I64
+  i64Binop op a b = do
+    ea <- i64Arg a
+    eb <- i64Arg b
+    op ctx.mod ea eb
   boolBinop op a b = do
     ea <- boolArg a
     eb <- boolArg b

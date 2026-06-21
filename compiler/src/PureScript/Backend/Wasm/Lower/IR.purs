@@ -21,6 +21,7 @@ import PureScript.Backend.Wasm.Intrinsics (Intrinsic)
 -- | on each binder and let codegen switch on it.
 data Rep
   = I32 -- Int, Char, Boolean
+  | I64 -- Int64
   | F64 -- Number
   | Boxed -- the universal `eqref` box
   | CloRef -- (ref $Clo): the closure parameter of a lifted code function
