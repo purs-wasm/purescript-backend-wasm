@@ -70,9 +70,13 @@ humanSize b
   | b < 1048576 = toStringWith (fixed 1) (toNumber b / 1024.0) <> " KB"
   | otherwise = toStringWith (fixed 1) (toNumber b / 1048576.0) <> " MB"
 
--- | ADR 0031: warn — never fail — when a *reached* ulib package's resolved version (`spago.lock`)
--- | differs from the version `ulib-manifest.json` supports (those modules then fall back to the
--- | registry foreign, losing standalone). Absent manifest/lock → no-op.
+-- | ADR 0039: an informational provenance note — never a gate — when a *reached* ulib-patched
+-- | package's resolved version (`spago.lock`) differs from the version `ulib-manifest.json` was
+-- | authored against. Under content-based lenient versioning the patch is still applied (a wat-only
+-- | patch keeps the registry corefn + ships its foreign; a reimpl patch's interface is guarded by
+-- | `ulib check`), so this no longer implies a fall-back — it just surfaces the drift so an
+-- | interface/foreign-sig incompatibility points the user at re-running `ulib-tooling install`.
+-- | Absent manifest/lock → no-op.
 warnUlibVersionDrift :: forall r. Maybe Manifest -> Maybe LockView -> Set.Set String -> Run (LOG + r) Unit
 warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
   Just manifest, Just lock ->
@@ -80,7 +84,7 @@ warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
       warn
         ( Log.yellow
             ( Fmt.fmt
-                @"⚠ ulib: {pkg} is {got}, but ulib supports {want} — those modules fall back to the registry foreign (align your package-set to {want} to use the native ulib provider)"
+                @"ⓘ ulib: {pkg} resolved to {got}; the ulib patch was authored against {want}. It is still applied (lenient versioning, ADR 0039) — if you hit a link/runtime error in a patched module, re-run `ulib-tooling install` against your package-set."
                 { pkg: mm.package, got: fromMaybe "?" mm.got, want: mm.want }
             )
         )
@@ -267,23 +271,24 @@ buildCmd cliRoot binaryenBinDir args = do
   allMods <- Array.filterA (\mod -> joinPath [ args.input, printModname mod, "corefn.json" ] >>= exists) named
   let allModNames = Set.fromFoldable (map printModname allMods)
   let roots = map entryRoot (Array.fromFoldable args.entryModules)
-  -- ADR 0031: read the ulib manifest + spago.lock once. `shadowSet` (manifest + lock, exact match)
-  -- DRIVES resolution. The manifest is read from the lib itself (`$LIB/ulib-manifest.json`, copied in
-  -- at install) so the precompiled lib is self-describing — the build needs no ulib source tree
-  -- (matters for the lib-override flow — the planned, not-yet-implemented `ulib upgrade` scenario,
-  -- ADR 0031 §5).
+  -- ADR 0039: the manifest is now **provenance** (which packages ulib patches + the authored
+  -- version), not a resolution gate — resolution is presence-driven (below). Read from the lib itself
+  -- (`$LIB/ulib-manifest.json`, copied in at install) so the precompiled lib is self-describing, and
+  -- with `spago.lock` it feeds only the informational version-drift note (`warnUlibVersionDrift`).
   mManifest <- readManifest =<< joinPath [ libPath, ulibManifestFile ]
   mLock <- map parseLock <$> readText "spago.lock"
   -- File-level reachability (before the expensive full decode): read each module's import list
   -- cheaply, from the user output (registry) and — for every lib module that has a corefn — from the
-  -- lib. `resolveModuleSet` then runs the plan→recompute→materialize fixpoint (ADR 0031 §6): a
-  -- shadow's private helper module (absent from the user closure) is *injected* from the lib.
+  -- lib. `resolveModuleSet` then runs the plan→recompute→materialize fixpoint (ADR 0039): a module is
+  -- lib-sourced iff the lib ships a corefn for it (a PureScript-reimplementation patch or its injected
+  -- private helper); a wat-only patch keeps the registry corefn (real imports intact) and is NOT
+  -- lib-sourced — only its foreign comes from the lib.
   userImports <- map Map.fromFoldable $ for allMods \mod -> do
     source <- fromMaybe "" <$> (readText =<< joinPath [ args.input, printModname mod, "corefn.json" ])
     pure (Tuple (printModname mod) (corefnImports source))
   libImports <- map (Map.fromFoldable <<< Array.catMaybes) $ for (Map.toUnfoldable shadows) \(Tuple name sh) ->
     map (\src -> Tuple name (corefnImports src)) <$> readText sh.corefn
-  let { reachable, libSourced } = resolveModuleSet roots allModNames userImports libImports mManifest mLock
+  let { reachable, libSourced } = resolveModuleSet roots userImports libImports
   warnUlibVersionDrift mManifest mLock reachable
   -- Keep only modules with an actual corefn source: a user module, or a real lib module. The closure
   -- also reaches intrinsic / pseudo modules (`Wasm.*`, `Prim*`) the lib corefns import — those have no
@@ -302,9 +307,10 @@ buildCmd cliRoot binaryenBinDir args = do
   -- worker (incl. ulib-shadowed modules, whose corefn is in the lib). It has no in-process optimized
   -- MIR, so `--dump-mir` is unsupported.
   when (args.orchestrate && isJust args.dumpMir) (logAndThrow "--orchestrate does not support --dump-mir.")
-  -- Materialize the plan (ADR 0031 §6): a `libSourced` module's corefn comes from the lib, EXCEPT a
-  -- foreign-only ulib module (e.g. `Data.Int`) the lib has no corefn for — there the registry corefn
-  -- stays (ulib provides only its foreign). A name that resolves to no corefn at all is skipped.
+  -- Materialize the plan (ADR 0039): a `libSourced` module's corefn comes from the lib (it is a
+  -- reimpl patch or an injected helper — both guaranteed to have a lib corefn now that wat-only
+  -- patches are never lib-sourced). Every other reached module's corefn comes from the user output
+  -- (registry), with its real imports intact. A name that resolves to no corefn at all is skipped.
   -- Read each module's corefn source and the cheap metadata derived from it WITHOUT a full decode
   -- (ADR 0034): the source hash (the cache key's source input), the import names (for dependency
   -- order), and the foreign-import names (lowering's opaque-import fallback + foreign-sig

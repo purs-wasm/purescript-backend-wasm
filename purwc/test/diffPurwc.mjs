@@ -184,6 +184,29 @@ try {
   console.log(`ERROR: ${e?.message ?? e}`);
 }
 
+// ── ADR 0039 wat-only patch regression (blocker ②): a program reaching `Data.Int` (a wat-only
+// patch — registry corefn kept, foreign from the lib). Under `--orchestrate` the worker over-exports
+// `Data.Int.fromNumber` → `Data.Number.isFinite`; the abolished "foreign-only" half-shadow used to
+// drop `Data.Number` from the staged set and fail with `unknown callee`. Build oracle + orchestrate,
+// compare `main()` stdout (both must print the same `Data.Int.fromString "42"` result).
+process.stdout.write("• ulib: examples-intpatch (wat-only Data.Int → Data.Number reach): ");
+try {
+  const cf = tmp("intcf"), ora = tmp("intora"), orc = tmp("intorc");
+  tmps.push(cf, ora, orc);
+  sh("spago", ["build", "-p", "examples-intpatch", "--output", cf]);
+  sh("node", ["purs-wasm/index.dev.js", "build", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", ora, "--force"]);
+  sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc]);
+  const sA = await mainStdout(ora);
+  const sB = await mainStdout(orc);
+  const ok = sA === sB && sB.includes("(Just 42)");
+  if (!ok) failures++;
+  console.log(`main() stdout ${sA === sB ? "match" : "MISMATCH"}${ok ? "" : "  <-- FAIL"}`);
+  if (sA !== sB) console.log(`    oracle: ${sA}\n    orchestrate: ${sB}`);
+} catch (e) {
+  failures++;
+  console.log(`ERROR: ${e?.message ?? e}`);
+}
+
 for (const t of tmps) rmSync(t, { recursive: true, force: true });
 if (failures) {
   console.error(`\n✗ ${failures} check(s) failed.`);

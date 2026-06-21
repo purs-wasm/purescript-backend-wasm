@@ -224,6 +224,21 @@
           "dependencies": []
         }
       },
+      "examples-intpatch": {
+        "path": "examples/intpatch",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "integers",
+            "maybe",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-metatheory": {
         "path": "examples/metatheory",
         "core": {

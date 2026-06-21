@@ -1,9 +1,12 @@
--- | ulib support manifest (ADR 0031): `ulib-manifest.json` is the single source of truth for which
--- | packages/modules ulib covers and at which version. This module reads it and drives resolution:
--- | `shadowSet` / `resolveModuleSet` decide which modules are taken from the lib, and the build-time
--- | **version check** (`reachedMismatches`) compares each *reached* ulib package's resolved version
--- | (`spago.lock`) to the manifest version. Self-contained (the `spago.lock` reader lives here, not in
--- | the soon-to-be-retired `Ulib.Compat`) and pure where it can be.
+-- | ulib support manifest. Since ADR 0039 (ulib = patch on registry packages, content-based lenient
+-- | versioning) the manifest is **provenance** — which packages ulib patches and the authored version
+-- | — *not* a resolution gate. Resolution (`resolveModuleSet`) is **presence-driven**: a reached
+-- | module is taken from the lib iff the lib ships a corefn for it (a PureScript-reimplementation
+-- | patch or an injected internal helper). A wat-only patch keeps the registry `.purs` verbatim, so it
+-- | has no lib corefn and stays a user module — only its foreign provider comes from the lib. The
+-- | exact-version `shadowSet` gate of ADR 0031 is retired; `reachedMismatches` survives only as an
+-- | informational provenance note (the version of a patched package no longer gates anything).
+-- | Self-contained (the `spago.lock` reader lives here, not in the legacy `Ulib.Compat`).
 module PureScript.Backend.Wasm.CLI.Ulib.Manifest
   ( PkgEntry
   , Manifest
@@ -17,7 +20,6 @@ module PureScript.Backend.Wasm.CLI.Ulib.Manifest
   , lockVersion
   , Mismatch
   , reachedMismatches
-  , shadowSet
   , manifestPackages
   , manifestModules
   , ResolvedModules
@@ -113,10 +115,12 @@ lockVersion lock pkg =
 
 type Mismatch = { package :: String, want :: String, got :: Maybe String }
 
--- | One mismatch per **reached** ulib package whose resolved version (`spago.lock`) differs from the
--- | supported version (manifest). "Reached" = at least one of the package's covered modules is in
--- | the reachable closure, so an unused package's version is ignored (ADR 0031 §4 "pay for what you
--- | use"). Exact-version comparison (ulib targets exactly one version).
+-- | One entry per **reached** ulib package whose resolved version (`spago.lock`) differs from the
+-- | authored version (manifest). "Reached" = at least one of the package's patched modules is in the
+-- | reachable closure, so an unused package is ignored. Since ADR 0039 this is **informational only**
+-- | — a version difference no longer gates resolution (patches apply leniently; compatibility is
+-- | checked by `ulib check` / the e2e harnesses, not by exact-version equality). The build surfaces it
+-- | as a provenance note, never a fall-back decision.
 reachedMismatches :: Manifest -> LockView -> Set String -> Array Mismatch
 reachedMismatches manifest lock reached =
   Array.mapMaybe check (Map.toUnfoldable manifest)
@@ -128,17 +132,6 @@ reachedMismatches manifest lock reached =
       if Array.any (\m -> Set.member m reached) entry.modules && got /= Just entry.version then Just { package, want: entry.version, got }
       else Nothing
 
--- | The set of registry modules that resolve to the ulib (lib) corefn (ADR 0031): a covered module is
--- | used iff it is reachable AND its package's resolved version (`spago.lock`) **exactly** equals the
--- | manifest version. `resolveModuleSet` calls this each fixpoint round to decide the shadowed set.
-shadowSet :: Manifest -> LockView -> Set String -> Set String
-shadowSet manifest lock reached =
-  Set.fromFoldable (Array.concatMap covered (Map.toUnfoldable manifest))
-  where
-  covered (Tuple pkg entry) =
-    if lockVersion lock pkg == Just entry.version then Array.filter (\m -> Set.member m reached) entry.modules
-    else []
-
 -- | The packages the manifest covers, each with its supported version — the `{pkg, ver}` shape the
 -- | (legacy, pre-0031) `ulib compat` derived from the `ulib/shadow/<pkg>-<ver>` directory names.
 manifestPackages :: Manifest -> Array { pkg :: String, ver :: String }
@@ -149,43 +142,40 @@ manifestPackages = map (\(Tuple pkg entry) -> { pkg, ver: entry.version }) <<< M
 manifestModules :: Manifest -> Set String
 manifestModules = Set.fromFoldable <<< Array.concatMap _.modules <<< Array.fromFoldable <<< Map.values
 
--- ─────────────────────────── module-set resolution (ADR 0031 §6) ───────────────────────────
+-- ─────────────────────────── module-set resolution (ADR 0039 §1/§2) ───────────────────────────
 
--- | The resolved build module set + the per-module source decision (ADR 0031 §6). `reachable` is the
--- | final transitive closure; `libSourced` are the modules whose **corefn** must come from the lib (a
--- | shadowed registry module *or* an injected internal helper). A foreign-only ulib module (e.g.
--- | `Data.Int`) can be in `libSourced` yet have no lib corefn — the caller falls back to the registry
--- | corefn in that case.
+-- | The resolved build module set + the per-module source decision. `reachable` is the final
+-- | transitive closure; `libSourced` are the modules whose **corefn** comes from the lib. Since
+-- | ADR 0039 a module is `libSourced` iff the lib ships a corefn for it — i.e. it is a
+-- | PureScript-reimplementation patch of a registry module, or an injected internal helper. A wat-only
+-- | patch keeps the registry `.purs` verbatim, ships no lib corefn, and is therefore **not**
+-- | `libSourced` (its corefn / imports / externs all come from the user output, with its real imports
+-- | intact — only its foreign provider comes from the lib). This is what abolishes the unsound
+-- | "foreign-only" half-shadow (ADR 0039 §1): no module's declared import surface diverges from the
+-- | source actually compiled for it.
 type ResolvedModules = { reachable :: Set String, libSourced :: Set String }
 
--- | Resolve the module set via the **plan → recompute → materialize** fixpoint (ADR 0031 §6). Pure:
--- | the FS reads (user + lib corefn import lists) are hoisted out by the caller. `userMods` is the set
--- | of modules the user compiled; `userImports` / `libImports` are each module's import list from the
--- | user output / the lib (only lib modules with a corefn appear in `libImports`). Starting from the
--- | empty plan, each round recomputes the closure under the current source decision (lib import lists
--- | for `libSourced` modules, so a shadow's private helper becomes reachable), then re-derives the
--- | plan: `libSourced = shadowed ∪ internal`, where `internal` is a reached module the lib provides
--- | but the user did not (i.e. not a registry module). "reached" only grows and the version match is
--- | static, so the plan is **monotone** and converges (typically a round or two — one per level of
--- | internal nesting, rarely more than one).
+-- | Resolve the module set via the **plan → recompute → materialize** fixpoint. Pure: the FS reads
+-- | (user + lib corefn import lists) are hoisted out by the caller. `userImports` / `libImports` are
+-- | each module's import list from the user output / the lib (only lib modules **with a corefn** appear
+-- | in `libImports`). Starting from the empty plan, each round recomputes the closure under the current
+-- | source decision (lib import lists for `libSourced` modules, so a reimpl patch's private helper
+-- | becomes reachable), then re-derives the plan: `libSourced = reachable ∩ keys libImports` — every
+-- | reached module the lib has a corefn for. "reached" only grows and `keys libImports` is static, so
+-- | the plan is **monotone** and converges (typically a round or two — one per level of internal
+-- | nesting, rarely more than one).
 resolveModuleSet
   :: Array ModuleName
-  -> Set String
   -> Map String (Array String)
   -> Map String (Array String)
-  -> Maybe Manifest
-  -> Maybe LockView
   -> ResolvedModules
-resolveModuleSet roots userMods userImports libImports mManifest mLock = go Set.empty
+resolveModuleSet roots userImports libImports = go Set.empty
   where
   allNames = Set.toUnfoldable (Set.fromFoldable (Map.keys userImports) <> Set.fromFoldable (Map.keys libImports)) :: Array String
-  shadowedOf reached = fromMaybe Set.empty (shadowSet <$> mManifest <*> mLock <*> pure reached)
-  -- a reached module the lib provides (has a corefn) but the user does not compile → inject it.
-  internalOf reached = Set.filter (\n -> not (Set.member n userMods) && Map.member n libImports) reached
   importsOf libSourced n = fromMaybe [] (Map.lookup n (if Set.member n libSourced then libImports else userImports))
   go libSourced =
     let
       reachable = reachableClosure roots (Map.fromFoldable (allNames <#> \n -> Tuple n (importsOf libSourced n)))
-      libSourced' = Set.union (shadowedOf reachable) (internalOf reachable)
+      libSourced' = Set.filter (\n -> Map.member n libImports) reachable
     in
       if libSourced' == libSourced then { reachable, libSourced } else go libSourced'

@@ -1,6 +1,6 @@
 # 0039. ulib as a patch on registry packages, with content-based lenient versioning
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted — §1/§3/§4 implemented, §2 partial** _(2026-06-21: the "foreign-only" module category is abolished and resolution is **presence-driven** — a module is lib-sourced iff the lib ships a corefn for it, so a wat-only patch keeps the registry corefn with its real imports (§1); the exact-version `shadowSet` gate is removed, leaving `reachedMismatches` as an informational provenance note (§3); the purs / `builtWith` pin is carried forward unchanged (§4). This dissolves blocker ② — `metatheory --orchestrate` now builds end-to-end. §2 is **partial**: `resolveModuleSet` is simplified (no version gate, no foreign-only special case) but not deleted — the lib still ships precompiled artifacts and the build still selects lib-vs-user corefn per module. The full §2 "dumb source overlay, project compiles only its own modules" lands with the companion [ADR 0040](0040-global-content-addressed-library-cache.md) content-addressed cache (out of scope here).)_
 - Date: 2026-06-20
 
 > Supersedes [ADR 0031](0031-ulib-unified-library-modules.md) (and, transitively, the already-superseded

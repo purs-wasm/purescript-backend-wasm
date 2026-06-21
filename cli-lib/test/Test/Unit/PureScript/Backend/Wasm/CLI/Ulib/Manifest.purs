@@ -7,7 +7,7 @@ import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import PureScript.Backend.Wasm.CLI.Module (entryRoot)
-import PureScript.Backend.Wasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches, resolveModuleSet, shadowSet)
+import PureScript.Backend.Wasm.CLI.Ulib.Manifest (Manifest, lockVersion, parseLock, parseManifest, reachedMismatches, resolveModuleSet)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
 
@@ -68,71 +68,70 @@ spec = describe "PureScript.Backend.Wasm.CLI.Ulib.Manifest" do
       let matching = parseLock """{ "packages": { "prelude": { "version": "6.0.2" }, "arrays": { "version": "7.3.0" } } }"""
       reachedMismatches fixture matching (Set.fromFoldable [ "Data.Show", "Data.Array" ]) `shouldEqual` []
 
-  describe "shadowSet" do
+  describe "resolveModuleSet (ADR 0039 §1/§2 — presence-driven)" do
     let
-      lock = parseLock """{ "packages": { "prelude": { "version": "6.0.2" }, "arrays": { "version": "7.3.0" } } }"""
-    it "includes a covered module that is reached and version-matched" do
-      shadowSet fixture lock (Set.fromFoldable [ "Data.Show", "Data.Array" ])
-        `shouldEqual` Set.fromFoldable [ "Data.Show", "Data.Array" ]
-    it "includes only the reached modules of a matched package" do
-      shadowSet fixture lock (Set.fromFoldable [ "Data.Show" ]) `shouldEqual` Set.fromFoldable [ "Data.Show" ]
-    it "excludes a package whose version differs, even when reached (exact match)" do
-      let drifted = parseLock """{ "packages": { "prelude": { "version": "6.0.99" }, "arrays": { "version": "7.3.0" } } }"""
-      shadowSet fixture drifted (Set.fromFoldable [ "Data.Show", "Data.Array" ]) `shouldEqual` Set.fromFoldable [ "Data.Array" ]
-    it "is empty when nothing is reached" do
-      shadowSet fixture lock Set.empty `shouldEqual` (Set.empty :: Set.Set String)
-
-  describe "resolveModuleSet (ADR 0031 §6)" do
-    let
-      -- strings 6.0.1 covers the registry module CodeUnits; the lib's CodeUnits corefn imports the
-      -- non-registry internal helper `Internal.Utf8`.
-      strManifest = Map.fromFoldable [ Tuple "strings" { version: "6.0.1", modules: [ "Data.String.CodeUnits" ] } ]
-      matchLock = parseLock """{ "packages": { "strings": { "version": "6.0.1" } } }"""
+      -- A reimplementation patch: the lib ships a corefn for `Data.String.CodeUnits`, whose corefn
+      -- imports the non-registry internal helper `Internal.Utf8` (the registry CodeUnits does not).
       roots = [ entryRoot "Main" ]
-      userMods = Set.fromFoldable [ "Main", "Data.String.CodeUnits" ]
       userImports = Map.fromFoldable
         [ Tuple "Main" [ "Data.String.CodeUnits" ]
         , Tuple "Data.String.CodeUnits" [] -- registry CodeUnits does NOT import the internal helper
         ]
       libImports = Map.fromFoldable
-        [ Tuple "Data.String.CodeUnits" [ "Data.String.Internal.Utf8" ] -- the lib corefn does
+        [ Tuple "Data.String.CodeUnits" [ "Data.String.Internal.Utf8" ] -- the lib (reimpl) corefn does
         , Tuple "Data.String.Internal.Utf8" []
         ]
 
-    it "no manifest → nothing lib-sourced; reachable is the registry closure" do
-      let r = resolveModuleSet roots userMods userImports libImports Nothing Nothing
-      r.libSourced `shouldEqual` (Set.empty :: Set.Set String)
-      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.String.CodeUnits" ]
-
-    it "shadowed + version match → injects the private helper reached only via the lib corefn" do
-      let r = resolveModuleSet roots userMods userImports libImports (Just strManifest) (Just matchLock)
-      -- CodeUnits is shadowed; Internal.Utf8 is injected (not a user module, reached via lib imports)
+    it "a reimpl patch (lib corefn) is lib-sourced and injects its private helper" do
+      let r = resolveModuleSet roots userImports libImports
+      -- CodeUnits has a lib corefn → lib-sourced → its lib imports pull in the injected Internal.Utf8.
       r.libSourced `shouldEqual` Set.fromFoldable [ "Data.String.CodeUnits", "Data.String.Internal.Utf8" ]
       r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.String.CodeUnits", "Data.String.Internal.Utf8" ]
 
-    it "version mismatch → not shadowed, so the internal helper is never reached" do
-      let drift = parseLock """{ "packages": { "strings": { "version": "6.0.99" } } }"""
-      let r = resolveModuleSet roots userMods userImports libImports (Just strManifest) (Just drift)
+    it "empty libImports → nothing lib-sourced; reachable is the registry closure" do
+      let
+        r = resolveModuleSet roots
+          (Map.fromFoldable [ Tuple "Main" [ "Data.Array" ], Tuple "Data.Array" [] ])
+          Map.empty
       r.libSourced `shouldEqual` (Set.empty :: Set.Set String)
-      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.String.CodeUnits" ]
+      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.Array" ]
 
-    it "an internal helper whose importer is unreached is not pulled in" do
+    it "a lib module whose importer is unreached is not pulled in" do
       -- Main imports nothing → CodeUnits (hence Internal.Utf8) stays out of the closure
-      let r = resolveModuleSet roots userMods (Map.fromFoldable [ Tuple "Main" [] ]) libImports (Just strManifest) (Just matchLock)
+      let r = resolveModuleSet roots (Map.fromFoldable [ Tuple "Main" [] ]) libImports
       r.libSourced `shouldEqual` (Set.empty :: Set.Set String)
       r.reachable `shouldEqual` Set.fromFoldable [ "Main" ]
 
-    it "a foreign-only covered module (no lib corefn) is lib-sourced via shadowing, not injection" do
-      -- integers covers Data.Int but the lib has no corefn for it (foreign-only) → absent from libImports
-      let intManifest = Map.fromFoldable [ Tuple "integers" { version: "6.0.0", modules: [ "Data.Int" ] } ]
-      let intLock = parseLock """{ "packages": { "integers": { "version": "6.0.0" } } }"""
+    it "a wat-only patch (no lib corefn) stays user-sourced with its real imports — blocker ② regression" do
+      -- `Data.Int` is a wat-only patch: the lib ships only its foreign, NO corefn, so it is absent
+      -- from libImports → NOT lib-sourced. Its registry corefn (here Main→Data.Int→Data.Number) is
+      -- used verbatim, so `Data.Number` (the source of `isFinite`) stays reachable and gets compiled.
+      -- The pre-ADR-0039 "foreign-only" path zeroed Data.Int's imports → Data.Number was dropped.
       let
-        r = resolveModuleSet [ entryRoot "Main" ] (Set.fromFoldable [ "Main", "Data.Int" ])
-          (Map.fromFoldable [ Tuple "Main" [ "Data.Int" ], Tuple "Data.Int" [] ])
+        r = resolveModuleSet roots
+          ( Map.fromFoldable
+              [ Tuple "Main" [ "Data.Int" ]
+              , Tuple "Data.Int" [ "Data.Number" ]
+              , Tuple "Data.Number" []
+              ]
+          )
           Map.empty
-          (Just intManifest)
-          (Just intLock)
-      -- Data.Int is in libSourced (covered + reached + matched), so the caller will *try* the lib
-      -- corefn and fall back to the registry one; nothing is injected.
-      r.libSourced `shouldEqual` Set.fromFoldable [ "Data.Int" ]
-      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.Int" ]
+      r.libSourced `shouldEqual` (Set.empty :: Set.Set String)
+      r.reachable `shouldEqual` Set.fromFoldable [ "Main", "Data.Int", "Data.Number" ]
+
+    it "a wat-only patch and a reimpl patch coexist correctly in one build" do
+      -- Data.Int (wat-only, no lib corefn) keeps its registry imports (Data.Number reached); CodeUnits
+      -- (reimpl, lib corefn) is lib-sourced and injects Internal.Utf8.
+      let
+        r = resolveModuleSet roots
+          ( Map.fromFoldable
+              [ Tuple "Main" [ "Data.Int", "Data.String.CodeUnits" ]
+              , Tuple "Data.Int" [ "Data.Number" ]
+              , Tuple "Data.Number" []
+              , Tuple "Data.String.CodeUnits" []
+              ]
+          )
+          libImports
+      r.libSourced `shouldEqual` Set.fromFoldable [ "Data.String.CodeUnits", "Data.String.Internal.Utf8" ]
+      r.reachable `shouldEqual`
+        Set.fromFoldable [ "Main", "Data.Int", "Data.Number", "Data.String.CodeUnits", "Data.String.Internal.Utf8" ]

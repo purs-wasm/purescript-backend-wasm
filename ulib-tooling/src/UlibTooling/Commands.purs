@@ -76,13 +76,14 @@ ulibCheckCmd cliRoot opt = do
         libExt <- readExterns =<< joinPath [ libPath, mod, "externs.cbor" ]
         usrExt <- readExterns =<< joinPath [ input, mod, "externs.cbor" ]
         case libExt, usrExt of
-          -- a wat-only ulib module (e.g. Data.Int) has a `foreign.wasm` but no externs — not a
-          -- shadow, so there is no interface to check; the `Nothing` lib externs skips it below.
+          -- a wat-only patch (e.g. Data.Int, ADR 0039) ships a `foreign.wasm` but no corefn/externs —
+          -- it keeps the registry `.purs`, so there is no reimplemented interface to check; the
+          -- `Nothing` lib externs skips it below.
           _, Nothing -> do
             info (Fmt.fmt @"  - {m}: not compiled in your workspace; skipped" { m: mod })
             pure Nothing
           Nothing, _ -> do
-            info (Fmt.fmt @"  - {m}: no shadow externs (foreign-only or unreadable); skipped" { m: mod })
+            info (Fmt.fmt @"  - {m}: wat-only patch (no reimpl externs) or unreadable; skipped" { m: mod })
             pure Nothing
           Just le, Just ue -> do
             let d = diffInterface (interfaceOf ue) (interfaceOf le)

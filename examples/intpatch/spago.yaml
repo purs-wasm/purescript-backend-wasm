@@ -1,0 +1,8 @@
+package:
+  name: examples-intpatch
+  dependencies:
+    - console
+    - effect
+    - integers
+    - maybe
+    - prelude

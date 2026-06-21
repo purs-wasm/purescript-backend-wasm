@@ -86,7 +86,7 @@ language and are kept out of version control.)
 | 0036 | [Parameterized join points for decision-tree leaves](0036-join-points-for-decision-tree-leaves.md) | Proposed (de-prioritized — measured duplication ~1.16×, not the `--no-opt` floor) |
 | 0037 | [Separate per-module codegen and linking (per-module wasm + `wasm-merge`)](0037-separate-per-module-codegen-and-linking.md) | Accepted; implemented (Phases 0–2 + Phase-3 codegen restructure — single-module compilation behind `--per-module-codegen`, parity-verified; per-module wasm cache pending) |
 | 0038 | [Separated compilation: the `purwc` worker, the `purs-wasm` orchestrator, and the shared `cli-lib`](0038-separated-compilation-purwc-worker-and-cli-lib.md) | Accepted; **Phase A implemented** (`cli-lib` extracted, three CLIs re-homed, behaviour-neutral); the standalone `purwc` worker (Phase B) + subprocess orchestrator (Phase C) designed, not yet implemented |
-| 0039 | [ulib as a patch on registry packages, with content-based lenient versioning](0039-ulib-as-registry-package-patch.md) | Proposed (supersedes 0031; depends on 0035 Layer C + 0040) |
+| 0039 | [ulib as a patch on registry packages, with content-based lenient versioning](0039-ulib-as-registry-package-patch.md) | Accepted — §1/§3/§4 implemented (foreign-only abolished, presence-driven resolution, lenient versioning; blocker ② fixed), §2 partial (full source-overlay deferred to 0040) |
 | 0040 | [A global content-addressed library cache (`$PURS_WASM_LIB`)](0040-global-content-addressed-library-cache.md) | Proposed (supersedes 0033; depends on 0035 Layer C) |
 
 ## Scope
