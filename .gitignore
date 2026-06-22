@@ -29,6 +29,7 @@ compiler/test/e2e-fixtures-out/
 
 #
 _draft
+.claude-session
 
 # purs-wasm npm bundle build artifacts
 purs-wasm/bundle/

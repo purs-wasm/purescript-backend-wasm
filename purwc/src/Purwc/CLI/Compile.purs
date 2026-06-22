@@ -26,6 +26,7 @@ import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Fmt as Fmt
 import Foreign.Object as Object
+import PureScript.Backend.Wasm.CLI.Compat (toolchainTag)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames)
 import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log as Log
@@ -57,7 +58,9 @@ compileCmd cliRoot binaryenBinDir args = do
   decoded <- case parseModule src of
     Left err -> logAndThrow (target <> ": " <> err)
     Right m -> pure m
-  let sourceHash = hashString src
+  -- ADR 0040: fold the `.pmi`-affecting toolchain axes into the source hash (shared with the
+  -- orchestrator's `Build.purs`, so the keys agree — the `diffPurwc` byte-parity contract).
+  let sourceHash = hashString (toolchainTag <> "\n" <> src)
   let foreignNames = corefnForeignNames src
 
   -- The target's externs (type info / ctor field reps) + its foreign calling-convention signatures.

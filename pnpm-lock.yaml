@@ -118,9 +118,13 @@ importers:
 
   examples/output-effect-prim: {}
 
+  examples/output-helloworld: {}
+
   examples/output-meta: {}
 
   examples/output-metatheory: {}
+
+  examples/output-metatheory-wasm: {}
 
   examples/output-priv: {}
 
@@ -129,6 +133,8 @@ importers:
   examples/output-run: {}
 
   examples/output-wasm: {}
+
+  examples/run/output-wasm: {}
 
   purs-wasm:
     dependencies:

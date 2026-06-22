@@ -9,6 +9,8 @@ module PureScript.Backend.Wasm.CLI.Compat
   ( checkWasmBaseCompat
   , supportedCorefn
   , checkCorefnVersions
+  , backendCacheVersion
+  , toolchainTag
   ) where
 
 import Prelude
@@ -47,6 +49,27 @@ checkWasmBaseCompat backendVersion modules = case Array.nub (modules >>= unsuppo
 -- | (ADR 0029). Widen only after testing the decoder against the new compiler's output.
 supportedCorefn :: Array String
 supportedCorefn = [ "0.15.16" ]
+
+-- | A manually-bumped tag for the backend's **output-affecting** behaviour (optimizer + lowering +
+-- | codegen). It is part of the `.pmi` cache key (ADR 0040) so a compiler change that alters a
+-- | module's compiled output invalidates every cached artifact, even when the module source is
+-- | unchanged. It is a *shared* constant — both the `purwc` worker and the `purs-wasm` orchestrator
+-- | (and the whole-program oracle) read the same value, so their cache keys agree byte-for-byte (the
+-- | differential `diffPurwc` `.pmi` byte-parity contract requires this). Bump it on any optimizer /
+-- | lowering / codegen change whose output should not be served from a stale cache. (The `purs` /
+-- | CoreFn-format axis is `supportedCorefn`; the per-binary CLI `Version` strings are deliberately
+-- | NOT used here — they can differ between binaries and would break key agreement.)
+backendCacheVersion :: String
+backendCacheVersion = "1"
+
+-- | The toolchain component of the `.pmi` content-address (ADR 0040 §2): the axes that affect a
+-- | module's interface + optimization summary — the `purs`/CoreFn pin and the backend output version.
+-- | Platform / optimization-level / per-module-rep are *codegen* axes that affect only the object
+-- | (`.wasm`), not the `.pmi`, so they belong in the `.wasm` key (a later phase), not here. Folded
+-- | into each module's source hash at the CLI boundary so it enters the cache key without threading a
+-- | new parameter through the optimizer.
+toolchainTag :: String
+toolchainTag = "corefn=" <> Str.joinWith "," supportedCorefn <> ";backend=" <> backendCacheVersion
 
 -- | Reject any linked module whose `builtWith` compiler is not one this backend supports.
 checkCorefnVersions :: forall r. Array { name :: ModuleName, builtWith :: String | r } -> Either String Unit

@@ -43,7 +43,7 @@ import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PureScript.Backend.Wasm.CLI.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
-import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat)
+import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat, toolchainTag)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames, corefnImports)
 import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, execFileInput, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log (br)
@@ -327,7 +327,11 @@ buildCmd cliRoot binaryenBinDir args = do
       { name
       , mn: Str.split (Str.Pattern ".") name
       , src
-      , sourceHash: hashString src
+      -- ADR 0040: fold the `.pmi`-affecting toolchain axes into the source hash so the cache key is
+      -- toolchain-aware (a backend/CoreFn bump invalidates stale artifacts) without threading a new
+      -- parameter through the optimizer. `toolchainTag` is shared with the `purwc` worker so their
+      -- keys agree (the `diffPurwc` byte-parity contract).
+      , sourceHash: hashString (toolchainTag <> "\n" <> src)
       , imports: corefnImports src
       , foreignNames: corefnForeignNames src
       }
