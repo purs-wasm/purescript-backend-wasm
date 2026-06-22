@@ -20,6 +20,7 @@ module PureScript.Backend.Wasm.MiddleEnd
   , compileModuleMir
   , SingleModuleInput
   , SingleModuleOutput
+  , declRefMap
   , liftModule
   , CacheInput
   , CacheEntry
@@ -538,6 +539,18 @@ declRefs m = m.decls >>= case _ of
   M.Rec rs -> rs >>= \r -> if isSpec r.ident then [] else references r.expr
   where
   isSpec i = contains (Pattern "$spec") i
+
+-- | The per-binding reference graph of a (finalized) module: each top-level binding's qualified key
+-- | paired with the qualified keys its body references. Unlike `declRefs` (which drops `$spec`
+-- | bindings for *ordering*), this keeps every binding and every reference, because the orchestrator
+-- | uses it for **reachability** (ADR 0040 §P2 / #19): a `caf_init$M` must run only if the module is
+-- | reachable from the program's entry points, so dead CAFs (whose init may call a foreign that cannot
+-- | marshal back across the JS boundary) are never eagerly initialized. The graph is exact (taken from
+-- | the optimized bodies), so reachability is not polluted by the worker's over-export.
+declRefMap :: M.Module -> Array (Tuple String (Array String))
+declRefMap m = m.decls >>= case _ of
+  M.NonRec _ i e -> [ Tuple (key m.name i) (Array.nub (references e)) ]
+  M.Rec rs -> map (\r -> Tuple (key m.name r.ident) (Array.nub (references r.expr))) rs
 
 -- | Optimize a single self-contained module (its own bindings only). A convenience
 -- | for callers with one module; cross-module dictionary elimination needs

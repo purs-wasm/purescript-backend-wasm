@@ -207,6 +207,30 @@ try {
   console.log(`ERROR: ${e?.message ?? e}`);
 }
 
+// ── #19 dead-CAF reachability regression: examples-run (purescript-run / Free monad) transitively
+// IMPORTS Effect.Aff / Control.Monad.ST.Internal etc. but never USES them. The worker over-exports,
+// so those modules' CAFs survived per-module; `caf_init` eagerly ran them and an opaque foreign that
+// cannot marshal back across the JS boundary trapped at runtime ("type incompatibility from/to JS").
+// The orchestrator now prunes `caf_init$M` to entry-reachable modules. Build oracle (whole-program)
+// + orchestrate, run main() through each loader, require identical stdout (and that it actually ran).
+process.stdout.write("• #19: examples-run (dead opaque-foreign CAF reachability under orchestrate): ");
+try {
+  const cf = tmp("runcf"), ora = tmp("runora"), orc = tmp("runorc");
+  tmps.push(cf, ora, orc);
+  sh("spago", ["build", "-p", "examples-run", "--output", cf]);
+  sh("node", ["purs-wasm/index.dev.js", "build", "-e", "Examples.Run.Main", "-I", cf, "-O", ora, "--force"]);
+  sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.Run.Main", "-I", cf, "-O", orc]);
+  const sA = await mainStdout(ora);
+  const sB = await mainStdout(orc);
+  const ok = sA === sB && sB.includes("famished");
+  if (!ok) failures++;
+  console.log(`main() stdout ${sA === sB ? "match" : "MISMATCH"}${ok ? "" : "  <-- FAIL"}`);
+  if (sA !== sB) console.log(`    oracle: ${sA}\n    orchestrate: ${sB}`);
+} catch (e) {
+  failures++;
+  console.log(`ERROR: ${e?.message ?? e}`);
+}
+
 for (const t of tmps) rmSync(t, { recursive: true, force: true });
 if (failures) {
   console.error(`\n✗ ${failures} check(s) failed.`);

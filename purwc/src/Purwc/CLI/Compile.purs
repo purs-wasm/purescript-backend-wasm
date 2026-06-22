@@ -39,7 +39,7 @@ import PureScript.Backend.Wasm.CLI.Module (entryRoot)
 import PureScript.Backend.Wasm.CLI.Paths (wasmDisBin)
 import PureScript.Backend.Wasm.Compiler (compileModuleWasm, effectfulForeigns, moduleInterface, parseModule)
 import PureScript.Backend.Wasm.Externs (ctorFieldReps)
-import PureScript.Backend.Wasm.MiddleEnd (compileModuleMir, liftModule)
+import PureScript.Backend.Wasm.MiddleEnd (compileModuleMir, declRefMap, liftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (PmiEntry, decodePmi, encodePmi)
 import Purwc.CLI.Options.Types (CompileOption)
@@ -146,6 +146,13 @@ compileCmd cliRoot binaryenBinDir args = do
             [ Tuple "cafInitExport" (maybe jsonNull fromString art.cafInitExport)
             , Tuple "foreignModules" (fromArray (map fromString art.foreignModules))
             , Tuple "crossModuleExports" (fromArray (map fromString art.crossModuleExports))
+            -- ADR 0040 §P2 / #19: the per-binding reference graph, so the orchestrator can compute
+            -- entry reachability and only run a module's `caf_init$M` when it is reachable (a dead
+            -- CAF whose init calls a non-marshallable foreign must never be eagerly initialized).
+            , Tuple "bindingRefs"
+                ( fromObject $ Object.fromFoldable
+                    (declRefMap out.finalMod <#> \(Tuple k refs) -> Tuple k (fromArray (map fromString refs)))
+                )
             ]
         )
       when args.text do

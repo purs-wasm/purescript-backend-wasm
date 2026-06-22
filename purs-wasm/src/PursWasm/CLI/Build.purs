@@ -111,6 +111,9 @@ type LinkMeta =
   { cafInitExport :: Maybe String
   , foreignModules :: Array String
   , crossModuleExports :: Array String
+  -- ADR 0040 §P2 / #19: this module's per-binding reference graph (binding key → referenced keys),
+  -- for entry-reachability-aware `caf_init` pruning.
+  , bindingRefs :: Array (Tuple String (Array String))
   }
 
 -- | Parse a `.link.json` sidecar (defensive — a corrupt/absent sidecar is a build error, not a
@@ -123,6 +126,10 @@ decodeLinkMeta txt = do
     { cafInitExport: toString =<< Object.lookup "cafInitExport" obj
     , foreignModules: strs "foreignModules"
     , crossModuleExports: strs "crossModuleExports"
+    , bindingRefs: case toObject =<< Object.lookup "bindingRefs" obj of
+        Nothing -> []
+        Just refsObj -> Object.toUnfoldable refsObj <#> \(Tuple k v) ->
+          Tuple k (fromMaybe [] (Array.mapMaybe toString <$> toArray v))
     }
 
 -- | Order modules so each comes after the modules it imports (within the set). Transcribes
@@ -197,8 +204,31 @@ orchestrateModules cliRoot purwcInput args buildDir srcInfos = do
   case Array.head (labelCollisions allLabels) of
     Just clash -> pure (Left ("label hash collision across modules: " <> joinWith ", " clash))
     Nothing -> do
+      -- #19: chain a module's `caf_init$M` only when the module is reachable from the program's
+      -- entry points. The worker over-exports, so a per-module wasm keeps bindings (and their CAF
+      -- inits) the whole program never uses; `caf_init` ran ALL of them, and a dead CAF whose init
+      -- calls a foreign that cannot marshal back across the JS boundary (e.g. `Effect.Aff` /
+      -- `Control.Monad.ST.Internal` in an entry that never uses them) trapped at runtime. The exact
+      -- per-binding reference graph (from the optimized bodies, so unaffected by over-export) lets the
+      -- orchestrator reproduce the whole-program reachability: seed at the entry modules' bindings,
+      -- close over references, and keep `caf_init$M` only for modules with a reachable binding. The
+      -- post-merge internalise + DCE then drops the now-unreferenced dead modules and their foreigns.
+      let entrySet = Set.fromFoldable args.entryModules
+      let refGraph = Map.fromFoldable (metas >>= _.meta.bindingRefs)
+      let rootKeys = Array.filter (\k -> Set.member (moduleOfKey k) entrySet) (Array.fromFoldable (Map.keys refGraph))
+      let
+        liveMods =
+          -- Fallback (no reachability info, or no entry-owned bindings): keep every `caf_init`, the
+          -- pre-#19 behaviour — never skip a needed init.
+          if Array.null rootKeys then Set.fromFoldable (map _.name metas)
+          else Set.map moduleOfKey (reachKeys refGraph Set.empty rootKeys)
       glue <- liftEffect
-        (buildLinkGlue (Array.mapMaybe (\m -> (\e -> { moduleName: m.name, cafInitExport: e }) <$> m.meta.cafInitExport) metas))
+        ( buildLinkGlue
+            ( Array.mapMaybe
+                (\m -> if Set.member m.name liveMods then (\e -> { moduleName: m.name, cafInitExport: e }) <$> m.meta.cafInitExport else Nothing)
+                metas
+            )
+        )
       gluePath <- joinPath [ buildDir, "link.glue.wasm" ]
       preWritten <- for ordered \m -> do
         p <- joinPath [ buildDir, m.name <> ".wasm" ]
@@ -228,6 +258,23 @@ orchestrateModules cliRoot purwcInput args buildDir srcInfos = do
             , crossModuleExports: Array.nub (metas >>= _.meta.crossModuleExports)
             }
         )
+
+-- | The defining module of a binding key `Module.ident` (the `ident` is dotless, so the module is
+-- | the prefix before the last dot — module names themselves contain dots).
+moduleOfKey :: String -> String
+moduleOfKey k = case Str.lastIndexOf (Str.Pattern ".") k of
+  Just i -> Str.take i k
+  Nothing -> k
+
+-- | The transitive closure of binding keys reachable from `frontier` over the reference graph
+-- | (#19 entry-reachability for `caf_init` pruning). Iterative with a `seen` set so a reference
+-- | cycle terminates.
+reachKeys :: Map.Map String (Array String) -> Set.Set String -> Array String -> Set.Set String
+reachKeys graph seen frontier = case Array.uncons frontier of
+  Nothing -> seen
+  Just { head: k, tail }
+    | Set.member k seen -> reachKeys graph seen tail
+    | otherwise -> reachKeys graph (Set.insert k seen) (tail <> fromMaybe [] (Map.lookup k graph))
 
 -- | Stage every selected module's resolved `corefn.json` (lib-shadowed or registry) + its
 -- | `externs.cbor` (a registry/user module's from the user output, a lib-internal module's from the
