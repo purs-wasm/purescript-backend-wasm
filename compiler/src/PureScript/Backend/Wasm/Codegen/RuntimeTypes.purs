@@ -41,7 +41,7 @@ type RuntimeTypes =
   , bytesHt :: B.HeapType
   , strHt :: B.HeapType
   , i32ArrHt :: B.HeapType
-  , f64ArrHt :: B.HeapType  
+  , f64ArrHt :: B.HeapType
   , codeHt :: B.HeapType
   , refInt :: B.Type
   , refInt64 :: B.Type
@@ -53,7 +53,7 @@ type RuntimeTypes =
   , refBytes :: B.Type
   , refStr :: B.Type
   , refI32Arr :: B.Type
-  , refF64Arr :: B.Type  
+  , refF64Arr :: B.Type
   , refCode :: B.Type
   }
 
@@ -100,7 +100,7 @@ type Ctx =
 -- | matches `$Code` for `call_ref`.
 buildRuntimeTypes :: B.Module -> Effect RuntimeTypes
 buildRuntimeTypes _ = do
-  tb <- B.typeBuilderCreate 9
+  tb <- B.typeBuilderCreate 11
   B.typeBuilderSetArrayType tb 0 B.eqref true -- $Vals = (array (mut eqref))
   B.typeBuilderSetStructType tb 1 [ { ty: B.i32, mutable: false } ] -- $Int (also $Char)
   refValsTmp <- B.typeBuilderGetTempHeapType tb 0 >>= \h -> B.typeBuilderGetTempRefType tb h false
@@ -113,7 +113,6 @@ buildRuntimeTypes _ = do
   B.typeBuilderSetArrayType tb 6 B.i32 true -- $Bytes = (array (mut i32)); one UTF-8 byte per i32 lane (not packed)
   refBytesTmp <- B.typeBuilderGetTempHeapType tb 6 >>= \h -> B.typeBuilderGetTempRefType tb h false
   B.typeBuilderSetStructType tb 7 [ { ty: refBytesTmp, mutable: false } ] -- $Str = (struct (ref $Bytes))
-  B.typeBuilderSetStructType tb 8 [ { ty: B.i64, mutable: false } ] -- $Int64 = (struct i64)
   -- $I32Arr / $F64Arr (WasmBase, ADR 0026): packed unboxed numeric arrays. Each is acyclic, so
   -- Binaryen emits it as its own singleton rec group (like every value type above); adding them
   -- leaves the other types' canonical identity untouched, so the runtime ABI is unchanged. They
@@ -121,10 +120,11 @@ buildRuntimeTypes _ = do
   -- not declare them. $I32Arr is structurally identical to $Bytes and canonicalises with it today;
   -- it is kept distinct so a future packed-byte $Str representation cannot silently change it.
   B.typeBuilderSetArrayType tb 8 B.i32 true -- $I32Arr = (array (mut i32))
-  B.typeBuilderSetArrayType tb 9 B.f64 true -- $F64Arr = (array (mut f64))  
-  main <- B.typeBuilderBuildAndDispose tb 9
+  B.typeBuilderSetArrayType tb 9 B.f64 true -- $F64Arr = (array (mut f64))
+  B.typeBuilderSetStructType tb 10 [ { ty: B.i64, mutable: false } ] -- $Int64 = (struct i64)
+  main <- B.typeBuilderBuildAndDispose tb 11
   case main of
-    [ valsHt, intHt, cloHt, labelIdsHt, recHt, numHt, bytesHt, strHt, i32ArrHt, f64ArrHt ,int64Ht ] -> do
+    [ valsHt, intHt, cloHt, labelIdsHt, recHt, numHt, bytesHt, strHt, i32ArrHt, f64ArrHt, int64Ht ] -> do
       let refClo = B.typeFromHeapType cloHt false
       tb2 <- B.typeBuilderCreate 1
       B.typeBuilderSetSignatureType tb2 0 (B.createType [ refClo, B.eqref ]) B.eqref
