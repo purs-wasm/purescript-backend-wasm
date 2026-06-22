@@ -231,33 +231,39 @@ try {
   console.log(`ERROR: ${e?.message ?? e}`);
 }
 
-// ── ADR 0040 P3 content-addressed store round-trip: with $PURS_WASM_STORE set, the orchestrate
-// build writes each library module's {pmi,wasm,link.json} to the store keyed by content; the build
-// still runs, the store is populated, a stored .pmi byte-matches the per-project _build copy and is
-// named by its own key, and a rebuild is idempotent (a content-addressed file is never rewritten).
-process.stdout.write("• P3: $PURS_WASM_STORE write-back round-trip (examples-intpatch): ");
+// ── ADR 0040 P3 content-addressed store: with $PURS_WASM_STORE set, the orchestrate build (1) writes
+// each library module's {pmi,wasm,link.json} to the store keyed by content, byte-identical to the
+// _build copy, idempotently (write-back); (2) a SECOND build into a fresh output dir HITS the store
+// for every library module (only the non-cacheable entry recompiles), copies them in, and produces a
+// byte/behaviour-correct program (store-hit). The store key is computable from sources alone, so the
+// second build reuses across a fresh _build (and, identically, across projects).
+process.stdout.write("• P3: $PURS_WASM_STORE write-back + store-hit (examples-intpatch): ");
 try {
-  const cf = tmp("stcf"), orc = tmp("storc"), store = tmp("ststore");
-  tmps.push(cf, orc, store);
+  const cf = tmp("stcf"), orc1 = tmp("storc1"), orc2 = tmp("storc2"), store = tmp("ststore");
+  tmps.push(cf, orc1, orc2, store);
   sh("spago", ["build", "-p", "examples-intpatch", "--output", cf]);
-  const build = () => execFileSync("node",
-    ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc, "--force"],
-    { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PURS_WASM_STORE: store } });
-  build();
-  const ran = (await mainStdout(orc)).includes("(Just 42)");
+  const build = (out) => execFileSync("node",
+    ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", out, "--force"],
+    { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PURS_WASM_STORE: store } }).toString();
+  // build 1: populates the store (all misses)
+  const log1 = build(orc1);
+  const ran1 = (await mainStdout(orc1)).includes("(Just 42)");
   const pmis = readdirSync(store).filter((f) => f.endsWith(".pmi"));
   const wasms = readdirSync(store).filter((f) => f.endsWith(".wasm"));
   const links = readdirSync(store).filter((f) => f.endsWith(".link.json"));
-  // a library module's _build .pmi must be present in the store, byte-identical, under its key name
-  const dm = join(orc, "_build", "Data.Maybe.pmi");
-  const dmHash = existsSync(dm) ? sha(dm) : null;
-  const dmInStore = dmHash && pmis.some((f) => sha(join(store, f)) === dmHash);
-  const before = pmis.length;
-  build();
+  const dm = join(orc1, "_build", "Data.Maybe.pmi");
+  const dmInStore = existsSync(dm) && pmis.some((f) => sha(join(store, f)) === sha(dm));
+  // build 2: fresh output, same store → expect a store hit for every library module
+  const log2 = build(orc2);
+  const hit = / \((\d+) from store\)/.exec(log2);
+  const compiled2 = /compiling (\d+) module/.exec(log2)?.[1];
+  const ran2 = (await mainStdout(orc2)).includes("(Just 42)");
+  const merged = sha(join(orc1, "index.wasm")) === sha(join(orc2, "index.wasm"));
   const after = readdirSync(store).filter((f) => f.endsWith(".pmi")).length;
-  const ok = ran && before > 0 && wasms.length > 0 && links.length > 0 && dmInStore && before === after;
+  const ok = ran1 && ran2 && pmis.length > 0 && wasms.length > 0 && links.length > 0
+    && dmInStore && pmis.length === after && hit && Number(hit[1]) > 0 && compiled2 === "1";
   if (!ok) failures++;
-  console.log(`${ok ? "✓" : "✗"} ${before} pmi / ${wasms.length} wasm / ${links.length} link.json | Data.Maybe.pmi byte-match ${dmInStore ? "yes" : "NO"} | idempotent ${before === after ? "yes" : "NO"} | runs ${ran ? "yes" : "NO"}`);
+  console.log(`${ok ? "✓" : "✗"} store ${pmis.length} pmi/${wasms.length} wasm/${links.length} link | Data.Maybe byte-match ${dmInStore ? "yes" : "NO"} | build2: ${compiled2} compiled, ${hit ? hit[1] : 0} from store | idempotent ${pmis.length === after ? "yes" : "NO"} | index.wasm match ${merged ? "yes" : "no"} | runs ${ran1 && ran2 ? "yes" : "NO"}`);
 } catch (e) {
   failures++;
   console.log(`ERROR: ${e?.message ?? e}`);

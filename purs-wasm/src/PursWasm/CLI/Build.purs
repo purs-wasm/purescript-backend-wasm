@@ -35,7 +35,7 @@ import PureScript.Backend.Wasm.Externs (ctorFieldReps)
 import PureScript.Backend.Wasm.Lower.Collect (labelCollisions)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.Backend.Wasm.MiddleEnd (CacheWrite, liftModule, noCache, optimizeIncrementalM)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (cacheKey, hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
 import PureScript.CoreFn (toModuleName)
@@ -168,28 +168,99 @@ orchestrateModules
   -> BuildOption
   -> FilePath
   -> Maybe FilePath
-  -> Array { name :: String, imports :: Array String | a }
+  -> Array { name :: String, imports :: Array String, sourceHash :: String | a }
   -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
 orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
   let ordered = topoBySrcImports srcInfos
   let entryNames = Set.fromFoldable args.entryModules
   mkdirP buildDir
   purwcPath <- joinPath [ cliRoot, "purwc", "index.dev.js" ]
-  -- Drive ONE long-lived `purwc compile-batch` over the whole topo-ordered work-list (each module
-  -- `*`-prefixed if it is the program entry), streamed on stdin. One process compiles every module in
-  -- order, so the dominant per-spawn cost (Binaryen.js init ~1.3 s) is paid once for the batch, not
-  -- per module (ADR 0038 Phase C2). Topo order keeps each dependency's `.pmi` on disk before a
-  -- dependent reads it from `--deps` (= the shared `_build`).
-  info (Log.cyan (Fmt.fmt @" >  compiling {n} module(s) (purwc batch)" { n: Array.length ordered }))
+  -- ADR 0040 P3: compute each module's import-based **store key** bottom-up from sources alone —
+  -- `cacheKey(sourceHash, [storeKey(d) | d ∈ corefn imports])`, `sourceHash` already carrying
+  -- `toolchainTag`. Unlike the worker's internal `.pmi` key (which recurses over the optimized MIR's
+  -- references, so it needs compilation), this is computable BEFORE compiling, so the orchestrator can
+  -- look the store up and SKIP a module already present. Imports are a sound superset of the real
+  -- references (the key only ever over-invalidates), so a store hit is genuinely the same artifact a
+  -- compile would produce (determinism gate, ADR 0040 §4). `ordered` is topological, so each dep's
+  -- key is known when its dependent is keyed.
+  let buildSet = Set.fromFoldable (map _.name srcInfos)
   let
-    workList = joinWith "\n" $ ordered <#> \m ->
-      (if Set.member m.name entryNames then "*" else "") <> m.name
-  execFileInput "node"
-    ( [ purwcPath, "compile-batch", "-I", purwcInput, "--deps", buildDir, "-O", buildDir ]
-        <> (if args.debug then [ "-g" ] else [])
-        <> (if args.noOpt then [ "--no-opt" ] else [])
+    storeKeys = Array.foldl
+      ( \acc m ->
+          let
+            deps = Array.filter (\d -> d /= m.name && Set.member d buildSet) (Array.nub m.imports)
+          in
+            Map.insert m.name (cacheKey m.sourceHash (Array.mapMaybe (\d -> Map.lookup d acc) deps)) acc
+      )
+      Map.empty
+      ordered
+  let ct = codegenTag { platform: show args.platform, optimize: not args.debug, perModuleRep: args.perModuleRep }
+  -- Per-module plan: store keys (`.pmi` by the platform-independent store key; `.wasm`/`.link.json` by
+  -- the `.wasm` key = store key ⊕ codegen axes ⊕ kept-foreign `.wat` hash) and whether the store
+  -- already holds all three (a HIT to copy instead of compile). The entry is never cached — its
+  -- host-ABI shim / over-export differ per program.
+  plan <- for ordered \m -> do
+    watTxt <- readText =<< joinPath [ purwcInput, m.name, "foreign.wat" ]
+    let sk = fromMaybe m.sourceHash (Map.lookup m.name storeKeys)
+    let wk = wasmKey sk ct (maybe "" hashString watTxt)
+    let isEntry = Set.member m.name entryNames
+    hit <- case storeDir of
+      Just root | not isEntry -> do
+        p <- exists =<< joinPath [ root, sk <> ".pmi" ]
+        w <- exists =<< joinPath [ root, wk <> ".wasm" ]
+        l <- exists =<< joinPath [ root, wk <> ".link.json" ]
+        pure (p && w && l)
+      _ -> pure false
+    pure { name: m.name, isEntry, sk, wk, hit }
+  -- Copy every HIT's three artifacts from the store into `_build` BEFORE the batch, so a miss reads a
+  -- hit dependency's `.pmi` from `--deps`, and the final merge sees every module's `.wasm`.
+  for_ storeDir \root -> for_ (Array.filter _.hit plan) \p -> do
+    let
+      copy storeName buildName = do
+        mb <- readBinary =<< joinPath [ root, storeName ]
+        case mb of
+          Just b -> do
+            dst <- joinPath [ buildDir, buildName ]
+            writeBinary dst b
+          Nothing -> logAndThrow ("orchestrate: store hit but missing artifact " <> storeName)
+    copy (p.sk <> ".pmi") (p.name <> ".pmi")
+    copy (p.wk <> ".wasm") (p.name <> ".wasm")
+    copy (p.wk <> ".link.json") (p.name <> ".link.json")
+  -- Drive ONE long-lived `purwc compile-batch` over the topo-ordered MISSES (each `*`-prefixed if it
+  -- is the program entry), streamed on stdin. One process compiles every miss in order, so the
+  -- dominant per-spawn cost (Binaryen.js init ~1.3 s) is paid once for the batch (ADR 0038 Phase C2);
+  -- topo order keeps each dependency's `.pmi` on disk (a hit's copied above, a miss's compiled
+  -- earlier) before a dependent reads it from `--deps` (= the shared `_build`).
+  let misses = Array.filter (not <<< _.hit) plan
+  info
+    ( Log.cyan
+        ( Fmt.fmt @" >  compiling {n} module(s) (purwc batch){extra}"
+            { n: Array.length misses
+            , extra: case Array.length plan - Array.length misses of
+                0 -> ""
+                k -> Fmt.fmt @" ({k} from store)" { k }
+            }
+        )
     )
-    workList
+  when (not (Array.null misses)) do
+    let workList = joinWith "\n" (misses <#> \p -> (if p.isEntry then "*" else "") <> p.name)
+    execFileInput "node"
+      ( [ purwcPath, "compile-batch", "-I", purwcInput, "--deps", buildDir, "-O", buildDir ]
+          <> (if args.debug then [ "-g" ] else [])
+          <> (if args.noOpt then [ "--no-opt" ] else [])
+      )
+      workList
+  -- Write each compiled (MISS) LIBRARY module's three artifacts back to the store under its keys (a
+  -- hit already came FROM the store; the entry is non-cacheable). A content-addressed file already
+  -- present is left as-is (`putStoreFile`).
+  for_ storeDir \root -> for_ (Array.filter (\p -> not p.hit && not p.isEntry) plan) \p -> do
+    let
+      store suffix key = do
+        mb <- readBinary =<< joinPath [ buildDir, p.name <> suffix ]
+        maybe (pure unit) (putStoreFile root (key <> suffix)) mb
+    store ".pmi" p.sk
+    store ".wasm" p.wk
+    store ".link.json" p.wk
   metas <- for ordered \m -> do
     mTxt <- readText =<< joinPath [ buildDir, m.name <> ".link.json" ]
     case mTxt >>= decodeLinkMeta of
@@ -200,24 +271,6 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
     case mb >>= (hush <<< decodePmi) of
       Just e -> pure e
       Nothing -> logAndThrow ("orchestrate: missing/corrupt .pmi for " <> m.name)
-  -- ADR 0040 P3: write each compiled LIBRARY module's three artifacts to the global content-addressed
-  -- store (when `$PURS_WASM_STORE` is set). The `.pmi` is keyed by its recursive `.pmi` key
-  -- (platform-independent); the `.wasm` / `.link.json` by the `.wasm` key (= `.pmi` key ⊕ codegen
-  -- axes ⊕ kept-foreign `.wat` hash). The entry module is excluded — its host-ABI shim / over-export
-  -- make it non-reusable. Write-back only here (store-hit is a later step); a present file is left.
-  for_ storeDir \root -> do
-    let ct = codegenTag { platform: show args.platform, optimize: not args.debug, perModuleRep: args.perModuleRep }
-    for_ (Array.zip ordered pmis) \(Tuple m e) ->
-      when (not (Set.member m.name entryNames)) do
-        watTxt <- readText =<< joinPath [ purwcInput, m.name, "foreign.wat" ]
-        let wk = wasmKey e.key ct (maybe "" hashString watTxt)
-        let
-          store suffix key = do
-            mb <- readBinary =<< joinPath [ buildDir, m.name <> suffix ]
-            maybe (pure unit) (putStoreFile root (key <> suffix)) mb
-        store ".pmi" e.key
-        store ".wasm" wk
-        store ".link.json" wk
   -- Cross-module label-collision check (the worker dropped the whole-program check in M2b; the
   -- orchestrator runs it over the union of every module's `.pmi` labels, before the merge).
   let allLabels = Object.fromFoldable (pmis >>= \e -> (Object.toUnfoldable e.labels :: Array (Tuple String Int)))
