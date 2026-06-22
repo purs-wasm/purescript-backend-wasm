@@ -40,6 +40,8 @@ type RuntimeTypes =
   , numHt :: B.HeapType
   , bytesHt :: B.HeapType
   , strHt :: B.HeapType
+  , i32ArrHt :: B.HeapType
+  , f64ArrHt :: B.HeapType  
   , codeHt :: B.HeapType
   , refInt :: B.Type
   , refInt64 :: B.Type
@@ -50,6 +52,8 @@ type RuntimeTypes =
   , refNum :: B.Type
   , refBytes :: B.Type
   , refStr :: B.Type
+  , refI32Arr :: B.Type
+  , refF64Arr :: B.Type  
   , refCode :: B.Type
   }
 
@@ -110,9 +114,17 @@ buildRuntimeTypes _ = do
   refBytesTmp <- B.typeBuilderGetTempHeapType tb 6 >>= \h -> B.typeBuilderGetTempRefType tb h false
   B.typeBuilderSetStructType tb 7 [ { ty: refBytesTmp, mutable: false } ] -- $Str = (struct (ref $Bytes))
   B.typeBuilderSetStructType tb 8 [ { ty: B.i64, mutable: false } ] -- $Int64 = (struct i64)
+  -- $I32Arr / $F64Arr (WasmBase, ADR 0026): packed unboxed numeric arrays. Each is acyclic, so
+  -- Binaryen emits it as its own singleton rec group (like every value type above); adding them
+  -- leaves the other types' canonical identity untouched, so the runtime ABI is unchanged. They
+  -- are inlined in codegen (no `$rt.*` helper crosses to the runtime module), so runtime.wat does
+  -- not declare them. $I32Arr is structurally identical to $Bytes and canonicalises with it today;
+  -- it is kept distinct so a future packed-byte $Str representation cannot silently change it.
+  B.typeBuilderSetArrayType tb 8 B.i32 true -- $I32Arr = (array (mut i32))
+  B.typeBuilderSetArrayType tb 9 B.f64 true -- $F64Arr = (array (mut f64))  
   main <- B.typeBuilderBuildAndDispose tb 9
   case main of
-    [ valsHt, intHt, cloHt, labelIdsHt, recHt, numHt, bytesHt, strHt, int64Ht ] -> do
+    [ valsHt, intHt, cloHt, labelIdsHt, recHt, numHt, bytesHt, strHt, i32ArrHt, f64ArrHt ,int64Ht ] -> do
       let refClo = B.typeFromHeapType cloHt false
       tb2 <- B.typeBuilderCreate 1
       B.typeBuilderSetSignatureType tb2 0 (B.createType [ refClo, B.eqref ]) B.eqref
@@ -129,6 +141,8 @@ buildRuntimeTypes _ = do
           , bytesHt
           , strHt
           , codeHt
+          , i32ArrHt
+          , f64ArrHt
           , refInt: B.typeFromHeapType intHt false
           , refInt64: B.typeFromHeapType int64Ht false
           , refVals: B.typeFromHeapType valsHt false
@@ -139,9 +153,11 @@ buildRuntimeTypes _ = do
           , refBytes: B.typeFromHeapType bytesHt false
           , refStr: B.typeFromHeapType strHt false
           , refCode: B.typeFromHeapType codeHt false
+          , refI32Arr: B.typeFromHeapType i32ArrHt false
+          , refF64Arr: B.typeFromHeapType f64ArrHt false
           }
         _ -> throwException (error "Codegen: expected exactly 1 code heap type")
-    _ -> throwException (error "Codegen: expected exactly 9 runtime heap types")
+    _ -> throwException (error "Codegen: expected exactly 11 runtime heap types")
 
 -- | The wasm value type for an IR representation.
 repType :: Ctx -> Rep -> B.Type

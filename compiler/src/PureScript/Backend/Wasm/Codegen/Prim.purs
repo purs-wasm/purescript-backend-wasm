@@ -124,6 +124,47 @@ genPrim ctx intr args = case intr, args of
     setE <- B.call ctx.mod strSetByteHelperName [ str, idx, byte ] B.none
     strAgain <- genAtomAs ctx Boxed s
     B.block ctx.mod [ setE, strAgain ] B.eqref
+  -- `Wasm.I32Array` (WasmBase, ADR 0026): packed unboxed i32 array. Cast the eqref operand to
+  -- the concrete `(ref $I32Arr)`, then inline the array op (no runtime helper: the heap type is
+  -- module-local and the lanes are scalars). `unsafeNew` zero-inits; `unsafeSet` writes in place
+  -- and yields the threaded array, exactly like `ArraySet`.
+  I32ArrayLength, [ a ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI32Arr
+    B.arrayLen ctx.mod arr
+  I32ArrayIndex, [ a, i ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI32Arr
+    idx <- intArg i
+    B.arrayGet ctx.mod arr idx B.i32 false
+  I32ArrayNew, [ n ] -> do
+    len <- intArg n
+    zero <- B.i32Const ctx.mod 0
+    B.arrayNew ctx.mod ctx.rt.i32ArrHt len zero
+  I32ArraySet, [ a, i, v ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI32Arr
+    idx <- intArg i
+    val <- intArg v
+    setE <- B.arraySet ctx.mod arr idx val
+    arrAgain <- genAtomAs ctx Boxed a
+    B.block ctx.mod [ setE, arrAgain ] B.eqref
+  -- `Wasm.F64Array` (WasmBase, ADR 0026): packed unboxed f64 array (the `$Num` box avoided per lane).
+  F64ArrayLength, [ a ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refF64Arr
+    B.arrayLen ctx.mod arr
+  F64ArrayIndex, [ a, i ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refF64Arr
+    idx <- intArg i
+    B.arrayGet ctx.mod arr idx B.f64 false
+  F64ArrayNew, [ n ] -> do
+    len <- intArg n
+    zero <- B.f64Const ctx.mod 0.0
+    B.arrayNew ctx.mod ctx.rt.f64ArrHt len zero
+  F64ArraySet, [ a, i, v ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refF64Arr
+    idx <- intArg i
+    val <- numArg v
+    setE <- B.arraySet ctx.mod arr idx val
+    arrAgain <- genAtomAs ctx Boxed a
+    B.block ctx.mod [ setE, arrAgain ] B.eqref  
   -- Array a -> Int: the element count
   ArrayLength, [ a ] -> do
     arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refVals

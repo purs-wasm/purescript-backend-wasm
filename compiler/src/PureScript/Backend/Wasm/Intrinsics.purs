@@ -100,6 +100,20 @@ data Intrinsic
   -- | dependency, without needing an effect.
   | ArrayNew -- Int -> Array a
   | ArraySet -- Array a -> Int -> a -> Array a (writes, returns the array)
+  -- | `Wasm.I32Array` / `Wasm.F64Array` (WasmBase, ADR 0026): first-order primitives for
+  -- | packed, unboxed numeric arrays, `(array (mut i32))` and `(array (mut f64))`, so the
+  -- | element pays no `$Int` / `$Num` box (cf. `$Vals`, whose elements are boxed `eqref`s).
+  -- | `*Length` is `array.len`; `*Index` reads an `array.get` lane; `*New n` is `array.new`
+  -- | with a `0` initialiser (zeroed, not null/trapping); `*Set arr i v` writes in place and
+  -- | returns `arr`, threaded through a builder loop exactly as `ArraySet`.
+  | I32ArrayLength
+  | I32ArrayIndex
+  | I32ArrayNew
+  | I32ArraySet
+  | F64ArrayLength
+  | F64ArrayIndex
+  | F64ArrayNew
+  | F64ArraySet  
   -- | `Data.Bounded`'s `top` / `bottom` for `Int` / `Char` / `Number`: nullary
   -- | constant values (the foreign is a bare value, not a function — arity 0).
   | TopInt -- maxBound Int (`i32.const 2147483647`)
@@ -296,6 +310,15 @@ qualifiedIntrinsic = case _ of
   "Wasm.Array.unsafeIndex" -> Just (Tuple ArrayIndex 2)
   "Wasm.Array.unsafeNew" -> Just (Tuple ArrayNew 1)
   "Wasm.Array.unsafeSet" -> Just (Tuple ArraySet 3)
+  -- `Wasm.I32Array` / `Wasm.F64Array` (WasmBase, ADR 0026): packed unboxed numeric arrays.
+  "Wasm.I32Array.length" -> Just (Tuple I32ArrayLength 1)
+  "Wasm.I32Array.unsafeIndex" -> Just (Tuple I32ArrayIndex 2)
+  "Wasm.I32Array.unsafeNew" -> Just (Tuple I32ArrayNew 1)
+  "Wasm.I32Array.unsafeSet" -> Just (Tuple I32ArraySet 3)
+  "Wasm.F64Array.length" -> Just (Tuple F64ArrayLength 1)
+  "Wasm.F64Array.unsafeIndex" -> Just (Tuple F64ArrayIndex 2)
+  "Wasm.F64Array.unsafeNew" -> Just (Tuple F64ArrayNew 1)
+  "Wasm.F64Array.unsafeSet" -> Just (Tuple F64ArraySet 3)  
   -- `Wasm.String` (WasmBase, ADR 0030): first-order byte-level `$Str` primitives the
   -- `Data.String.*` code-point ops build on. `byteLength` reuses `StrLen`.
   "Wasm.String.byteLength" -> Just (Tuple StrLen 1)
