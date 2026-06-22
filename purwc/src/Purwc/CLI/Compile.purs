@@ -21,6 +21,7 @@ import Data.Array as Array
 import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Set as Set
+import Data.Map as Map
 import Data.String as Str
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
@@ -77,6 +78,10 @@ compileCmd cliRoot binaryenBinDir args = do
   -- the whole-program optimizer never does — a 9× code-size blowup that then stalls Binaryen.
   depEntries <- Array.filter (\e -> e.summary.name /= mn) <$> loadDepInterfaces args.depsDir
   let depSummaries = map _.summary depEntries
+  -- ADR 0040 §2: the dependencies' own cache keys (dotted name → `.pmi` key), read straight from
+  -- their `.pmi`s, so this module is keyed recursively against them (matching the whole-program
+  -- loop's topo-accumulated dep keys → byte-identical `.pmi` key, the `diffPurwc` parity contract).
+  let depKeys = Map.fromFoldable (map (\e -> Tuple (Str.joinWith "." e.summary.name) e.key) depEntries)
   let
     depInterfaces = depEntries <#> \e ->
       { funcs: e.funcs
@@ -94,7 +99,7 @@ compileCmd cliRoot binaryenBinDir args = do
   let eff = effectfulForeigns allSigsWithDeps
 
   -- Optimize the single module against its dependency summaries, then persist its interface.
-  let out = compileModuleMir eff.names eff.arities { sourceHash, lifted: liftModule decoded, depSummaries }
+  let out = compileModuleMir eff.names eff.arities { sourceHash, lifted: liftModule decoded, depSummaries, depKeys }
   mkdirP args.outDir
   pmiPath <- joinPath [ args.outDir, target <> ".pmi" ]
   let iface = moduleInterface (ctorFieldReps externs) allSigs (Set.toUnfoldable foreignNameSet) out.finalMod
