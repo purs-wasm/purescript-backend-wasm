@@ -11,6 +11,7 @@ module PureScript.Backend.Wasm.CLI.Compat
   , checkCorefnVersions
   , backendCacheVersion
   , toolchainTag
+  , codegenTag
   ) where
 
 import Prelude
@@ -70,6 +71,21 @@ backendCacheVersion = "1"
 -- | new parameter through the optimizer.
 toolchainTag :: String
 toolchainTag = "corefn=" <> Str.joinWith "," supportedCorefn <> ";backend=" <> backendCacheVersion
+
+-- | The codegen-axis component of the `.wasm` / `.link.json` content-address (ADR 0040 §2 / P3): the
+-- | axes that affect the *object* but not the `.pmi` — target platform, optimization on/off, and the
+-- | per-module-rep flag — plus the backend version. Combined with the `.pmi` key (which already
+-- | carries `toolchainTag`) it forms the object's store key, so two builds that differ only in
+-- | platform/opt get distinct `.wasm` artifacts but can still share the platform-independent `.pmi`.
+codegenTag :: { platform :: String, optimize :: Boolean, perModuleRep :: Boolean } -> String
+codegenTag o =
+  "platform=" <> o.platform
+    <> ";opt="
+    <> (if o.optimize then "1" else "0")
+    <> ";pmr="
+    <> (if o.perModuleRep then "1" else "0")
+    <> ";backend="
+    <> backendCacheVersion
 
 -- | Reject any linked module whose `builtWith` compiler is not one this backend supports.
 checkCorefnVersions :: forall r. Array { name :: ModuleName, builtWith :: String | r } -> Either String Unit

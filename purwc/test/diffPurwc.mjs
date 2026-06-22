@@ -20,7 +20,7 @@
 //   node purwc/test/diffPurwc.mjs
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -226,6 +226,38 @@ try {
   if (!ok) failures++;
   console.log(`main() stdout ${sA === sB ? "match" : "MISMATCH"}${ok ? "" : "  <-- FAIL"}`);
   if (sA !== sB) console.log(`    oracle: ${sA}\n    orchestrate: ${sB}`);
+} catch (e) {
+  failures++;
+  console.log(`ERROR: ${e?.message ?? e}`);
+}
+
+// ── ADR 0040 P3 content-addressed store round-trip: with $PURS_WASM_STORE set, the orchestrate
+// build writes each library module's {pmi,wasm,link.json} to the store keyed by content; the build
+// still runs, the store is populated, a stored .pmi byte-matches the per-project _build copy and is
+// named by its own key, and a rebuild is idempotent (a content-addressed file is never rewritten).
+process.stdout.write("• P3: $PURS_WASM_STORE write-back round-trip (examples-intpatch): ");
+try {
+  const cf = tmp("stcf"), orc = tmp("storc"), store = tmp("ststore");
+  tmps.push(cf, orc, store);
+  sh("spago", ["build", "-p", "examples-intpatch", "--output", cf]);
+  const build = () => execFileSync("node",
+    ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc, "--force"],
+    { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PURS_WASM_STORE: store } });
+  build();
+  const ran = (await mainStdout(orc)).includes("(Just 42)");
+  const pmis = readdirSync(store).filter((f) => f.endsWith(".pmi"));
+  const wasms = readdirSync(store).filter((f) => f.endsWith(".wasm"));
+  const links = readdirSync(store).filter((f) => f.endsWith(".link.json"));
+  // a library module's _build .pmi must be present in the store, byte-identical, under its key name
+  const dm = join(orc, "_build", "Data.Maybe.pmi");
+  const dmHash = existsSync(dm) ? sha(dm) : null;
+  const dmInStore = dmHash && pmis.some((f) => sha(join(store, f)) === dmHash);
+  const before = pmis.length;
+  build();
+  const after = readdirSync(store).filter((f) => f.endsWith(".pmi")).length;
+  const ok = ran && before > 0 && wasms.length > 0 && links.length > 0 && dmInStore && before === after;
+  if (!ok) failures++;
+  console.log(`${ok ? "✓" : "✗"} ${before} pmi / ${wasms.length} wasm / ${links.length} link.json | Data.Maybe.pmi byte-match ${dmInStore ? "yes" : "NO"} | idempotent ${before === after ? "yes" : "NO"} | runs ${ran ? "yes" : "NO"}`);
 } catch (e) {
   failures++;
   console.log(`ERROR: ${e?.message ?? e}`);

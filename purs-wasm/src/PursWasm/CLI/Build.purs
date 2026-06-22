@@ -43,7 +43,8 @@ import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PureScript.Backend.Wasm.CLI.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
-import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat, toolchainTag)
+import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat, codegenTag, toolchainTag)
+import PureScript.Backend.Wasm.CLI.Store (putStoreFile, storeRoot, wasmKey)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames, corefnImports)
 import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, execFileInput, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log (br)
@@ -166,9 +167,10 @@ orchestrateModules
   -> FilePath
   -> BuildOption
   -> FilePath
+  -> Maybe FilePath
   -> Array { name :: String, imports :: Array String | a }
   -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
-orchestrateModules cliRoot purwcInput args buildDir srcInfos = do
+orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
   let ordered = topoBySrcImports srcInfos
   let entryNames = Set.fromFoldable args.entryModules
   mkdirP buildDir
@@ -198,6 +200,24 @@ orchestrateModules cliRoot purwcInput args buildDir srcInfos = do
     case mb >>= (hush <<< decodePmi) of
       Just e -> pure e
       Nothing -> logAndThrow ("orchestrate: missing/corrupt .pmi for " <> m.name)
+  -- ADR 0040 P3: write each compiled LIBRARY module's three artifacts to the global content-addressed
+  -- store (when `$PURS_WASM_STORE` is set). The `.pmi` is keyed by its recursive `.pmi` key
+  -- (platform-independent); the `.wasm` / `.link.json` by the `.wasm` key (= `.pmi` key ⊕ codegen
+  -- axes ⊕ kept-foreign `.wat` hash). The entry module is excluded — its host-ABI shim / over-export
+  -- make it non-reusable. Write-back only here (store-hit is a later step); a present file is left.
+  for_ storeDir \root -> do
+    let ct = codegenTag { platform: show args.platform, optimize: not args.debug, perModuleRep: args.perModuleRep }
+    for_ (Array.zip ordered pmis) \(Tuple m e) ->
+      when (not (Set.member m.name entryNames)) do
+        watTxt <- readText =<< joinPath [ purwcInput, m.name, "foreign.wat" ]
+        let wk = wasmKey e.key ct (maybe "" hashString watTxt)
+        let
+          store suffix key = do
+            mb <- readBinary =<< joinPath [ buildDir, m.name <> suffix ]
+            maybe (pure unit) (putStoreFile root (key <> suffix)) mb
+        store ".pmi" e.key
+        store ".wasm" wk
+        store ".link.json" wk
   -- Cross-module label-collision check (the worker dropped the whole-program check in M2b; the
   -- orchestrator runs it over the union of every module's `.pmi` labels, before the merge).
   let allLabels = Object.fromFoldable (pmis >>= \e -> (Object.toUnfoldable e.labels :: Array (Tuple String Int)))
@@ -503,8 +523,10 @@ buildCmd cliRoot binaryenBinDir args = do
         pure (map wholeLinked built)
   stageDir <- joinPath [ cacheDir, "stage" ]
   when args.orchestrate (stageOrchestrateInput stageDir args.input libPath allModNames srcInfos)
+  -- ADR 0040 P3: the global content-addressed store (`$PURS_WASM_STORE`); `Nothing` disables it.
+  storeDir <- storeRoot
   linkResult <-
-    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir srcInfos
+    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir srcInfos
     else if useCache then do
       -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
       -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.
