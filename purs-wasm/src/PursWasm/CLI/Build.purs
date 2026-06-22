@@ -203,9 +203,21 @@ orchestrateModules cliRoot purwcInput args buildDir srcInfos = do
       preWritten <- for ordered \m -> do
         p <- joinPath [ buildDir, m.name <> ".wasm" ]
         pure (Tuple p m.name)
+      -- ADR 0040 §P2: a foreign module whose own `{F}.wasm` self-merged its provider (a kept foreign
+      -- staged under `purwcInput`) is already self-contained — a cross-module import of it resolves
+      -- from `{F}.wasm` at the final merge. Only foreigns with NO wasm provider (JS) reach the link
+      -- tail's `resolveForeign`, so drop the self-merged ones from the link-time foreign set.
+      let foreignUnion = Array.nub (metas >>= _.meta.foreignModules)
+      jsForeigns <- Array.filterA
+        ( \f -> do
+            w <- exists =<< joinPath [ purwcInput, f, "foreign.wasm" ]
+            t <- exists =<< joinPath [ purwcInput, f, "foreign.wat" ]
+            pure (not (w || t))
+        )
+        foreignUnion
       pure
         ( Right
-            { foreignModules: Array.nub (metas >>= _.meta.foreignModules)
+            { foreignModules: jsForeigns
             , cafInit: glue.cafInit
             , cafOwner: glue.mod
             , ownerPath: gluePath
@@ -242,6 +254,22 @@ stageOrchestrateInput stageDir userInput libPath allModNames srcInfos = do
     mEx <- readBinary exSrc
     exDst <- joinPath [ mdir, "externs.cbor" ]
     maybe (pure unit) (writeBinary exDst) mEx
+    -- ADR 0040 §P2: stage the module's kept foreign (`foreign.wasm`/`foreign.wat`) so the worker can
+    -- merge it into its own `{M}.wasm` (a self-contained object). A project-local foreign comes from
+    -- the user output; a ulib module's from the lib (a registry module's `foreign.js` is not a wasm
+    -- provider — neither file exists there — so the source falls through to the lib).
+    let foreignFiles = [ "foreign.wasm", "foreign.wat" ]
+    userHasForeign <- Array.any identity <$> for foreignFiles \f -> exists =<< joinPath [ userInput, i.name, f ]
+    let foreignSrcDir = if userHasForeign then userInput else libPath
+    for_ foreignFiles \f -> do
+      mBytes <- readBinary =<< joinPath [ foreignSrcDir, i.name, f ]
+      case mBytes of
+        Just b -> joinPath [ mdir, f ] >>= \dst -> writeBinary dst b
+        Nothing -> pure unit
+  -- The shared `_header.wat` (ADR 0031) for assembling a fragment foreign in the worker.
+  mHeader <- readBinary =<< joinPath [ libPath, "_header.wat" ]
+  hdrDst <- joinPath [ stageDir, "_header.wat" ]
+  maybe (pure unit) (writeBinary hdrDst) mHeader
   -- the user `cache-db.json` (ADR 0016 private-foreign reconstruction); absent for many projects.
   mDb <- readText =<< joinPath [ userInput, "cache-db.json" ]
   dbDst <- joinPath [ stageDir, "cache-db.json" ]

@@ -29,7 +29,8 @@ import Fmt as Fmt
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.CLI.Compat (toolchainTag)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames)
-import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, writeBinary, writeText)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, writeBinary, writeText)
+import PureScript.Backend.Wasm.CLI.ForeignWasm (foreignProvider, mergeForeignInto)
 import PureScript.Backend.Wasm.CLI.Effect.Log as Log
 import PureScript.Backend.Wasm.CLI.Externs (readExterns)
 import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
@@ -125,6 +126,15 @@ compileCmd cliRoot binaryenBinDir args = do
     Right art -> do
       wasmPath <- joinPath [ args.outDir, target <> ".wasm" ]
       writeBinary wasmPath art.bytes
+      -- ADR 0040 §P2: merge this module's own kept foreign (staged under `-I` as `{M}/foreign.wasm`
+      -- or `foreign.wat`) into its wasm, so `{M}.wasm` is a self-contained object — a cross-module
+      -- foreign import resolves from the owner's wasm at the program's final merge, not a re-resolve
+      -- by the orchestrator (which therefore only handles genuine JS-fallback foreigns).
+      foreignProvider binaryenBinDir args.input args.input args.outDir target >>= case _ of
+        Just prov -> do
+          mergeForeignInto binaryenBinDir wasmPath target prov.wasm
+          when prov.assembled (unlink prov.wasm)
+        Nothing -> pure unit
       info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: wasmPath })
       -- The orchestrator-facing link metadata (ADR 0038 Phase C): the per-module facts the
       -- `purs-wasm` orchestrator needs to build the link glue, resolve foreigns, and internalise

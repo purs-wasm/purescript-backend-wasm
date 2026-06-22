@@ -61,9 +61,14 @@ buildForeignSigs input libPath externs modules = do
   -- `ulib upgrade` command, ADR 0031 §5, is not yet implemented).
   ulibSigsByMod <- for modules \m -> do
     let mn = printModname m.name
-    projWasm <- exists =<< joinPath [ input, mn, "foreign.wasm" ]
-    projWat <- exists =<< joinPath [ input, mn, "foreign.wat" ]
-    if projWasm || projWat then pure Object.empty
+    -- The wat export signatures are authoritative for the polymorphic / unboxed-`Int` `*Impl`
+    -- foreigns (e.g. `Data.Array.rangeImpl`'s `(param i32)`). Prefer a `foreign.wat` co-located in
+    -- `input` (a project-local foreign, or — ADR 0040 §P2 — a kept foreign staged beside the worker's
+    -- corefn so it self-merges at its real arity), else the lib's `$LIB/<M>/foreign.wat`. A
+    -- `foreign.wasm` with no `.wat` carries no parseable sigs, so it falls back to externs/source.
+    projWat <- joinPath [ input, mn, "foreign.wat" ]
+    hasProjWat <- exists projWat
+    if hasProjWat then maybe Object.empty (parseUlibSigs mn) <$> readText projWat
     else do
       libWat <- joinPath [ libPath, mn, "foreign.wat" ]
       has <- exists libWat
