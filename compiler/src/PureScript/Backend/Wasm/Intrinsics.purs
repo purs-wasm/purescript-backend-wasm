@@ -113,7 +113,11 @@ data Intrinsic
   | F64ArrayLength
   | F64ArrayIndex
   | F64ArrayNew
-  | F64ArraySet  
+  | F64ArraySet
+  | I64ArrayLength
+  | I64ArrayIndex
+  | I64ArrayNew
+  | I64ArraySet
   -- | `Data.Bounded`'s `top` / `bottom` for `Int` / `Char` / `Number`: nullary
   -- | constant values (the foreign is a bare value, not a function — arity 0).
   | TopInt -- maxBound Int (`i32.const 2147483647`)
@@ -318,7 +322,11 @@ qualifiedIntrinsic = case _ of
   "Wasm.F64Array.length" -> Just (Tuple F64ArrayLength 1)
   "Wasm.F64Array.unsafeIndex" -> Just (Tuple F64ArrayIndex 2)
   "Wasm.F64Array.unsafeNew" -> Just (Tuple F64ArrayNew 1)
-  "Wasm.F64Array.unsafeSet" -> Just (Tuple F64ArraySet 3)  
+  "Wasm.F64Array.unsafeSet" -> Just (Tuple F64ArraySet 3)
+  "Wasm.I64Array.length" -> Just (Tuple I64ArrayLength 1)
+  "Wasm.I64Array.unsafeIndex" -> Just (Tuple I64ArrayIndex 2)
+  "Wasm.I64Array.unsafeNew" -> Just (Tuple I64ArrayNew 1)
+  "Wasm.I64Array.unsafeSet" -> Just (Tuple I64ArraySet 3)
   -- `Wasm.String` (WasmBase, ADR 0030): first-order byte-level `$Str` primitives the
   -- `Data.String.*` code-point ops build on. `byteLength` reuses `StrLen`.
   "Wasm.String.byteLength" -> Just (Tuple StrLen 1)

@@ -167,6 +167,8 @@ foreign import auto :: Type
 -- | parameter and result signatures.
 foreign import createType :: Array Type -> Type
 
+foreign import arrayNewDefault :: Module -> HeapType -> Expression -> Effect Expression
+
 foreign import localGetImpl :: Module -> Int -> Type -> Effect Expression
 
 -- | Read local variable `index` (which has the given type).

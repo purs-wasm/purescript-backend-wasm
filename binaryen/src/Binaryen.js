@@ -291,6 +291,9 @@ export const structGet = (mod) => (index) => (ref) => (ty) => (signed) => () =>
 export const arrayNew = (mod) => (ht) => (size) => (init) => () =>
   binaryen._BinaryenArrayNew(mod.ptr, ht, size, init);
 
+export const arrayNewDefault = (mod) => (ht) => (size) => () =>
+  binaryen._BinaryenArrayNewDefault(mod.ptr, ht, size);
+
 export const refNull = (mod) => (ht) => () =>
   binaryen._BinaryenRefNull(mod.ptr, ht);
 

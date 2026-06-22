@@ -164,7 +164,26 @@ genPrim ctx intr args = case intr, args of
     val <- numArg v
     setE <- B.arraySet ctx.mod arr idx val
     arrAgain <- genAtomAs ctx Boxed a
-    B.block ctx.mod [ setE, arrAgain ] B.eqref  
+    B.block ctx.mod [ setE, arrAgain ] B.eqref
+  -- `Wasm.I64Array` (WasmBase, ADR 0026): packed unboxed i64 array (the `$Int64` box avoided per lane).
+  I64ArrayLength, [ a ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI64Arr
+    B.arrayLen ctx.mod arr
+  I64ArrayIndex, [ a, i ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI64Arr
+    idx <- intArg i
+    B.arrayGet ctx.mod arr idx B.i64 false
+  I64ArrayNew, [ n ] -> do
+    len <- intArg n
+    zero <- B.i64Const ctx.mod 0 0
+    B.arrayNew ctx.mod ctx.rt.i64ArrHt len zero
+  I64ArraySet, [ a, i, v ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI64Arr
+    idx <- intArg i
+    val <- i64Arg v
+    setE <- B.arraySet ctx.mod arr idx val
+    arrAgain <- genAtomAs ctx Boxed a
+    B.block ctx.mod [ setE, arrAgain ] B.eqref
   -- Array a -> Int: the element count
   ArrayLength, [ a ] -> do
     arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refVals

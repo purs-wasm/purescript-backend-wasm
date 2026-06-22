@@ -987,7 +987,7 @@
     "extra_packages": {
       "wasm-base": {
         "git": "https://github.com/harryprayiv/purescript-wasm-base.git",
-        "ref": "58524ef125d9cb6aa70567571d95c39a60bf39d8"
+        "ref": "ddc9bcfe42c23e2b8c5b5f0c274b94c6a508b4c3"
       }
     }
   },
@@ -2248,7 +2248,7 @@
     "wasm-base": {
       "type": "git",
       "url": "https://github.com/harryprayiv/purescript-wasm-base.git",
-      "rev": "58524ef125d9cb6aa70567571d95c39a60bf39d8",
+      "rev": "ddc9bcfe42c23e2b8c5b5f0c274b94c6a508b4c3",
       "dependencies": []
     }
   }

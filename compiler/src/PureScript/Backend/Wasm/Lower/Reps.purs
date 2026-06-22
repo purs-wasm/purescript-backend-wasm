@@ -79,9 +79,11 @@ primRep = case _ of
   TopNumber -> F64
   BottomNumber -> F64
   I32ArrayLength -> I32
+  I64ArrayLength -> I32
+  I64ArrayIndex -> I64
   I32ArrayIndex -> I32
   F64ArrayLength -> I32
-  F64ArrayIndex -> F64  
+  F64ArrayIndex -> F64
   _ -> Boxed
 
 -- | The representation each operand is generated at (by position); operands past
@@ -151,7 +153,10 @@ primOperandReps = case _ of
   I32ArrayIndex -> [ Boxed, I32 ]
   I32ArrayNew -> [ I32 ]
   I32ArraySet -> [ Boxed, I32, I32 ]
+  I64ArrayIndex -> [ Boxed, I32 ]
+  I64ArrayNew -> [ I32 ]
+  I64ArraySet -> [ Boxed, I32, I64 ]
   F64ArrayIndex -> [ Boxed, I32 ]
   F64ArrayNew -> [ I32 ]
-  F64ArraySet -> [ Boxed, I32, F64 ]  
+  F64ArraySet -> [ Boxed, I32, F64 ]
   _ -> []
