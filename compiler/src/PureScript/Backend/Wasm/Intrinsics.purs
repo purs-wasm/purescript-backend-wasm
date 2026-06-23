@@ -174,9 +174,9 @@ data Intrinsic
   -- | applying it to the unit (the erased `Partial` dictionary). Native so the wasm
   -- | closure never crosses to the JS foreign (which would call it as `f()`).
   | UnsafePartial
-  -- `Data.Int.Bits` 32-bit bitwise ops (JS `& | ^ << >> >>> ~`), each a single
-  -- i32 instruction. `IntShr` is *arithmetic* (sign-propagating, JS `>>`);
-  -- `IntZshr` is *logical* (zero-fill, JS `>>>`); `IntComplement x` = `x ^ -1`.
+  -- | `Data.Int.Bits` 32-bit bitwise ops (JS `& | ^ << >> >>> ~`), each a single
+  -- | i32 instruction. `IntShr` is *arithmetic* (sign-propagating, JS `>>`);
+  -- | `IntZshr` is *logical* (zero-fill, JS `>>>`); `IntComplement x` = `x ^ -1`.
   | IntAnd
   | IntOr
   | IntXor
