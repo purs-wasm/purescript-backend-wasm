@@ -87,7 +87,9 @@ language and are kept out of version control.)
 | 0037 | [Separate per-module codegen and linking (per-module wasm + `wasm-merge`)](0037-separate-per-module-codegen-and-linking.md) | Accepted; implemented (Phases 0–2 + Phase-3 codegen restructure — single-module compilation behind `--per-module-codegen`, parity-verified; per-module wasm cache pending) |
 | 0038 | [Separated compilation: the `purwc` worker, the `purs-wasm` orchestrator, and the shared `cli-lib`](0038-separated-compilation-purwc-worker-and-cli-lib.md) | Accepted; **Phase A implemented** (`cli-lib` extracted, three CLIs re-homed, behaviour-neutral); the standalone `purwc` worker (Phase B) + subprocess orchestrator (Phase C) designed, not yet implemented |
 | 0039 | [ulib as a patch on registry packages, with content-based lenient versioning](0039-ulib-as-registry-package-patch.md) | Accepted — §1/§3/§4 implemented (foreign-only abolished, presence-driven resolution, lenient versioning; blocker ② fixed), §2 partial (full source-overlay deferred to 0040) |
-| 0040 | [A global content-addressed library cache (`$PURS_WASM_LIB`)](0040-global-content-addressed-library-cache.md) | Proposed (supersedes 0033; depends on 0035 Layer C) |
+| 0040 | [A global content-addressed library cache (`$PURS_WASM_LIB`)](0040-global-content-addressed-library-cache.md) | Accepted — P1–P6 implemented (content-addressed store, own/library write-back partition, `.pmo` retired); §2 distribution model revised by 0041, build default by 0042; §4 "Layer C required" outdated (full-`.pmi` keying sound) |
+| 0041 | [Library artifacts ship pre-built; a build-time content-based compatibility gate](0041-prebuilt-library-artifacts-and-compatibility-gate.md) | Proposed (revises 0040 §2 / 0039 §3 — ship pre-built corefn not raw `.purs`, gate the patch on interface compat, drop `ulib install`) |
+| 0042 | [Orchestrate as the default build; retiring the whole-program path and its differential oracles](0042-orchestrate-default-and-oracle-retirement.md) | Proposed (orchestrate default, drop `--orchestrate`/`--per-module-rep`, trigger-based oracle retirement) |
 
 ## Scope
 

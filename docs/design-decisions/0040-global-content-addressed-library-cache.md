@@ -1,15 +1,29 @@
 # 0040. A global content-addressed library cache (`$PURS_WASM_LIB`)
 
-- Status: Proposed
+- Status: ~~Proposed~~ **Accepted — P1–P6 implemented; §2/§4 revised** _(2026-06-24: the store, the
+  recursive `.pmi` cache key (P1), foreign self-merge into `{M}.wasm` (P2), `caf_init` reachability
+  pruning (#19), content-addressed write-back **partitioned by own vs library** (P3 — `.spago`
+  dependencies + ulib shadows go to the global store, the project's own modules stay in the local
+  `_build`), optional `prewarm` (P4), and `.pmo` retirement (P6) are all implemented and suite-green.
+  Two parts are **revised**: the §2 "raw `.purs` + dumb source overlay" distribution model is dropped
+  in favour of shipping pre-built corefn behind a build-time compatibility gate — see
+  [ADR 0041](0041-prebuilt-library-artifacts-and-compatibility-gate.md); the build-mode default
+  (orchestrate) and the retirement of the whole-program oracle move to
+  [ADR 0042](0042-orchestrate-default-and-oracle-retirement.md). The P5 "resolution-free" experiment
+  was tried and reverted as too eager about cache use; the own/library partition (P3) is its sound
+  replacement.)_
 - Date: 2026-06-20
 
 > Supersedes [ADR 0033](0033-precompiled-ulib-pmo-artifacts.md) (precompiled `.pmo`). Builds on
 > [ADR 0034](0034-pmi-interface-pmo-object-split.md) (`.pmi`/object split),
 > [ADR 0037](0037-separate-per-module-codegen-and-linking.md) /
 > [0038](0038-separated-compilation-purwc-worker-and-cli-lib.md) (per-module / separated compilation).
-> Realizes the versioning policy of [ADR 0039](0039-ulib-as-registry-package-patch.md). **Depends on**
+> Realizes the versioning policy of [ADR 0039](0039-ulib-as-registry-package-patch.md). ~~**Depends on**
 > [ADR 0035](0035-sharing-nbe-reduction-aware-inlining.md) Layer C (reduction-aware inlining) for the
-> determinism that makes content-addressing sound.
+> determinism that makes content-addressing sound.~~ _(2026-06-24: outdated — the determinism concern
+> was **self-pollution** (since fixed, docs/investigations/0005); full-`.pmi` keying is sound without
+> Layer C, confirmed by measured `.pmi` byte-identity between the worker and whole-program cores. §4's
+> "Layer C required" is superseded; the cap remains only as a Binaryen size budget.)_
 
 ## Context
 
