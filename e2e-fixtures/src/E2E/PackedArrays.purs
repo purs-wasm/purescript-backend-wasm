@@ -56,7 +56,7 @@ i64At i =
   let
     a = L.unsafeSet (L.unsafeSet (L.unsafeSet (L.unsafeNew 3) 0 (I64.fromInt 10)) 1 (I64.fromInt 20)) 2 (I64.fromInt 30)
   in
-    I64.toInt (L.unsafeIndex a i)
+    I64.lowBits (L.unsafeIndex a i)
 
 i64ZeroInit :: Int -> Int
-i64ZeroInit _ = I64.toInt (L.unsafeIndex (L.unsafeNew 3) 1)
+i64ZeroInit _ = I64.lowBits (L.unsafeIndex (L.unsafeNew 3) 1)

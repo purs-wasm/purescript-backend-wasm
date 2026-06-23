@@ -34,15 +34,15 @@ import Wasm.Int64 as I
 mk :: Int -> Int -> Int64
 mk h l = I.or (I.shl (I.fromInt h) c32) (I.and (I.fromInt l) loMask)
   where
-  c32 = I.fromInt 32
+  c32 = 32
   loMask = I.zshr (I.fromInt (-1)) c32
 
 -- Read the high / low 32-bit word of an Int64 back out as an i32 (the export ABI).
 hiOf :: Int64 -> Int
-hiOf x = I.toInt (I.zshr x (I.fromInt 32))
+hiOf x = I.lowBits (I.zshr x 32)
 
 loOf :: Int64 -> Int
-loOf = I.toInt
+loOf = I.lowBits
 
 b2i :: Boolean -> Int
 b2i b = if b then 1 else 0
@@ -58,7 +58,7 @@ sv :: Unit -> Int64
 sv _ = mk (-252645136) (-252645136) -- 0xF0F0F0F0F0F0F0F0  (sign bit set)
 
 tv :: Unit -> Int64
-tv _ = I.shl (I.fromInt 1) (I.fromInt 63) -- 0x8000000000000000  (only the top bit set)
+tv _ = I.shl (I.fromInt 1) 63 -- 0x8000000000000000  (only the top bit set)
 
 -- NB: `mk (-2147483648) 0` would be ill-formed -- PureScript parses `-2147483648` as
 -- `negate 2147483648`, and the bare literal `2147483648` overflows `Int` (maxBound + 1),
@@ -97,71 +97,71 @@ notALo = loOf (I.complement (av unit))
 --------------------------------------------------------------------------------
 
 shrS4Hi :: Int
-shrS4Hi = hiOf (I.shr (sv unit) (I.fromInt 4))
+shrS4Hi = hiOf (I.shr (sv unit) 4)
 
 shrS4Lo :: Int
-shrS4Lo = loOf (I.shr (sv unit) (I.fromInt 4))
+shrS4Lo = loOf (I.shr (sv unit) 4)
 
 zshrS4Hi :: Int
-zshrS4Hi = hiOf (I.zshr (sv unit) (I.fromInt 4))
+zshrS4Hi = hiOf (I.zshr (sv unit) 4)
 
 zshrS4Lo :: Int
-zshrS4Lo = loOf (I.zshr (sv unit) (I.fromInt 4))
+zshrS4Lo = loOf (I.zshr (sv unit) 4)
 
 shlS4Hi :: Int
-shlS4Hi = hiOf (I.shl (sv unit) (I.fromInt 4))
+shlS4Hi = hiOf (I.shl (sv unit) 4)
 
 shlS4Lo :: Int
-shlS4Lo = loOf (I.shl (sv unit) (I.fromInt 4))
+shlS4Lo = loOf (I.shl (sv unit) 4)
 
 --------------------------------------------------------------------------------
 -- Cross-32-bit-boundary shifts (count >= 32)
 --------------------------------------------------------------------------------
 
 shlA36Hi :: Int
-shlA36Hi = hiOf (I.shl (av unit) (I.fromInt 36))
+shlA36Hi = hiOf (I.shl (av unit) 36)
 
 shlA36Lo :: Int
-shlA36Lo = loOf (I.shl (av unit) (I.fromInt 36))
+shlA36Lo = loOf (I.shl (av unit) 36)
 
 zshrB36Lo :: Int
-zshrB36Lo = loOf (I.zshr (bv unit) (I.fromInt 36))
+zshrB36Lo = loOf (I.zshr (bv unit) 36)
 
 shrS36Hi :: Int
-shrS36Hi = hiOf (I.shr (sv unit) (I.fromInt 36))
+shrS36Hi = hiOf (I.shr (sv unit) 36)
 
 shrS36Lo :: Int
-shrS36Lo = loOf (I.shr (sv unit) (I.fromInt 36))
+shrS36Lo = loOf (I.shr (sv unit) 36)
 
 --------------------------------------------------------------------------------
 -- Rotates: the headline. Offset 36 is a real Keccak ρ offset (crosses the boundary).
 --------------------------------------------------------------------------------
 
 rotlA36Hi :: Int
-rotlA36Hi = hiOf (I.rotl (av unit) (I.fromInt 36))
+rotlA36Hi = hiOf (I.rotl (av unit) 36)
 
 rotlA36Lo :: Int
-rotlA36Lo = loOf (I.rotl (av unit) (I.fromInt 36))
+rotlA36Lo = loOf (I.rotl (av unit) 36)
 
 rotrA36Hi :: Int
-rotrA36Hi = hiOf (I.rotr (av unit) (I.fromInt 36))
+rotrA36Hi = hiOf (I.rotr (av unit) 36)
 
 rotrA36Lo :: Int
-rotrA36Lo = loOf (I.rotr (av unit) (I.fromInt 36))
+rotrA36Lo = loOf (I.rotr (av unit) 36)
 
 -- rotl vs shl distinguisher: T has only the top bit. rotl wraps it to bit 0 (lo = 1); shl drops it.
 rotlT1Lo :: Int
-rotlT1Lo = loOf (I.rotl (tv unit) (I.fromInt 1))
+rotlT1Lo = loOf (I.rotl (tv unit) 1)
 
 shlT1Lo :: Int
-shlT1Lo = loOf (I.shl (tv unit) (I.fromInt 1))
+shlT1Lo = loOf (I.shl (tv unit) 1)
 
 -- rotl 1 by 63 == 0x8000000000000000 (the doc's canonical case).
 rotl63oneHi :: Int
-rotl63oneHi = hiOf (I.rotl (I.fromInt 1) (I.fromInt 63))
+rotl63oneHi = hiOf (I.rotl (I.fromInt 1) 63)
 
 rotl63oneLo :: Int
-rotl63oneLo = loOf (I.rotl (I.fromInt 1) (I.fromInt 63))
+rotl63oneLo = loOf (I.rotl (I.fromInt 1) 63)
 
 --------------------------------------------------------------------------------
 -- Comparisons: eq, and signed lt (must be lt_s)
@@ -194,10 +194,10 @@ ltPos = b2i (I.lt (I.fromInt 1) (I.fromInt (-1)))
 mixV :: Int64
 mixV =
   let
-    t = I.xor (av unit) (I.rotl (bv unit) (I.fromInt 36))
+    t = I.xor (av unit) (I.rotl (bv unit) 36)
     u = I.and t (I.complement (av unit))
   in
-    I.xor u (I.rotr (av unit) (I.fromInt 17))
+    I.xor u (I.rotr (av unit) 17)
 
 mixHi :: Int
 mixHi = hiOf mixV
@@ -213,7 +213,7 @@ mixLo = loOf mixV
 --------------------------------------------------------------------------------
 
 loMaskG :: Int64
-loMaskG = I.zshr (I.fromInt (-1)) (I.fromInt 32)
+loMaskG = I.zshr (I.fromInt (-1)) 32
 
 allOnesG :: Int64
 allOnesG = I.complement (I.fromInt 0)
@@ -234,7 +234,7 @@ globAllOnesHi = hiOf allOnesG
 -- Parameterised (runtime, non-constant-folded) probes.
 --------------------------------------------------------------------------------
 
--- toInt . fromInt is identity on the low 32 bits: recovers any i32.
+-- lowBits . fromInt is identity on the low 32 bits: recovers any i32.
 wrapId :: Int -> Int
 wrapId k = loOf (I.fromInt k)
 
@@ -244,27 +244,27 @@ signExtHi k = hiOf (I.fromInt k)
 
 -- Bit position of (1 << n), observed through both words.
 oneShlHi :: Int -> Int
-oneShlHi n = hiOf (I.shl (I.fromInt 1) (I.fromInt n))
+oneShlHi n = hiOf (I.shl (I.fromInt 1) n)
 
 oneShlLo :: Int -> Int
-oneShlLo n = loOf (I.shl (I.fromInt 1) (I.fromInt n))
+oneShlLo n = loOf (I.shl (I.fromInt 1) n)
 
 -- Runtime rotate of a sign-extended word by n.
 rotlRTHi :: Int -> Int -> Int
-rotlRTHi w n = hiOf (I.rotl (I.fromInt w) (I.fromInt n))
+rotlRTHi w n = hiOf (I.rotl (I.fromInt w) n)
 
 rotlRTLo :: Int -> Int -> Int
-rotlRTLo w n = loOf (I.rotl (I.fromInt w) (I.fromInt n))
+rotlRTLo w n = loOf (I.rotl (I.fromInt w) n)
 
 -- Runtime sign-fill vs zero-fill right shift of a sign-extended word by n.
 shrRTHi :: Int -> Int -> Int
-shrRTHi w n = hiOf (I.shr (I.fromInt w) (I.fromInt n))
+shrRTHi w n = hiOf (I.shr (I.fromInt w) n)
 
 shrRTLo :: Int -> Int -> Int
-shrRTLo w n = loOf (I.shr (I.fromInt w) (I.fromInt n))
+shrRTLo w n = loOf (I.shr (I.fromInt w) n)
 
 zshrRTHi :: Int -> Int -> Int
-zshrRTHi w n = hiOf (I.zshr (I.fromInt w) (I.fromInt n))
+zshrRTHi w n = hiOf (I.zshr (I.fromInt w) n)
 
 zshrRTLo :: Int -> Int -> Int
-zshrRTLo w n = loOf (I.zshr (I.fromInt w) (I.fromInt n))
+zshrRTLo w n = loOf (I.zshr (I.fromInt w) n)

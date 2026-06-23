@@ -357,7 +357,7 @@ qualifiedIntrinsic = case _ of
   "Wasm.Int64.eq" -> Just (Tuple Int64Eq 2)
   "Wasm.Int64.lt" -> Just (Tuple Int64Lt 2)
   "Wasm.Int64.fromInt" -> Just (Tuple Int64FromInt 1)
-  "Wasm.Int64.toInt" -> Just (Tuple Int64ToInt 1)
+  "Wasm.Int64.lowBits" -> Just (Tuple Int64ToInt 1)
   -- `Data.Int.Bits` 32-bit bitwise ops (the `integers` package foreigns: bare
   -- `and`/`or`/`xor`/`shl`/`shr`/`zshr`/`complement`, qualified here because the
   -- bare names are too generic). Pure, so absent from `effectfulForeignNames`.

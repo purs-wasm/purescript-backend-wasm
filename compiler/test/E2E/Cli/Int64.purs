@@ -113,7 +113,7 @@ spec =
           oLo <- liftEffect (callI32x0 inst "globAllOnesLo")
           [ mHi, mLo, oHi, oLo ] `shouldEqual` [ 0, -1, -1, -1 ]
 
-        it "fromInt sign-extends and toInt wraps to the low 32 bits" \inst -> do
+        it "fromInt sign-extends and lowBits wraps to the low 32 bits" \inst -> do
           w42 <- liftEffect (callI32x1 inst "wrapId" 42)
           wNeg <- liftEffect (callI32x1 inst "wrapId" (-7))
           [ w42, wNeg ] `shouldEqual` [ 42, -7 ]

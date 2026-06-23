@@ -38,7 +38,7 @@ primRep = case _ of
   IntZshr -> I32
   IntComplement -> I32
   -- `Wasm.Int64`: the ops returning `Int64` produce a raw i64 (single `i64.*`
-  -- instruction in `Codegen.Prim`); `toInt` wraps to i32; `eq`/`lt` produce an
+  -- instruction in `Codegen.Prim`); `lowBits` wraps to i32; `eq`/`lt` produce an
   -- i31 Boolean (`Boxed`, via the catch-all below).
   Int64FromInt -> I64
   Int64And -> I64
