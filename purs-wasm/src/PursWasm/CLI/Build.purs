@@ -177,6 +177,11 @@ compileBatchToStore
      , platform :: String
      , perModuleRep :: Boolean
      , entryNames :: Set.Set String
+     -- ADR 0040 P5: the store manifest (module → keys) for a resolution-free build. A module present
+     -- here is a LIBRARY module whose keys come straight from the manifest (its corefn is never read,
+     -- it is a guaranteed store hit). Empty for a normal build / prewarm — then every key is computed
+     -- from corefn exactly as before, so the manifest is behaviour-neutral when empty.
+     , manifest :: Map.Map String { pmi :: String, wasm :: String }
      }
   -> Array { name :: String, imports :: Array String, sourceHash :: String | b }
   -> Run (FS + PROC + LOG + EFFECT + r) Unit
@@ -184,13 +189,22 @@ compileBatchToStore cfg ordered = do
   mkdirP cfg.buildDir
   purwcPath <- joinPath [ cfg.cliRoot, "purwc", "index.dev.js" ]
   let buildSet = Set.fromFoldable (map _.name ordered)
+  -- A manifest (library) module's store key is taken verbatim from the manifest; everyone else's is
+  -- computed bottom-up. Because the manifest key was itself computed from the same corefn at prewarm,
+  -- an own module that depends on a library module gets the identical key whether or not the manifest
+  -- short-circuits the dependency — so the store stays consistent across resolution-free / normal.
   let
     storeKeys = Array.foldl
-      ( \acc m ->
-          let
-            deps = Array.filter (\d -> d /= m.name && Set.member d buildSet) (Array.nub m.imports)
-          in
-            Map.insert m.name (cacheKey m.sourceHash (Array.mapMaybe (\d -> Map.lookup d acc) deps)) acc
+      ( \acc m -> Map.insert m.name
+          ( case Map.lookup m.name cfg.manifest of
+              Just k -> k.pmi
+              Nothing ->
+                let
+                  deps = Array.filter (\d -> d /= m.name && Set.member d buildSet) (Array.nub m.imports)
+                in
+                  cacheKey m.sourceHash (Array.mapMaybe (\d -> Map.lookup d acc) deps)
+          )
+          acc
       )
       Map.empty
       ordered
@@ -198,7 +212,7 @@ compileBatchToStore cfg ordered = do
   plan <- for ordered \m -> do
     watTxt <- readText =<< joinPath [ cfg.purwcInput, m.name, "foreign.wat" ]
     let sk = fromMaybe m.sourceHash (Map.lookup m.name storeKeys)
-    let wk = wasmKey sk ct (maybe "" hashString watTxt)
+    let wk = maybe (wasmKey sk ct (maybe "" hashString watTxt)) _.wasm (Map.lookup m.name cfg.manifest)
     let isEntry = Set.member m.name cfg.entryNames
     hit <- case cfg.storeDir of
       Just root | not isEntry -> do
@@ -338,6 +352,8 @@ prewarmCmd cliRoot input = do
         , platform: show Node
         , perModuleRep: false
         , entryNames: Set.empty
+        -- Prewarm computes every key from corefn (it is POPULATING the store, not consuming it).
+        , manifest: Map.empty
         }
         (topoBySrcImports srcInfos)
       info (Log.strong (Log.green "✓ prewarm complete"))
@@ -354,12 +370,14 @@ orchestrateModules
   -> BuildOption
   -> FilePath
   -> Maybe FilePath
+  -> Map.Map String { pmi :: String, wasm :: String }
   -> Array { name :: String, imports :: Array String, sourceHash :: String | a }
   -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
-orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
+orchestrateModules cliRoot purwcInput args buildDir storeDir manifest srcInfos = do
   let ordered = topoBySrcImports srcInfos
   let entryNames = Set.fromFoldable args.entryModules
-  -- ADR 0040 P3: compile (or reuse from the store) every module into `_build`.
+  -- ADR 0040 P3/P5: compile (or reuse from the store) every module into `_build`. A non-empty
+  -- `manifest` (resolution-free build) sources its library modules straight from the store.
   compileBatchToStore
     { cliRoot
     , purwcInput
@@ -370,6 +388,7 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
     , platform: show args.platform
     , perModuleRep: args.perModuleRep
     , entryNames
+    , manifest
     }
     ordered
   metas <- for ordered \m -> do
@@ -690,7 +709,7 @@ buildCmd cliRoot binaryenBinDir args = do
   -- ADR 0040 P3: the global content-addressed store (`$PURS_WASM_STORE`); `Nothing` disables it.
   storeDir <- storeRoot
   linkResult <-
-    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir srcInfos
+    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir Map.empty srcInfos
     else if useCache then do
       -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
       -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.
