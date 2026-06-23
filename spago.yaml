@@ -7,5 +7,5 @@ workspace:
     # index + metadata caches to have propagated the just-published package. Switch to
     # `wasm-base: 0.1.1` once that's reliably the case everywhere.
     wasm-base:
-      git: "https://github.com/harryprayiv/purescript-wasm-base.git"
-      ref: "993980aa1aba4356547e2b00cd31390ca6ab5bab"
+      git: "https://github.com/purs-wasm/purescript-wasm-base.git"
+      ref: "v0.2.0"
