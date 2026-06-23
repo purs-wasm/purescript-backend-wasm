@@ -323,10 +323,10 @@ qualifiedIntrinsic = case _ of
   "Wasm.F64Array.unsafeIndex" -> Just (Tuple F64ArrayIndex 2)
   "Wasm.F64Array.unsafeNew" -> Just (Tuple F64ArrayNew 1)
   "Wasm.F64Array.unsafeSet" -> Just (Tuple F64ArraySet 3)
-  "Wasm.Int64Array.length" -> Just (Tuple I64ArrayLength 1)
-  "Wasm.Int64Array.unsafeIndex" -> Just (Tuple I64ArrayIndex 2)
-  "Wasm.Int64Array.unsafeNew" -> Just (Tuple I64ArrayNew 1)
-  "Wasm.Int64Array.unsafeSet" -> Just (Tuple I64ArraySet 3)
+  "Wasm.I64Array.length" -> Just (Tuple I64ArrayLength 1)
+  "Wasm.I64Array.unsafeIndex" -> Just (Tuple I64ArrayIndex 2)
+  "Wasm.I64Array.unsafeNew" -> Just (Tuple I64ArrayNew 1)
+  "Wasm.I64Array.unsafeSet" -> Just (Tuple I64ArraySet 3)
   -- `Wasm.String` (WasmBase, ADR 0030): first-order byte-level `$Str` primitives the
   -- `Data.String.*` code-point ops build on. `byteLength` reuses `StrLen`.
   "Wasm.String.byteLength" -> Just (Tuple StrLen 1)
