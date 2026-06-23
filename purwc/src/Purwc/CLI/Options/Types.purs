@@ -27,6 +27,10 @@ type BatchOption =
   { input :: FilePath
   , depsDir :: FilePath
   , outDir :: FilePath
+  -- The global content-addressed store root (ADR 0040). When set, the worker writes each compiled
+  -- LIBRARY module's artifacts to the store under the per-line store keys as soon as that module
+  -- finishes (rather than the orchestrator copying them back after the whole batch). Empty disables.
+  , storeDir :: FilePath
   , noOpt :: Boolean
   , debug :: Boolean
   }

@@ -73,6 +73,11 @@ batchOptionsParser =
         ArgParser.argument [ "-O", "--output" ]
           "Directory the modules' .pmi/.wasm/.link.json are written to. Defaults to './output-purwc'."
           # ArgParser.default "output-purwc"
+    , storeDir:
+        ArgParser.argument [ "--store" ]
+          "The global content-addressed store root. When set, each compiled library module's artifacts\n\
+          \are written to the store under its per-line keys as it finishes. Empty (default) disables."
+          # ArgParser.default ""
     , noOpt:
         ArgParser.flag [ "--no-opt" ]
           "Skip the middle-end optimization (dictionary elimination); lambda lifting still runs."

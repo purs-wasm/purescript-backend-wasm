@@ -44,7 +44,7 @@ import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PureScript.Backend.Wasm.CLI.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat, codegenTag, toolchainTag)
-import PureScript.Backend.Wasm.CLI.Store (putStoreFile, storeRoot, wasmKey)
+import PureScript.Backend.Wasm.CLI.Store (storeRoot, wasmKey)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames, corefnImports, corefnModulePath)
 import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, execFileInput, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log (br)
@@ -250,25 +250,30 @@ compileBatchToStore cfg ordered = do
             }
         )
     )
+  -- Each work-list line carries the orchestrator-computed store keys + library flag (tab-separated:
+  -- `<*?>name\t<pmiKey>\t<wasmKey>\t<0|1 library>`), so the worker can write each compiled LIBRARY
+  -- module's three artifacts to the store under THOSE keys the moment it finishes that module —
+  -- incrementally, not in a post-batch copy pass (ADR 0040 §P3; the entry + own modules stay local).
+  -- The store keys are the orchestrator's (recursive, import-based content keys), distinct from the
+  -- worker's own `.pmi` key, so they must be passed in; the worker treats them as opaque file names.
   when (not (Array.null misses)) do
-    let workList = joinWith "\n" (misses <#> \p -> (if p.isEntry then "*" else "") <> p.name)
+    let
+      workList = joinWith "\n"
+        ( misses <#> \p ->
+            joinWith "\t"
+              [ (if p.isEntry then "*" else "") <> p.name
+              , p.sk
+              , p.wk
+              , if p.library then "1" else "0"
+              ]
+        )
     execFileInput "node"
       ( [ purwcPath, "compile-batch", "-I", cfg.purwcInput, "--deps", cfg.buildDir, "-O", cfg.buildDir ]
+          <> maybe [] (\root -> [ "--store", root ]) cfg.storeDir
           <> (if cfg.debug then [ "-g" ] else [])
           <> (if cfg.noOpt then [ "--no-opt" ] else [])
       )
       workList
-  -- Write each compiled (MISS) **library** module's three artifacts back to the store under its keys
-  -- (a hit already came FROM the store; own modules + the entry stay in `_build` only — see the doc).
-  -- A content-addressed file already present is left as-is (`putStoreFile`).
-  for_ cfg.storeDir \root -> for_ (Array.filter (\p -> not p.hit && not p.isEntry && p.library) plan) \p -> do
-    let
-      store suffix key = do
-        mb <- readBinary =<< joinPath [ cfg.buildDir, p.name <> suffix ]
-        maybe (pure unit) (putStoreFile root (key <> suffix)) mb
-    store ".pmi" p.sk
-    store ".wasm" p.wk
-    store ".link.json" p.wk
 
 -- | ADR 0040 P4: prewarm the global store from a package set's compiler output, so a project's build
 -- | hits the store for the whole library closure instead of compiling it. Unlike the lib directory

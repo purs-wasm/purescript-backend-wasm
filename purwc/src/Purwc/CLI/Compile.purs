@@ -10,8 +10,17 @@
 -- | `--deps` is expected to hold exactly this module's transitive dependency `.pmi`s (the orchestrator
 -- | provides the closure). The summary fold is order-independent (each summary already encodes its
 -- | module's final optimization context), so no topological ordering is needed here.
+-- |
+-- | The codegen + artifact-write tail is shared with the long-lived `compile-batch` worker via
+-- | `emitModule`; the batch worker (`Purwc.CLI.Batch`) drives the incremental optimizer itself
+-- | rather than calling `compileModuleMir` per module, so it never re-folds every dependency summary.
 module Purwc.CLI.Compile
   ( compileCmd
+  , emitModule
+  , depInterfaceOf
+  , loadDepInterfaces
+  , EmitEnv
+  , ModuleArtifactInput
   ) where
 
 import Prelude
@@ -20,12 +29,14 @@ import Data.Argonaut.Core (fromArray, fromObject, fromString, jsonNull, stringif
 import Data.Array as Array
 import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..), maybe)
+import Data.Set (Set)
 import Data.Set as Set
 import Data.Map as Map
 import Data.String as Str
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Fmt as Fmt
+import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.CLI.Compat (toolchainTag)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames)
@@ -37,11 +48,15 @@ import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PureScript.Backend.Wasm.CLI.Lib (resolveLibPath)
 import PureScript.Backend.Wasm.CLI.Module (entryRoot)
 import PureScript.Backend.Wasm.CLI.Paths (wasmDisBin)
-import PureScript.Backend.Wasm.Compiler (compileModuleWasm, effectfulForeigns, moduleInterface, parseModule)
-import PureScript.Backend.Wasm.Externs (ctorFieldReps)
+import PureScript.Backend.Wasm.Compiler (CompileOptions, compileModuleWasm, effectfulForeigns, moduleInterface, parseModule)
+import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps)
+import PureScript.Backend.Wasm.Lower (DepInterface)
+import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
 import PureScript.Backend.Wasm.MiddleEnd (compileModuleMir, declRefMap, liftModule)
+import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (PmiEntry, decodePmi, encodePmi)
+import PureScript.ExternsFile (ExternsFile)
 import Purwc.CLI.Options.Types (CompileOption)
 import Run (EFFECT, Run, liftEffect)
 import Type.Row (type (+))
@@ -83,15 +98,7 @@ compileCmd cliRoot binaryenBinDir args = do
   -- their `.pmi`s, so this module is keyed recursively against them (matching the whole-program
   -- loop's topo-accumulated dep keys → byte-identical `.pmi` key, the `diffPurwc` parity contract).
   let depKeys = Map.fromFoldable (map (\e -> Tuple (Str.joinWith "." e.summary.name) e.key) depEntries)
-  let
-    depInterfaces = depEntries <#> \e ->
-      { funcs: e.funcs
-      , ctors: e.ctors
-      , dictCtors: e.dictCtors
-      , enumCtors: e.enumCtors
-      , foreignSigs: e.foreignSigs
-      , foreignNames: e.foreignNames
-      }
+  let depInterfaces = map depInterfaceOf depEntries
   -- The effectful-foreign set (for impurify) must include the DEPENDENCIES' foreigns, not just the
   -- target's: the target may call a dependency's `Effect` foreign (e.g. `Effect.Console.log`), and
   -- without knowing it is effectful the optimizer mis-globalizes a top-level `Effect` binding
@@ -99,17 +106,64 @@ compileCmd cliRoot binaryenBinDir args = do
   let allSigsWithDeps = Array.foldl Object.union allSigs (map _.foreignSigs depEntries)
   let eff = effectfulForeigns allSigsWithDeps
 
-  -- Optimize the single module against its dependency summaries, then persist its interface.
+  -- Optimize the single module against its dependency summaries, then emit its artifacts.
   let out = compileModuleMir eff.names eff.arities { sourceHash, lifted: liftModule decoded, depSummaries, depKeys }
-  mkdirP args.outDir
-  pmiPath <- joinPath [ args.outDir, target <> ".pmi" ]
-  let iface = moduleInterface (ctorFieldReps externs) allSigs (Set.toUnfoldable foreignNameSet) out.finalMod
+  _ <- emitModule
+    { binaryenBinDir, input: args.input, outDir: args.outDir, text: args.text, opts }
+    { target
+    , programEntry: args.programEntry
+    , externs
+    , allSigs
+    , foreignNameSet
+    , depInterfaces
+    , sourceHash
+    , finalMod: out.finalMod
+    , summary: out.summary
+    , deps: out.deps
+    , key: out.key
+    }
+  pure unit
+
+-- | The per-module codegen + artifact-write tail, shared by the one-shot `compile` and the
+-- | long-lived `compile-batch` worker. Writes the module's `.pmi` interface, lowers + codegens its
+-- | `.wasm` against the accumulated dependency interfaces, self-merges any kept foreign provider, and
+-- | emits the `.link.json` orchestrator sidecar (+ `.wat` on `--text`). Returns the module's OWN
+-- | `DepInterface` so the batch loop can accumulate it for subsequent modules' codegen without
+-- | re-reading the just-written `.pmi`.
+type EmitEnv =
+  { binaryenBinDir :: FilePath
+  , input :: FilePath
+  , outDir :: FilePath
+  , text :: Boolean
+  , opts :: CompileOptions
+  }
+
+type ModuleArtifactInput =
+  { target :: String
+  , programEntry :: Boolean
+  , externs :: Array ExternsFile
+  , allSigs :: Object ForeignSig
+  , foreignNameSet :: Set String
+  , depInterfaces :: Array DepInterface
+  , sourceHash :: String
+  , finalMod :: M.Module
+  , summary :: M.Module
+  , deps :: Array String
+  , key :: String
+  }
+
+emitModule :: forall r. EmitEnv -> ModuleArtifactInput -> Run (FS + PROC + LOG + EFFECT + r) DepInterface
+emitModule env m = do
+  let target = m.target
+  mkdirP env.outDir
+  pmiPath <- joinPath [ env.outDir, target <> ".pmi" ]
+  let iface = moduleInterface (ctorFieldReps m.externs) m.allSigs (Set.toUnfoldable m.foreignNameSet) m.finalMod
   writeBinary pmiPath
     ( encodePmi
-        { sourceHash
-        , key: out.key
-        , deps: out.deps
-        , summary: out.summary
+        { sourceHash: m.sourceHash
+        , key: m.key
+        , deps: m.deps
+        , summary: m.summary
         , funcs: iface.funcs
         , ctors: iface.ctors
         , dictCtors: iface.dictCtors
@@ -121,18 +175,18 @@ compileCmd cliRoot binaryenBinDir args = do
     )
 
   -- Lower + codegen the single module against its dependency interfaces, and write its wasm.
-  liftEffect (compileModuleWasm opts allSigs foreignNameSet externs depInterfaces args.programEntry out.finalMod) >>= case _ of
+  liftEffect (compileModuleWasm env.opts m.allSigs m.foreignNameSet m.externs m.depInterfaces m.programEntry m.finalMod) >>= case _ of
     Left err -> logAndThrow err
     Right art -> do
-      wasmPath <- joinPath [ args.outDir, target <> ".wasm" ]
+      wasmPath <- joinPath [ env.outDir, target <> ".wasm" ]
       writeBinary wasmPath art.bytes
       -- ADR 0040 §P2: merge this module's own kept foreign (staged under `-I` as `{M}/foreign.wasm`
       -- or `foreign.wat`) into its wasm, so `{M}.wasm` is a self-contained object — a cross-module
       -- foreign import resolves from the owner's wasm at the program's final merge, not a re-resolve
       -- by the orchestrator (which therefore only handles genuine JS-fallback foreigns).
-      foreignProvider binaryenBinDir args.input args.input args.outDir target >>= case _ of
+      foreignProvider env.binaryenBinDir env.input env.input env.outDir target >>= case _ of
         Just prov -> do
-          mergeForeignInto binaryenBinDir wasmPath target prov.wasm
+          mergeForeignInto env.binaryenBinDir wasmPath target prov.wasm
           when prov.assembled (unlink prov.wasm)
         Nothing -> pure unit
       info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: wasmPath })
@@ -140,7 +194,7 @@ compileCmd cliRoot binaryenBinDir args = do
       -- `purs-wasm` orchestrator needs to build the link glue, resolve foreigns, and internalise
       -- cross-module exports after `wasm-merge`. Kept out of the `.pmi` (which is the dependent-facing
       -- interface); a small ephemeral JSON sidecar, read once by the orchestrator.
-      linkPath <- joinPath [ args.outDir, target <> ".link.json" ]
+      linkPath <- joinPath [ env.outDir, target <> ".link.json" ]
       writeText linkPath
         ( stringify $ fromObject $ Object.fromFoldable
             [ Tuple "cafInitExport" (maybe jsonNull fromString art.cafInitExport)
@@ -151,15 +205,38 @@ compileCmd cliRoot binaryenBinDir args = do
             -- CAF whose init calls a non-marshallable foreign must never be eagerly initialized).
             , Tuple "bindingRefs"
                 ( fromObject $ Object.fromFoldable
-                    (declRefMap out.finalMod <#> \(Tuple k refs) -> Tuple k (fromArray (map fromString refs)))
+                    (declRefMap m.finalMod <#> \(Tuple k refs) -> Tuple k (fromArray (map fromString refs)))
                 )
             ]
         )
-      when args.text do
-        watPath <- joinPath [ args.outDir, target <> ".wat" ]
-        execFile (wasmDisBin binaryenBinDir) [ wasmPath, "-o", watPath, "--all-features" ]
+      when env.text do
+        watPath <- joinPath [ env.outDir, target <> ".wat" ]
+        execFile (wasmDisBin env.binaryenBinDir) [ wasmPath, "-o", watPath, "--all-features" ]
         info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: watPath })
       info $ Log.strong (Log.green (Fmt.fmt @"✓ compiled {m}" { m: target }))
+      pure (depInterfaceOf iface)
+
+-- | The codegen-facing dependency interface (`DepInterface`) projected from a `.pmi` entry or a
+-- | freshly-computed module interface (both share the field shape; `labels` is orchestrator-only).
+depInterfaceOf
+  :: forall r
+   . { funcs :: Object Int
+     , ctors :: Object CtorInfo
+     , dictCtors :: Object Unit
+     , enumCtors :: Object Unit
+     , foreignSigs :: Object ForeignSig
+     , foreignNames :: Array String
+     | r
+     }
+  -> DepInterface
+depInterfaceOf e =
+  { funcs: e.funcs
+  , ctors: e.ctors
+  , dictCtors: e.dictCtors
+  , enumCtors: e.enumCtors
+  , foreignSigs: e.foreignSigs
+  , foreignNames: e.foreignNames
+  }
 
 -- | Load every `.pmi` under `depsDir` (the transitive dependency interfaces). An empty `depsDir` or
 -- | an unreadable/corrupt `.pmi` simply contributes nothing — a missing dependency surfaces later as
