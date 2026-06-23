@@ -82,21 +82,20 @@ buildOptionsParser =
         ArgParser.flag [ "--per-module-rep" ]
           "Constrain the representation (unboxing) analysis to a per-module boundary:\n\
           \cross-module-visible functions take/return boxed values, only intra-module\n\
-          \signatures are unboxed (ADR 0037). Experimental; for A/B measurement ahead of\n\
+          \signatures are unboxed. Experimental; for A/B measurement ahead of\n\
           \per-module codegen. The build is still whole-program."
           # ArgParser.boolean
     , perModuleCodegen:
         ArgParser.flag [ "--per-module-codegen" ]
-          "Use the per-module lower+codegen core (ADR 0037 Phase 2) instead of the\n\
-          \whole-program one. Experimental; differential-tested against the default for\n\
-          \behaviour parity. The per-module engine moves to the standalone `purwc` later."
+          "Use the per-module lower+codegen core instead of the whole-program one.\n\
+          \Experimental; differential-tested against the default for behaviour parity.\n\
+          \The per-module engine moves to the standalone `purwc` later."
           # ArgParser.boolean
     , orchestrate:
         ArgParser.flag [ "--orchestrate" ]
-          "ADR 0038 Phase C: drive the standalone `purwc` worker as a subprocess per module\n\
-          \(in dependency order, each reading its dependencies' .pmi interfaces only) and link\n\
-          \the results, instead of compiling in-process. Experimental (C1: sequential, non-ulib,\n\
-          \dev only)."
+          "Drive the standalone `purwc` worker as a subprocess per module (in dependency\n\
+          \order, each reading its dependencies' .pmi interfaces only) and link the results,\n\
+          \instead of compiling in-process. Experimental."
           # ArgParser.boolean
     , dumpMir:
         ArgParser.argument [ "--dump-mir" ]

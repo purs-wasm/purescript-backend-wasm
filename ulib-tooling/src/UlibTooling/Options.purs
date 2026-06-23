@@ -102,7 +102,7 @@ commandParser =
         "Compare each shadow's public interface against your compiled module (externs)"
         (withGlobals (Check <$> ulibCheckParser) <* ArgParser.flagHelp)
     , ArgParser.command [ "compat" ]
-        "Regenerate (or --check) ulib/compat.json: the package-set/version/purs pins (ADR 0029)"
+        "Regenerate (or --check) ulib/compat.json: the package-set/version/purs pins"
         (withGlobals (Compat <$> ulibCompatParser) <* ArgParser.flagHelp)
     ]
     <* ArgParser.flagHelp

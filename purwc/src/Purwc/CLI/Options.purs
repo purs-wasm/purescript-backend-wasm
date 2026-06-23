@@ -28,12 +28,12 @@ compileOptionsParser =
           # ArgParser.default "output"
     , depsDir:
         ArgParser.argument [ "--deps" ]
-          "Directory of the module's dependencies' .pmi/.pmo artifacts. Defaults to the\n\
-          \output directory. (Unused until dependency-aware compilation lands; ADR 0038 M2.)"
+          "Directory of the module's dependencies' .pmi interfaces. Defaults to the\n\
+          \output directory."
           # ArgParser.default ""
     , outDir:
         ArgParser.argument [ "-O", "--output" ]
-          "Directory the module's .pmi/.pmo/.wasm (and .wat) are written to.\n\
+          "Directory the module's .pmi/.wasm (and .wat) are written to.\n\
           \Defaults to './output-purwc'."
           # ArgParser.default "output-purwc"
     , programEntry:
@@ -87,7 +87,7 @@ commandParser :: ArgParser (Tuple GlobalOptions Command)
 commandParser =
   ArgParser.choose "command"
     [ ArgParser.command [ "compile" ]
-        "Compile a single module to its .pmi/.pmo/.wasm artifacts"
+        "Compile a single module to its .pmi/.wasm artifacts"
         (withGlobals (Compile <$> compileOptionsParser) <* ArgParser.flagHelp)
     , ArgParser.command [ "compile-batch" ]
         "Compile every module in a stdin work-list in one long-lived process (amortises Binaryen init)"
@@ -99,5 +99,5 @@ commandParser =
 parse :: Array String -> Either ArgParser.ArgError (Tuple GlobalOptions Command)
 parse =
   ArgParser.parseArgs "purwc"
-    "A single-module WebAssembly compiler for PureScript (the ADR 0038 worker)"
+    "A single-module WebAssembly compiler for PureScript (the per-module worker)"
     commandParser

@@ -85,7 +85,7 @@ warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
       warn
         ( Log.yellow
             ( Fmt.fmt
-                @"ⓘ ulib: {pkg} resolved to {got}; the ulib patch was authored against {want}. It is still applied (lenient versioning, ADR 0039) — if you hit a link/runtime error in a patched module, re-run `ulib-tooling install` against your package-set."
+                @"ⓘ ulib: {pkg} resolved to {got}; the ulib patch was authored against {want}. It is still applied (lenient versioning) — if you hit a link/runtime error in a patched module, re-run `ulib-tooling install` against your package-set."
                 { pkg: mm.package, got: fromMaybe "?" mm.got, want: mm.want }
             )
         )
