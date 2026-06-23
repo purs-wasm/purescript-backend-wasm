@@ -4,6 +4,7 @@
 -- | exactly; only the effects are abstract (`Run`) — `PureScript.Backend.Wasm.CLI.Node` runs it synchronously.
 module PursWasm.CLI.Build
   ( buildCmd
+  , prewarmCmd
   ) where
 
 import Prelude
@@ -156,34 +157,33 @@ topoBySrcImports inputs = Array.mapMaybe (\n -> Map.lookup n byName) ordered.out
         in
           after { out = Array.snoc after.out n }
 
--- | ADR 0038 Phase C (C1): drive the `purwc` worker as a subprocess per module (dependency order),
--- | each reading its dependencies' `.pmi` interfaces from the shared `_build` dir, then assemble the
--- | same `Linked` record the in-process per-module core produces — so the existing packaging tail
--- | (foreign resolution, merge, internalise+DCE, loader) is reused unchanged. The link glue and the
--- | cross-module label-collision check are done in-process here (Binaryen + `labelCollisions`).
-orchestrateModules
-  :: forall r a
-   . FilePath
-  -> FilePath
-  -> BuildOption
-  -> FilePath
-  -> Maybe FilePath
-  -> Array { name :: String, imports :: Array String, sourceHash :: String | a }
-  -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
-orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
-  let ordered = topoBySrcImports srcInfos
-  let entryNames = Set.fromFoldable args.entryModules
-  mkdirP buildDir
-  purwcPath <- joinPath [ cliRoot, "purwc", "index.dev.js" ]
-  -- ADR 0040 P3: compute each module's import-based **store key** bottom-up from sources alone —
-  -- `cacheKey(sourceHash, [storeKey(d) | d ∈ corefn imports])`, `sourceHash` already carrying
-  -- `toolchainTag`. Unlike the worker's internal `.pmi` key (which recurses over the optimized MIR's
-  -- references, so it needs compilation), this is computable BEFORE compiling, so the orchestrator can
-  -- look the store up and SKIP a module already present. Imports are a sound superset of the real
-  -- references (the key only ever over-invalidates), so a store hit is genuinely the same artifact a
-  -- compile would produce (determinism gate, ADR 0040 §4). `ordered` is topological, so each dep's
-  -- key is known when its dependent is keyed.
-  let buildSet = Set.fromFoldable (map _.name srcInfos)
+-- | ADR 0040 P3/P4: compile a topo-ordered module set into `_build` against the global store —
+-- | shared by `orchestrateModules` (a project build) and `prewarmCmd` (populate the store). Each
+-- | module's **store key** is computed bottom-up from sources alone (`cacheKey(sourceHash,
+-- | [storeKey(import)])`; `sourceHash` already carries `toolchainTag`), so the store can be looked up
+-- | BEFORE compiling: a HIT copies the cached `.pmi`/`.wasm`/`.link.json` into `_build` (skipping the
+-- | worker), a MISS is batch-compiled and written back. Imports are a sound superset of the real
+-- | references, so the key only over-invalidates — a hit is genuinely the same artifact a compile
+-- | would produce (determinism gate, ADR 0040 §4). `entryNames` are never cached (a program entry's
+-- | host-ABI shim / over-export differ per program); for `prewarmCmd` it is empty.
+compileBatchToStore
+  :: forall r b
+   . { cliRoot :: FilePath
+     , purwcInput :: FilePath
+     , buildDir :: FilePath
+     , storeDir :: Maybe FilePath
+     , debug :: Boolean
+     , noOpt :: Boolean
+     , platform :: String
+     , perModuleRep :: Boolean
+     , entryNames :: Set.Set String
+     }
+  -> Array { name :: String, imports :: Array String, sourceHash :: String | b }
+  -> Run (FS + PROC + LOG + EFFECT + r) Unit
+compileBatchToStore cfg ordered = do
+  mkdirP cfg.buildDir
+  purwcPath <- joinPath [ cfg.cliRoot, "purwc", "index.dev.js" ]
+  let buildSet = Set.fromFoldable (map _.name ordered)
   let
     storeKeys = Array.foldl
       ( \acc m ->
@@ -194,17 +194,13 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
       )
       Map.empty
       ordered
-  let ct = codegenTag { platform: show args.platform, optimize: not args.debug, perModuleRep: args.perModuleRep }
-  -- Per-module plan: store keys (`.pmi` by the platform-independent store key; `.wasm`/`.link.json` by
-  -- the `.wasm` key = store key ⊕ codegen axes ⊕ kept-foreign `.wat` hash) and whether the store
-  -- already holds all three (a HIT to copy instead of compile). The entry is never cached — its
-  -- host-ABI shim / over-export differ per program.
+  let ct = codegenTag { platform: cfg.platform, optimize: not cfg.debug, perModuleRep: cfg.perModuleRep }
   plan <- for ordered \m -> do
-    watTxt <- readText =<< joinPath [ purwcInput, m.name, "foreign.wat" ]
+    watTxt <- readText =<< joinPath [ cfg.purwcInput, m.name, "foreign.wat" ]
     let sk = fromMaybe m.sourceHash (Map.lookup m.name storeKeys)
     let wk = wasmKey sk ct (maybe "" hashString watTxt)
-    let isEntry = Set.member m.name entryNames
-    hit <- case storeDir of
+    let isEntry = Set.member m.name cfg.entryNames
+    hit <- case cfg.storeDir of
       Just root | not isEntry -> do
         p <- exists =<< joinPath [ root, sk <> ".pmi" ]
         w <- exists =<< joinPath [ root, wk <> ".wasm" ]
@@ -214,13 +210,13 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
     pure { name: m.name, isEntry, sk, wk, hit }
   -- Copy every HIT's three artifacts from the store into `_build` BEFORE the batch, so a miss reads a
   -- hit dependency's `.pmi` from `--deps`, and the final merge sees every module's `.wasm`.
-  for_ storeDir \root -> for_ (Array.filter _.hit plan) \p -> do
+  for_ cfg.storeDir \root -> for_ (Array.filter _.hit plan) \p -> do
     let
       copy storeName buildName = do
         mb <- readBinary =<< joinPath [ root, storeName ]
         case mb of
           Just b -> do
-            dst <- joinPath [ buildDir, buildName ]
+            dst <- joinPath [ cfg.buildDir, buildName ]
             writeBinary dst b
           Nothing -> logAndThrow ("orchestrate: store hit but missing artifact " <> storeName)
     copy (p.sk <> ".pmi") (p.name <> ".pmi")
@@ -245,22 +241,118 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
   when (not (Array.null misses)) do
     let workList = joinWith "\n" (misses <#> \p -> (if p.isEntry then "*" else "") <> p.name)
     execFileInput "node"
-      ( [ purwcPath, "compile-batch", "-I", purwcInput, "--deps", buildDir, "-O", buildDir ]
-          <> (if args.debug then [ "-g" ] else [])
-          <> (if args.noOpt then [ "--no-opt" ] else [])
+      ( [ purwcPath, "compile-batch", "-I", cfg.purwcInput, "--deps", cfg.buildDir, "-O", cfg.buildDir ]
+          <> (if cfg.debug then [ "-g" ] else [])
+          <> (if cfg.noOpt then [ "--no-opt" ] else [])
       )
       workList
   -- Write each compiled (MISS) LIBRARY module's three artifacts back to the store under its keys (a
   -- hit already came FROM the store; the entry is non-cacheable). A content-addressed file already
   -- present is left as-is (`putStoreFile`).
-  for_ storeDir \root -> for_ (Array.filter (\p -> not p.hit && not p.isEntry) plan) \p -> do
+  for_ cfg.storeDir \root -> for_ (Array.filter (\p -> not p.hit && not p.isEntry) plan) \p -> do
     let
       store suffix key = do
-        mb <- readBinary =<< joinPath [ buildDir, p.name <> suffix ]
+        mb <- readBinary =<< joinPath [ cfg.buildDir, p.name <> suffix ]
         maybe (pure unit) (putStoreFile root (key <> suffix)) mb
     store ".pmi" p.sk
     store ".wasm" p.wk
     store ".link.json" p.wk
+
+-- | ADR 0040 P4: prewarm the global store from a package set's compiler output, so a project's build
+-- | hits the store for the whole library closure instead of compiling it. Unlike the lib directory
+-- | (which is NOT import-closed — a ulib shadow imports registry modules it does not ship), the
+-- | `--input` here is a FULL `corefn` closure (a `spago build` of the package set), so every shadow's
+-- | registry dependencies are present to compile against. Resolution mirrors a real build (ADR 0039):
+-- | a `libSourced` module's corefn comes from the lib (the ulib patch), every other from the input —
+-- | so the store keys match what a default `purs-wasm build` (platform `node`, optimize on, no
+-- | per-module-rep) computes. A build with a different codegen config simply misses and compiles
+-- | lazily. Requires `$PURS_WASM_STORE`.
+prewarmCmd :: forall r. FilePath -> FilePath -> Run (ENV + FS + PROC + LOG + EFFECT + r) Unit
+prewarmCmd cliRoot input = do
+  libPath <- resolveLibPath cliRoot Nothing
+  storeRoot >>= case _ of
+    Nothing -> logAndThrow "prewarm: set $PURS_WASM_STORE to the directory to populate."
+    Just root -> do
+      shadows <- loadShadowMap libPath
+      entries <- readDir input >>= maybe (logAndThrow ("prewarm: input not found: " <> input)) pure
+      allMods <- Array.filterA (\mod -> joinPath [ input, printModname mod, "corefn.json" ] >>= exists)
+        (Array.sort (Array.mapMaybe toModuleName entries))
+      let allModNames = Set.fromFoldable (map printModname allMods)
+      -- Roots = every input module: prewarm compiles the WHOLE closure (no single program entry), and
+      -- `resolveModuleSet` then also pulls in any ulib-internal helper a shadow reaches via the lib.
+      userImports <- map Map.fromFoldable $ for allMods \mod -> do
+        src <- fromMaybe "" <$> (readText =<< joinPath [ input, printModname mod, "corefn.json" ])
+        pure (Tuple (printModname mod) (corefnImports src))
+      libImports <- map (Map.fromFoldable <<< Array.catMaybes) $ for (Map.toUnfoldable shadows) \(Tuple name sh) ->
+        map (\src -> Tuple name (corefnImports src)) <$> readText sh.corefn
+      let { reachable, libSourced } = resolveModuleSet allMods userImports libImports
+      let resolvable n = Set.member n allModNames || Map.member n libImports
+      let modNames = Array.sort (Array.filter resolvable (Set.toUnfoldable reachable))
+      srcInfos <- map Array.catMaybes $ for modNames \name -> do
+        mLibSrc <-
+          if Set.member name libSourced then maybe (pure Nothing) readText (Map.lookup name shadows <#> _.corefn)
+          else pure Nothing
+        mSrc <- case mLibSrc of
+          Just s -> pure (Just s)
+          Nothing -> readText =<< joinPath [ input, name, "corefn.json" ]
+        pure $ mSrc <#> \src ->
+          { name
+          , mn: Str.split (Str.Pattern ".") name
+          , src
+          , sourceHash: hashString (toolchainTag <> "\n" <> src)
+          , imports: corefnImports src
+          , foreignNames: corefnForeignNames src
+          }
+      info (Log.cyan (Fmt.fmt @"Prewarming {n} library module(s) into the store…" { n: Array.length srcInfos }))
+      stageDir <- joinPath [ root, ".prewarm-stage" ]
+      buildDir <- joinPath [ root, ".prewarm-build" ]
+      stageOrchestrateInput stageDir input libPath allModNames srcInfos
+      compileBatchToStore
+        { cliRoot
+        , purwcInput: stageDir
+        , buildDir
+        , storeDir: Just root
+        , debug: false
+        , noOpt: false
+        -- Match a default `purs-wasm build`'s codegen axes (`show args.platform` → `Node`), so the
+        -- `.wasm` keys agree and a default node build hits the prewarmed objects.
+        , platform: show Node
+        , perModuleRep: false
+        , entryNames: Set.empty
+        }
+        (topoBySrcImports srcInfos)
+      info (Log.strong (Log.green "✓ prewarm complete"))
+
+-- | ADR 0038 Phase C (C1): drive the `purwc` worker as a subprocess per module (dependency order),
+-- | each reading its dependencies' `.pmi` interfaces from the shared `_build` dir, then assemble the
+-- | same `Linked` record the in-process per-module core produces — so the existing packaging tail
+-- | (foreign resolution, merge, internalise+DCE, loader) is reused unchanged. The link glue and the
+-- | cross-module label-collision check are done in-process here (Binaryen + `labelCollisions`).
+orchestrateModules
+  :: forall r a
+   . FilePath
+  -> FilePath
+  -> BuildOption
+  -> FilePath
+  -> Maybe FilePath
+  -> Array { name :: String, imports :: Array String, sourceHash :: String | a }
+  -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
+orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
+  let ordered = topoBySrcImports srcInfos
+  let entryNames = Set.fromFoldable args.entryModules
+  -- ADR 0040 P3: compile (or reuse from the store) every module into `_build`.
+  compileBatchToStore
+    { cliRoot
+    , purwcInput
+    , buildDir
+    , storeDir
+    , debug: args.debug
+    , noOpt: args.noOpt
+    , platform: show args.platform
+    , perModuleRep: args.perModuleRep
+    , entryNames
+    }
+    ordered
   metas <- for ordered \m -> do
     mTxt <- readText =<< joinPath [ buildDir, m.name <> ".link.json" ]
     case mTxt >>= decodeLinkMeta of

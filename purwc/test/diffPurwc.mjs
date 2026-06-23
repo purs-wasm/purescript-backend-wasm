@@ -269,6 +269,32 @@ try {
   console.log(`ERROR: ${e?.message ?? e}`);
 }
 
+// ── ADR 0040 P4 prewarm: `purs-wasm prewarm -I <closure>` precompiles a package set's WHOLE corefn
+// closure into the store (resolving ulib shadows from the lib, exactly as a build would). A
+// subsequent project build then hits the store for every library module — only the non-cacheable
+// entry recompiles — and runs correctly.
+process.stdout.write("• P4: prewarm precompiles the closure → build hits it (examples-intpatch): ");
+try {
+  const cf = tmp("pwcf"), orc = tmp("pworc"), store = tmp("pwstore");
+  tmps.push(cf, orc, store);
+  sh("spago", ["build", "-p", "examples-intpatch", "--output", cf]);
+  const env = { ...process.env, PURS_WASM_STORE: store };
+  execFileSync("node", ["purs-wasm/index.dev.js", "prewarm", "-I", cf], { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env });
+  const prewarmed = readdirSync(store).filter((f) => f.endsWith(".pmi")).length;
+  const log = execFileSync("node",
+    ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc, "--force"],
+    { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env }).toString();
+  const hit = / \((\d+) from store\)/.exec(log);
+  const compiled = /compiling (\d+) module/.exec(log)?.[1];
+  const ran = (await mainStdout(orc)).includes("(Just 42)");
+  const ok = prewarmed > 0 && hit && Number(hit[1]) > 0 && compiled === "1" && ran;
+  if (!ok) failures++;
+  console.log(`${ok ? "✓" : "✗"} prewarmed ${prewarmed} | build: ${compiled} compiled, ${hit ? hit[1] : 0} from store | runs ${ran ? "yes" : "NO"}`);
+} catch (e) {
+  failures++;
+  console.log(`ERROR: ${e?.message ?? e}`);
+}
+
 for (const t of tmps) rmSync(t, { recursive: true, force: true });
 if (failures) {
   console.error(`\n✗ ${failures} check(s) failed.`);

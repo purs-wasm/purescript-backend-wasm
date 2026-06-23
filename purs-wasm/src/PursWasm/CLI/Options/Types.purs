@@ -3,6 +3,7 @@
 -- | 0031 §5).
 module PursWasm.CLI.Options.Types
   ( BuildOption
+  , PrewarmOption
   , Command(..)
   , Platform(..)
   ) where
@@ -46,4 +47,7 @@ type BuildOption =
   , dumpMir :: Maybe String
   }
 
-data Command = Build BuildOption
+-- | `prewarm --input <corefn>`: precompile a package set's whole closure into `$PURS_WASM_STORE`.
+type PrewarmOption = { input :: FilePath }
+
+data Command = Build BuildOption | Prewarm PrewarmOption

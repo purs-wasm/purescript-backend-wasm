@@ -10,7 +10,7 @@ import Data.Either (Either(..))
 import Data.Tuple (Tuple)
 import PureScript.Backend.Wasm.CLI.Options (withGlobals)
 import PureScript.Backend.Wasm.CLI.Options.Types (GlobalOptions)
-import PursWasm.CLI.Options.Types (BuildOption, Command(..), Platform(..))
+import PursWasm.CLI.Options.Types (BuildOption, Command(..), Platform(..), PrewarmOption)
 import PursWasm.CLI.Version as Version
 
 -- | Read the `--platform` value, rejecting anything outside the three targets.
@@ -106,12 +106,25 @@ buildOptionsParser =
           # ArgParser.optional
     }
 
+prewarmOptionsParser :: ArgParser PrewarmOption
+prewarmOptionsParser =
+  ArgParser.fromRecord
+    { input:
+        ArgParser.argument [ "-I", "--input" ]
+          "Path to the package set's PureScript compiler artifacts (corefn.json/externs.cbor closure).\n\
+          \Defaults to './output'."
+          # ArgParser.default "output"
+    }
+
 commandParser :: ArgParser (Tuple GlobalOptions Command)
 commandParser =
   ArgParser.choose "command"
     [ ArgParser.command [ "build" ]
         "Build a wasm module from a PureScript project's compiler artifacts"
         (withGlobals (Build <$> buildOptionsParser) <* ArgParser.flagHelp)
+    , ArgParser.command [ "prewarm" ]
+        "Precompile a package set's whole closure into $PURS_WASM_STORE for cross-project reuse"
+        (withGlobals (Prewarm <$> prewarmOptionsParser) <* ArgParser.flagHelp)
     ]
     <* ArgParser.flagHelp
     <* ArgParser.flagInfo [ "--version", "-v" ] "Show version" Version.versionString
