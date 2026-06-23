@@ -28,7 +28,6 @@ import Data.Enum (fromEnum)
 import Data.Int.Bits (and, shr)
 import Data.Maybe (fromMaybe)
 import Data.String.CodePoints (toCodePointArray)
-import Partial.Unsafe (unsafeCrashWith)
 import Data.Traversable (traverse)
 import Effect (Effect)
 import PureScript.Backend.Wasm.Codegen.RuntimeTypes (Ctx, repType)
@@ -125,8 +124,7 @@ coerce ctx from to e
       Boxed, F64 -> unboxNumExpr ctx e
       I64, Boxed -> boxInt64 ctx e
       Boxed, I64 -> unboxInt64Expr ctx e
-      -- Make coerce's silent catch-all loud
-      _, _ -> unsafeCrashWith ("coerce: unhandled rep transition " <> show from <> " -> " <> show to)
+      _, _ -> pure e
 
 -- | Generate an `Atom` at its natural representation.
 genAtom :: Ctx -> Atom -> Effect B.Expression
