@@ -69,8 +69,12 @@ jobs:
       # it with a `bench` build first.
       - name: Build the CLIs, runtime, and ulib lib
         run: |
-          # `spago build -p ulib-tooling` builds the maintainer CLI AND its `purs-wasm` dependency
-          # (the user `build` CLI), so both index.dev.js entries resolve.
+          # Build both index.dev.js entry points. Since the cli-lib extraction (ADR 0038),
+          # `ulib-tooling` depends on `cli-lib`, not on `purs-wasm`, so it no longer drags in the
+          # user `build` CLI — `purs-wasm` (which `purs-wasm/index.dev.js` imports as
+          # `output/PursWasm.CLI.Main`) must be built explicitly. Each `spago build` also builds its
+          # `compiler` dependency.
+          spago build -p purs-wasm
           spago build -p ulib-tooling
           pnpm -F ./compiler run build:runtime
           spago build -p bench --output bench/output
