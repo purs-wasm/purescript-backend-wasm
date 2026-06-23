@@ -231,13 +231,12 @@ try {
   console.log(`ERROR: ${e?.message ?? e}`);
 }
 
-// ── ADR 0040 P3 content-addressed store: with $PURS_WASM_STORE set, the orchestrate build (1) writes
-// each library module's {pmi,wasm,link.json} to the store keyed by content, byte-identical to the
-// _build copy, idempotently (write-back); (2) a SECOND build into a fresh output dir HITS the store
-// for every library module (only the non-cacheable entry recompiles), copies them in, and produces a
-// byte/behaviour-correct program (store-hit). The store key is computable from sources alone, so the
-// second build reuses across a fresh _build (and, identically, across projects).
-process.stdout.write("• P3: $PURS_WASM_STORE write-back + store-hit (examples-intpatch): ");
+// ── ADR 0040 P3 content-addressed store, partitioned write-back: with $PURS_WASM_STORE set, the
+// orchestrate build writes only LIBRARY modules (.spago dependencies + ulib shadows) to the store
+// keyed by content; the project's OWN modules stay in the local _build. A second build into a fresh
+// output reuses every library module from the store (only the own modules recompile) and is
+// byte/behaviour-correct. The store key is computed from sources alone (sound, content-addressed).
+process.stdout.write("• P3: content-addressed store, own/library write-back partition (examples-intpatch): ");
 try {
   const cf = tmp("stcf"), orc1 = tmp("storc1"), orc2 = tmp("storc2"), store = tmp("ststore");
   tmps.push(cf, orc1, orc2, store);
@@ -245,35 +244,34 @@ try {
   const build = (out) => execFileSync("node",
     ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", out, "--force"],
     { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PURS_WASM_STORE: store } }).toString();
-  // build 1: populates the store (all misses)
-  const log1 = build(orc1);
+  build(orc1);
   const ran1 = (await mainStdout(orc1)).includes("(Just 42)");
   const pmis = readdirSync(store).filter((f) => f.endsWith(".pmi"));
-  const wasms = readdirSync(store).filter((f) => f.endsWith(".wasm"));
-  const links = readdirSync(store).filter((f) => f.endsWith(".link.json"));
-  const dm = join(orc1, "_build", "Data.Maybe.pmi");
-  const dmInStore = existsSync(dm) && pmis.some((f) => sha(join(store, f)) === sha(dm));
-  // build 2: fresh output, same store → expect a store hit for every library module
+  // a library module (Data.Maybe) IS in the store; the OWN entry (Examples.IntPatch.Main) is NOT.
+  const inStore = (m) => existsSync(join(orc1, "_build", m)) && pmis.some((f) => sha(join(store, f)) === sha(join(orc1, "_build", m)));
+  const dmInStore = inStore("Data.Maybe.pmi");
+  const ownInStore = inStore("Examples.IntPatch.Main.pmi");
+  // build 2: fresh output, same store → library modules hit, own modules recompile
   const log2 = build(orc2);
   const hit = / \((\d+) from store\)/.exec(log2);
   const compiled2 = /compiling (\d+) module/.exec(log2)?.[1];
   const ran2 = (await mainStdout(orc2)).includes("(Just 42)");
   const merged = sha(join(orc1, "index.wasm")) === sha(join(orc2, "index.wasm"));
   const after = readdirSync(store).filter((f) => f.endsWith(".pmi")).length;
-  const ok = ran1 && ran2 && pmis.length > 0 && wasms.length > 0 && links.length > 0
-    && dmInStore && pmis.length === after && hit && Number(hit[1]) > 0 && compiled2 === "1";
+  const ok = ran1 && ran2 && pmis.length > 0 && dmInStore && !ownInStore && pmis.length === after
+    && hit && Number(hit[1]) > 0 && Number(compiled2) >= 1 && merged;
   if (!ok) failures++;
-  console.log(`${ok ? "✓" : "✗"} store ${pmis.length} pmi/${wasms.length} wasm/${links.length} link | Data.Maybe byte-match ${dmInStore ? "yes" : "NO"} | build2: ${compiled2} compiled, ${hit ? hit[1] : 0} from store | idempotent ${pmis.length === after ? "yes" : "NO"} | index.wasm match ${merged ? "yes" : "no"} | runs ${ran1 && ran2 ? "yes" : "NO"}`);
+  console.log(`${ok ? "✓" : "✗"} store ${pmis.length} pmi (Data.Maybe in:${dmInStore ? "yes" : "NO"}, own in:${ownInStore ? "YES(bad)" : "no"}) | build2: ${compiled2} compiled (own), ${hit ? hit[1] : 0} from store | index.wasm match ${merged ? "yes" : "no"} | runs ${ran1 && ran2 ? "yes" : "NO"}`);
 } catch (e) {
   failures++;
   console.log(`ERROR: ${e?.message ?? e}`);
 }
 
-// ── ADR 0040 P4 prewarm: `purs-wasm prewarm -I <closure>` precompiles a package set's WHOLE corefn
-// closure into the store (resolving ulib shadows from the lib, exactly as a build would). A
-// subsequent project build then hits the store for every library module — only the non-cacheable
-// entry recompiles — and runs correctly.
-process.stdout.write("• P4: prewarm precompiles the closure → build hits it (examples-intpatch): ");
+// ── ADR 0040 P4 prewarm: `purs-wasm prewarm -I <closure>` precompiles a package set's library closure
+// (.spago + ulib shadows) into the store (resolving shadows from the lib, exactly as a build would). A
+// subsequent project build then hits the store for the library and compiles only its own modules. No
+// manifest is written — reuse is content-addressed.
+process.stdout.write("• P4: prewarm precompiles library closure → build hits it (examples-intpatch): ");
 try {
   const cf = tmp("pwcf"), orc = tmp("pworc"), store = tmp("pwstore");
   tmps.push(cf, orc, store);
@@ -281,19 +279,16 @@ try {
   const env = { ...process.env, PURS_WASM_STORE: store };
   execFileSync("node", ["purs-wasm/index.dev.js", "prewarm", "-I", cf], { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env });
   const prewarmed = readdirSync(store).filter((f) => f.endsWith(".pmi")).length;
+  const noManifest = !existsSync(join(store, "manifest.json"));
   const log = execFileSync("node",
     ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc, "--force"],
     { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env }).toString();
   const hit = / \((\d+) from store\)/.exec(log);
   const compiled = /compiling (\d+) module/.exec(log)?.[1];
   const ran = (await mainStdout(orc)).includes("(Just 42)");
-  // P4b: the manifest maps module → {pmi,wasm} keys, each pointing at a real store artifact.
-  const manifest = existsSync(join(store, "manifest.json")) ? JSON.parse(readFileSync(join(store, "manifest.json"))) : {};
-  const dm = manifest["Data.Maybe"];
-  const manifestOk = dm && existsSync(join(store, dm.pmi + ".pmi")) && existsSync(join(store, dm.wasm + ".wasm"));
-  const ok = prewarmed > 0 && hit && Number(hit[1]) > 0 && compiled === "1" && ran && manifestOk;
+  const ok = prewarmed > 0 && hit && Number(hit[1]) > 0 && Number(compiled) >= 1 && ran && noManifest;
   if (!ok) failures++;
-  console.log(`${ok ? "✓" : "✗"} prewarmed ${prewarmed} | build: ${compiled} compiled, ${hit ? hit[1] : 0} from store | manifest ${Object.keys(manifest).length} (Data.Maybe→store ${manifestOk ? "ok" : "NO"}) | runs ${ran ? "yes" : "NO"}`);
+  console.log(`${ok ? "✓" : "✗"} prewarmed ${prewarmed} library | no manifest ${noManifest ? "yes" : "NO"} | build: ${compiled} compiled (own), ${hit ? hit[1] : 0} from store | runs ${ran ? "yes" : "NO"}`);
 } catch (e) {
   failures++;
   console.log(`ERROR: ${e?.message ?? e}`);

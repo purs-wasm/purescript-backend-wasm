@@ -11,7 +11,7 @@ import Prelude
 
 import Ansi.Codes as Ansi
 import Binaryen as B
-import Data.Argonaut.Core (Json, fromObject, fromString, stringify, toArray, toObject, toString)
+import Data.Argonaut.Core (toArray, toObject, toString)
 import Data.Argonaut.Parser (jsonParser)
 import Data.Array as Array
 import Data.Either (Either(..), either, hush)
@@ -46,7 +46,7 @@ import PursWasm.CLI.Build.Loader (emitLoader, exportNeedsLoader, rootExportSigs)
 import PureScript.Backend.Wasm.CLI.Paths (runtimeWasm, wasmDisBin, wasmMergeBin)
 import PureScript.Backend.Wasm.CLI.Compat (checkCorefnVersions, checkWasmBaseCompat, codegenTag, toolchainTag)
 import PureScript.Backend.Wasm.CLI.Store (putStoreFile, storeRoot, wasmKey)
-import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames, corefnImports)
+import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames, corefnImports, corefnModulePath)
 import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, debug, exists, execFile, execFileInput, fileSize, info, joinPath, logAndThrow, mkdirP, readBinary, readDir, readText, unlink, warn, writeBinary, writeText)
 import PureScript.Backend.Wasm.CLI.Effect.Log (br)
 import PureScript.Backend.Wasm.CLI.Effect.Log as Log
@@ -91,6 +91,14 @@ warnUlibVersionDrift mManifest mLock reachable = case mManifest, mLock of
             )
         )
   _, _ -> pure unit
+
+-- | Whether a module's compiled artifacts are a shareable LIBRARY object (→ the global store) rather
+-- | than project-own (→ the local `_build` only), ADR 0040. A module is a library iff it is a ulib
+-- | shadow (`libSourced` — its corefn comes from the lib) OR its source lives under `.spago` (a
+-- | registry dependency). Everything else is the project's own code (`src/…`).
+isLibrary :: Set.Set String -> String -> String -> Boolean
+isLibrary libSourced name src =
+  Set.member name libSourced || Str.contains (Str.Pattern ".spago") (corefnModulePath src)
 
 -- | The common shape the packaging tail consumes, whichever core produced it (whole-program
 -- | `finishLink`, in-process per-module `compilePerModule`, or the Phase-C subprocess orchestrator).
@@ -164,8 +172,13 @@ topoBySrcImports inputs = Array.mapMaybe (\n -> Map.lookup n byName) ordered.out
 -- | BEFORE compiling: a HIT copies the cached `.pmi`/`.wasm`/`.link.json` into `_build` (skipping the
 -- | worker), a MISS is batch-compiled and written back. Imports are a sound superset of the real
 -- | references, so the key only over-invalidates — a hit is genuinely the same artifact a compile
--- | would produce (determinism gate, ADR 0040 §4). `entryNames` are never cached (a program entry's
--- | host-ABI shim / over-export differ per program); for `prewarmCmd` it is empty.
+-- | would produce (determinism gate, ADR 0040 §4).
+-- |
+-- | Write-back is partitioned by `library`: only a **library** module (a `.spago` dependency or a
+-- | ulib shadow — a shareable, reusable object) is written back to the global store; the program's
+-- | **own** modules (and any program entry) stay in the local `_build` only, since their artifacts are
+-- | project-specific and would just bloat a shared store. A store HIT still reuses any module whose
+-- | content key is present (own or library), so reuse stays content-addressed and sound.
 compileBatchToStore
   :: forall r b
    . { cliRoot :: FilePath
@@ -177,34 +190,20 @@ compileBatchToStore
      , platform :: String
      , perModuleRep :: Boolean
      , entryNames :: Set.Set String
-     -- ADR 0040 P5: the store manifest (module → keys) for a resolution-free build. A module present
-     -- here is a LIBRARY module whose keys come straight from the manifest (its corefn is never read,
-     -- it is a guaranteed store hit). Empty for a normal build / prewarm — then every key is computed
-     -- from corefn exactly as before, so the manifest is behaviour-neutral when empty.
-     , manifest :: Map.Map String { pmi :: String, wasm :: String }
      }
-  -> Array { name :: String, imports :: Array String, sourceHash :: String | b }
+  -> Array { name :: String, imports :: Array String, sourceHash :: String, library :: Boolean | b }
   -> Run (FS + PROC + LOG + EFFECT + r) Unit
 compileBatchToStore cfg ordered = do
   mkdirP cfg.buildDir
   purwcPath <- joinPath [ cfg.cliRoot, "purwc", "index.dev.js" ]
   let buildSet = Set.fromFoldable (map _.name ordered)
-  -- A manifest (library) module's store key is taken verbatim from the manifest; everyone else's is
-  -- computed bottom-up. Because the manifest key was itself computed from the same corefn at prewarm,
-  -- an own module that depends on a library module gets the identical key whether or not the manifest
-  -- short-circuits the dependency — so the store stays consistent across resolution-free / normal.
   let
     storeKeys = Array.foldl
-      ( \acc m -> Map.insert m.name
-          ( case Map.lookup m.name cfg.manifest of
-              Just k -> k.pmi
-              Nothing ->
-                let
-                  deps = Array.filter (\d -> d /= m.name && Set.member d buildSet) (Array.nub m.imports)
-                in
-                  cacheKey m.sourceHash (Array.mapMaybe (\d -> Map.lookup d acc) deps)
-          )
-          acc
+      ( \acc m ->
+          let
+            deps = Array.filter (\d -> d /= m.name && Set.member d buildSet) (Array.nub m.imports)
+          in
+            Map.insert m.name (cacheKey m.sourceHash (Array.mapMaybe (\d -> Map.lookup d acc) deps)) acc
       )
       Map.empty
       ordered
@@ -212,7 +211,7 @@ compileBatchToStore cfg ordered = do
   plan <- for ordered \m -> do
     watTxt <- readText =<< joinPath [ cfg.purwcInput, m.name, "foreign.wat" ]
     let sk = fromMaybe m.sourceHash (Map.lookup m.name storeKeys)
-    let wk = maybe (wasmKey sk ct (maybe "" hashString watTxt)) _.wasm (Map.lookup m.name cfg.manifest)
+    let wk = wasmKey sk ct (maybe "" hashString watTxt)
     let isEntry = Set.member m.name cfg.entryNames
     hit <- case cfg.storeDir of
       Just root | not isEntry -> do
@@ -221,7 +220,7 @@ compileBatchToStore cfg ordered = do
         l <- exists =<< joinPath [ root, wk <> ".link.json" ]
         pure (p && w && l)
       _ -> pure false
-    pure { name: m.name, isEntry, sk, wk, hit }
+    pure { name: m.name, isEntry, sk, wk, hit, library: m.library }
   -- Copy every HIT's three artifacts from the store into `_build` BEFORE the batch, so a miss reads a
   -- hit dependency's `.pmi` from `--deps`, and the final merge sees every module's `.wasm`.
   for_ cfg.storeDir \root -> for_ (Array.filter _.hit plan) \p -> do
@@ -260,10 +259,10 @@ compileBatchToStore cfg ordered = do
           <> (if cfg.noOpt then [ "--no-opt" ] else [])
       )
       workList
-  -- Write each compiled (MISS) LIBRARY module's three artifacts back to the store under its keys (a
-  -- hit already came FROM the store; the entry is non-cacheable). A content-addressed file already
-  -- present is left as-is (`putStoreFile`).
-  for_ cfg.storeDir \root -> for_ (Array.filter (\p -> not p.hit && not p.isEntry) plan) \p -> do
+  -- Write each compiled (MISS) **library** module's three artifacts back to the store under its keys
+  -- (a hit already came FROM the store; own modules + the entry stay in `_build` only — see the doc).
+  -- A content-addressed file already present is left as-is (`putStoreFile`).
+  for_ cfg.storeDir \root -> for_ (Array.filter (\p -> not p.hit && not p.isEntry && p.library) plan) \p -> do
     let
       store suffix key = do
         mb <- readBinary =<< joinPath [ cfg.buildDir, p.name <> suffix ]
@@ -271,25 +270,6 @@ compileBatchToStore cfg ordered = do
     store ".pmi" p.sk
     store ".wasm" p.wk
     store ".link.json" p.wk
-  -- ADR 0040 P4b: record this build's library modules (name → store keys) in the store manifest, so a
-  -- resolution-free build (P5) can look a dependency's `.pmi`/`.wasm` up by module name without
-  -- reading its corefn or running the ulib resolver. Both `prewarmCmd` and a lazy build (write-back)
-  -- update it; the entry is excluded (non-cacheable).
-  for_ cfg.storeDir \root ->
-    updateManifest root (Array.filter (not <<< _.isEntry) plan <#> \p -> { name: p.name, pmi: p.sk, wasm: p.wk })
-
--- | Merge `entries` (module name → store keys) into the store's `manifest.json` (ADR 0040 P4b), new
--- | entries winning on a key collision (content-addressed, so a re-stored module's keys are identical).
--- | Read-merge-write is not atomic — concurrent population is an open question (ADR 0040 §3); the
--- | current build is single-process.
-updateManifest :: forall r. FilePath -> Array { name :: String, pmi :: String, wasm :: String } -> Run (FS + r) Unit
-updateManifest root entries = do
-  path <- joinPath [ root, "manifest.json" ]
-  existing <- readText path <#> \m -> fromMaybe Object.empty (m >>= (jsonParser >>> hush) >>= toObject)
-  let
-    entryJson e = fromObject (Object.fromFoldable [ Tuple "pmi" (fromString e.pmi), Tuple "wasm" (fromString e.wasm) ])
-    newObj = Object.fromFoldable (entries <#> \e -> Tuple e.name (entryJson e))
-  writeText path (stringify (fromObject (Object.union newObj existing :: Object.Object Json)))
 
 -- | ADR 0040 P4: prewarm the global store from a package set's compiler output, so a project's build
 -- | hits the store for the whole library closure instead of compiling it. Unlike the lib directory
@@ -335,8 +315,9 @@ prewarmCmd cliRoot input = do
           , sourceHash: hashString (toolchainTag <> "\n" <> src)
           , imports: corefnImports src
           , foreignNames: corefnForeignNames src
+          , library: isLibrary libSourced name src
           }
-      info (Log.cyan (Fmt.fmt @"Prewarming {n} library module(s) into the store…" { n: Array.length srcInfos }))
+      info (Log.cyan (Fmt.fmt @"Prewarming {n} library module(s) into the store…" { n: Array.length (Array.filter _.library srcInfos) }))
       stageDir <- joinPath [ root, ".prewarm-stage" ]
       buildDir <- joinPath [ root, ".prewarm-build" ]
       stageOrchestrateInput stageDir input libPath allModNames srcInfos
@@ -352,8 +333,6 @@ prewarmCmd cliRoot input = do
         , platform: show Node
         , perModuleRep: false
         , entryNames: Set.empty
-        -- Prewarm computes every key from corefn (it is POPULATING the store, not consuming it).
-        , manifest: Map.empty
         }
         (topoBySrcImports srcInfos)
       info (Log.strong (Log.green "✓ prewarm complete"))
@@ -370,14 +349,13 @@ orchestrateModules
   -> BuildOption
   -> FilePath
   -> Maybe FilePath
-  -> Map.Map String { pmi :: String, wasm :: String }
-  -> Array { name :: String, imports :: Array String, sourceHash :: String | a }
+  -> Array { name :: String, imports :: Array String, sourceHash :: String, library :: Boolean | a }
   -> Run (FS + PROC + LOG + EFFECT + r) (Either String Linked)
-orchestrateModules cliRoot purwcInput args buildDir storeDir manifest srcInfos = do
+orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
   let ordered = topoBySrcImports srcInfos
   let entryNames = Set.fromFoldable args.entryModules
-  -- ADR 0040 P3/P5: compile (or reuse from the store) every module into `_build`. A non-empty
-  -- `manifest` (resolution-free build) sources its library modules straight from the store.
+  -- ADR 0040 P3: compile each module into `_build` (reusing the store where the content key hits);
+  -- library modules are written back to the store, own modules stay local.
   compileBatchToStore
     { cliRoot
     , purwcInput
@@ -388,7 +366,6 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir manifest srcInfos =
     , platform: show args.platform
     , perModuleRep: args.perModuleRep
     , entryNames
-    , manifest
     }
     ordered
   metas <- for ordered \m -> do
@@ -612,6 +589,9 @@ buildCmd cliRoot binaryenBinDir args = do
       , sourceHash: hashString (toolchainTag <> "\n" <> src)
       , imports: corefnImports src
       , foreignNames: corefnForeignNames src
+      -- A `.spago` dependency or ulib shadow is a shareable object (→ store); the project's own
+      -- modules stay local (ADR 0040). Only consumed on the orchestrate path's store write-back.
+      , library: isLibrary libSourced name src
       }
   let sourceHashes = Map.fromFoldable (map (\i -> Tuple i.name i.sourceHash) srcInfos)
   -- Each module's `externs.cbor` carries the top-level type info CoreFn erased (front B); a module
@@ -709,7 +689,7 @@ buildCmd cliRoot binaryenBinDir args = do
   -- ADR 0040 P3: the global content-addressed store (`$PURS_WASM_STORE`); `Nothing` disables it.
   storeDir <- storeRoot
   linkResult <-
-    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir Map.empty srcInfos
+    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir srcInfos
     else if useCache then do
       -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
       -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.

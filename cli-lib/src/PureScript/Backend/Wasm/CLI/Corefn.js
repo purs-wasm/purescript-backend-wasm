@@ -21,3 +21,14 @@ export const corefnForeignNames = (json) => {
     return [];
   }
 };
+
+// The module's source path (`modulePath`), via the same cheap transient parse — used to classify a
+// module as a dependency (`.spago/...`) vs the project's own (`src/...`) for store write-back.
+export const corefnModulePath = (json) => {
+  try {
+    const j = JSON.parse(json);
+    return j.modulePath || "";
+  } catch {
+    return "";
+  }
+};
