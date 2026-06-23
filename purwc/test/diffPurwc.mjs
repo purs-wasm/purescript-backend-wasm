@@ -287,9 +287,13 @@ try {
   const hit = / \((\d+) from store\)/.exec(log);
   const compiled = /compiling (\d+) module/.exec(log)?.[1];
   const ran = (await mainStdout(orc)).includes("(Just 42)");
-  const ok = prewarmed > 0 && hit && Number(hit[1]) > 0 && compiled === "1" && ran;
+  // P4b: the manifest maps module → {pmi,wasm} keys, each pointing at a real store artifact.
+  const manifest = existsSync(join(store, "manifest.json")) ? JSON.parse(readFileSync(join(store, "manifest.json"))) : {};
+  const dm = manifest["Data.Maybe"];
+  const manifestOk = dm && existsSync(join(store, dm.pmi + ".pmi")) && existsSync(join(store, dm.wasm + ".wasm"));
+  const ok = prewarmed > 0 && hit && Number(hit[1]) > 0 && compiled === "1" && ran && manifestOk;
   if (!ok) failures++;
-  console.log(`${ok ? "✓" : "✗"} prewarmed ${prewarmed} | build: ${compiled} compiled, ${hit ? hit[1] : 0} from store | runs ${ran ? "yes" : "NO"}`);
+  console.log(`${ok ? "✓" : "✗"} prewarmed ${prewarmed} | build: ${compiled} compiled, ${hit ? hit[1] : 0} from store | manifest ${Object.keys(manifest).length} (Data.Maybe→store ${manifestOk ? "ok" : "NO"}) | runs ${ran ? "yes" : "NO"}`);
 } catch (e) {
   failures++;
   console.log(`ERROR: ${e?.message ?? e}`);

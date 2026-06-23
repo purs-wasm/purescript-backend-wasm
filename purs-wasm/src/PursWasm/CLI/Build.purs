@@ -11,7 +11,7 @@ import Prelude
 
 import Ansi.Codes as Ansi
 import Binaryen as B
-import Data.Argonaut.Core (toArray, toObject, toString)
+import Data.Argonaut.Core (Json, fromObject, fromString, stringify, toArray, toObject, toString)
 import Data.Argonaut.Parser (jsonParser)
 import Data.Array as Array
 import Data.Either (Either(..), either, hush)
@@ -257,6 +257,25 @@ compileBatchToStore cfg ordered = do
     store ".pmi" p.sk
     store ".wasm" p.wk
     store ".link.json" p.wk
+  -- ADR 0040 P4b: record this build's library modules (name → store keys) in the store manifest, so a
+  -- resolution-free build (P5) can look a dependency's `.pmi`/`.wasm` up by module name without
+  -- reading its corefn or running the ulib resolver. Both `prewarmCmd` and a lazy build (write-back)
+  -- update it; the entry is excluded (non-cacheable).
+  for_ cfg.storeDir \root ->
+    updateManifest root (Array.filter (not <<< _.isEntry) plan <#> \p -> { name: p.name, pmi: p.sk, wasm: p.wk })
+
+-- | Merge `entries` (module name → store keys) into the store's `manifest.json` (ADR 0040 P4b), new
+-- | entries winning on a key collision (content-addressed, so a re-stored module's keys are identical).
+-- | Read-merge-write is not atomic — concurrent population is an open question (ADR 0040 §3); the
+-- | current build is single-process.
+updateManifest :: forall r. FilePath -> Array { name :: String, pmi :: String, wasm :: String } -> Run (FS + r) Unit
+updateManifest root entries = do
+  path <- joinPath [ root, "manifest.json" ]
+  existing <- readText path <#> \m -> fromMaybe Object.empty (m >>= (jsonParser >>> hush) >>= toObject)
+  let
+    entryJson e = fromObject (Object.fromFoldable [ Tuple "pmi" (fromString e.pmi), Tuple "wasm" (fromString e.wasm) ])
+    newObj = Object.fromFoldable (entries <#> \e -> Tuple e.name (entryJson e))
+  writeText path (stringify (fromObject (Object.union newObj existing :: Object.Object Json)))
 
 -- | ADR 0040 P4: prewarm the global store from a package set's compiler output, so a project's build
 -- | hits the store for the whole library closure instead of compiling it. Unlike the lib directory
