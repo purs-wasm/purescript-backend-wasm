@@ -14,7 +14,7 @@
   "bugs": "https://github.com/purs-wasm/purescript-backend-wasm/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/purs-wasm/purescript-backend-wasm.git"
+    "url": "git+https://github.com/harryprayiv/purescript-backend-wasm.git"
   },
   "license": "MIT",
   "author": "Katsujukou Kineya",
