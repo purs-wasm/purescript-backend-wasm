@@ -31,14 +31,13 @@ import Fmt as Fmt
 import Foreign.Object as Object
 import Partial.Unsafe (unsafeCrashWith)
 import PureScript.Backend.Wasm.Codegen (buildLinkGlue)
-import PureScript.Backend.Wasm.Compiler (compilePerModule, effectfulForeigns, finishLink, linkModule, mirTrace, moduleInterface, parseModule, printMir)
+import PureScript.Backend.Wasm.Compiler (compilePerModule, effectfulForeigns, finishLink, linkModule, mirTrace, moduleInterface, parseModule)
 import PureScript.Backend.Wasm.Externs (ctorFieldReps)
 import PureScript.Backend.Wasm.Lower.Collect (labelCollisions)
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), exportManifestJson)
 import PureScript.Backend.Wasm.MiddleEnd (CacheWrite, liftModule, noCache, optimizeIncrementalM)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (cacheKey, hashString)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi, encodePmi)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (decodePmo, encodePmo)
 import PureScript.CoreFn (toModuleName)
 import PursWasm.CLI.Build.Foreign (resolveForeign)
 import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
@@ -593,7 +592,6 @@ buildCmd cliRoot binaryenBinDir args = do
       -- modules stay local (ADR 0040). Only consumed on the orchestrate path's store write-back.
       , library: isLibrary libSourced name src
       }
-  let sourceHashes = Map.fromFoldable (map (\i -> Tuple i.name i.sourceHash) srcInfos)
   -- Each module's `externs.cbor` carries the top-level type info CoreFn erased (front B); a module
   -- without readable/decodable externs is simply skipped — its constructors fall back to boxed. A
   -- registry module's externs come from the user output (interface-compatible with the shadow, per
@@ -621,13 +619,10 @@ buildCmd cliRoot binaryenBinDir args = do
   -- directory would be misleading.
   let bundleDir = args.outDir
   mkdirP bundleDir
-  -- Incremental cache (ADR 0034), on by default: reuse unchanged modules from `<output>/_build`,
-  -- decoding only the modules the cache cannot reuse. Active whenever MIR is optimized; `--no-opt`
-  -- (no optimized MIR to cache) takes the whole-program path. `-f/--force` keeps the cache machinery
-  -- on (so it is refreshed) but ignores the existing entries — a clean rebuild from scratch.
-  -- `--dump-mir` does NOT disable the cache: on a cached build the target's optimized MIR is
-  -- pretty-printed straight from its `.pmo` after linking (below).
-  let useCache = opts.optimizeMir
+  -- `<output>/_build`: the orchestrate path's per-module compile dir (`.pmi`/`.wasm`/`.link.json`),
+  -- and where `--per-module-codegen` writes its per-module artifacts. The in-process whole-program
+  -- builds no longer keep an on-disk incremental cache here — the `.pmi`/`.pmo` cache (ADR 0034) is
+  -- retired (ADR 0040); incremental reuse now lives in the orchestrate content-addressed store.
   cacheDir <- joinPath [ args.outDir, "_build" ]
   -- The qualified CoreFn-declared foreign names for lowering's opaque-import fallback (ADR 0016),
   -- from the cheap extraction — available for every module without decoding.
@@ -652,8 +647,8 @@ buildCmd cliRoot binaryenBinDir args = do
       }
   -- The lower+codegen core (ADR 0037): whole-program `finishLink` (the oracle, one wasm) or, under
   -- `--per-module-codegen`, `compilePerModule` — each module is codegenned to its own wasm written
-  -- under `_build/<module>.wasm` (alongside the .pmi/.pmo cache, ready for Phase-3 reuse) and the
-  -- link glue is the `cafOwner`. Both normalise to `Linked`, so the packaging (foreign resolution,
+  -- under `_build/<module>.wasm` (next to its `.pmi` interface, the `diffPurwc` oracle — no `.pmo`)
+  -- and the link glue is the `cafOwner`. Both normalise to `Linked`, so the packaging (foreign resolution,
   -- loader, merge, footer) below is shared; the differential harness checks behaviour parity.
   let
     compileLinked modules cacheWrites =
@@ -690,83 +685,9 @@ buildCmd cliRoot binaryenBinDir args = do
   storeDir <- storeRoot
   linkResult <-
     if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir srcInfos
-    else if useCache then do
-      -- Load each module's cache interface (.pmi) + object (.pmo); cached iff both load. `--force`
-      -- starts from an empty cache, so every module is a miss and the cache is rewritten fresh.
-      cachedMap <-
-        if args.force then pure Map.empty
-        else map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i -> do
-          pmiPath <- joinPath [ cacheDir, i.name <> ".pmi" ]
-          pmoPath <- joinPath [ cacheDir, i.name <> ".pmo" ]
-          mPmi <- readBinary pmiPath
-          mPmo <- readBinary pmoPath
-          pure do
-            pmi <- hush <<< decodePmi =<< mPmi
-            finalMod <- hush <<< decodePmo =<< mPmo
-            pure (Tuple i.name { sourceHash: pmi.sourceHash, key: pmi.key, deps: pmi.deps, summary: pmi.summary, finalMod })
-      -- Coarse decode-skip pre-pass (ADR 0034): a module need not be decoded at all iff its source
-      -- AND every transitive dependency's source are unchanged (a guaranteed cache hit). The precise
-      -- per-module key inside the optimizer still decides reuse for the modules that are decoded.
-      let
-        ownUnchanged name = case Map.lookup name cachedMap of
-          Just c -> Map.lookup name sourceHashes == Just c.sourceHash
-          Nothing -> false
-        cachedDeps name = maybe [] _.deps (Map.lookup name cachedMap)
-        shrink s =
-          let
-            s' = Set.filter (\n -> Array.all (\d -> Set.member d s) (cachedDeps n)) s
-          in
-            if Set.size s' == Set.size s then s else shrink s'
-        skippable = shrink (Set.filter ownUnchanged (Set.fromFoldable (map _.name srcInfos)))
-      info (Fmt.fmt @"Compiling {count} module(s) ({cached} cached)…" { count: Array.length srcInfos, cached: Set.size skippable })
-      -- Decode (and version-check) only the modules that are not guaranteed hits.
-      decoded <- map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i ->
-        if Set.member i.name skippable then pure Nothing
-        else case parseModule i.src of
-          Left err -> logAndThrow (i.name <> ": " <> err)
-          Right m -> pure (Just (Tuple i.name m))
-      let decodedModules = Array.fromFoldable (Map.values decoded)
-      either logAndThrow pure (checkWasmBaseCompat Version.version decodedModules)
-      either logAndThrow pure (checkCorefnVersions decodedModules)
-      let
-        inputs = srcInfos <#> \i ->
-          { name: i.name
-          , imports: i.imports
-          , sourceHash: i.sourceHash
-          , cached: Map.lookup i.name cachedMap <#> \c -> { key: c.key, deps: c.deps, summary: c.summary, finalMod: c.finalMod }
-          , lift: case Map.lookup i.name decoded of
-              Just m -> \_ -> liftModule m
-              Nothing -> \_ -> unsafeCrashWith ("internal: cache hit forced lift for " <> i.name)
-          }
-      -- Drive the dependency-ordered optimizer here (not inside `Compiler`), so each module's
-      -- progress can be reported live (ADR 0034). A cache hit advances the counter quietly; a miss
-      -- names the module it is compiling. The optimizer's per-module work is forced strictly per
-      -- step, so the counter keeps pace with the actual compilation.
-      let eff = effectfulForeigns allSigs
-      optimized <- optimizeIncrementalM
-        ( \p ->
-            if p.hit then do
-              Log.debug $ Fmt.fmt @"{name} is already optmized. Skip." { name: p.name }
-            else do
-              when stdoutIsTTY do
-                Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
-                Log.info $ Ansi.escapeCodeToString (Ansi.EraseLine Ansi.Entire)
-                Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
-              Log.info $ Log.cyan $ Fmt.fmt @" >  [{i} of {n}] Compling {name}"
-                { i: padStart (Str.length $ show p.total) (show p.index)
-                , n: p.total
-                , name: p.name
-                }
-        )
-        eff.names
-        eff.arities
-        inputs
-      -- liftEffect progressEndImpl
-      br *> info (Log.blue "Linking (lower + codegen)…")
-      compileLinked optimized.modules optimized.writes
     else case args.dumpMir of
-      -- `--dump-mir` needs the whole CoreFn for the trace, so keep the decode-everything path
-      -- (a debugging build, where peak memory is not a concern).
+      -- `--dump-mir` (whole-program debug): decode everything and write the optimizer's MIR trace
+      -- straight from memory — no per-module codegen, no on-disk cache (ADR 0040 retires `.pmo`).
       Just target -> do
         info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
         decodedModules <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
@@ -777,35 +698,75 @@ buildCmd cliRoot binaryenBinDir args = do
         mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
         writeText mirPath (mirTrace opts decodedModules allSigs target)
         info $ Log.blue ("✓ Wrote MIR trace for " <> target <> " to " <> mirPath)
-        -- `--dump-mir` is a whole-program debug path; per-module codegen is not applied here.
         liftEffect (linkModule opts roots decodedModules externs allSigs noCache) <#> map wholeLinked
-      -- Cold / `--no-opt`: translate + lambda-lift each module and drop its CoreFn before the next,
-      -- so the whole program is never resident as CoreFn *and* MIR at once (copy-reduction — the
-      -- front-half memory floor that blocks self-compilation). `--no-opt` does no whole-program
-      -- optimization, so per-module `liftModule` is the full middle-end; reuse the precomputed
-      -- `foreignNames` and call `finishLink` directly, exactly as the cached path above does.
-      Nothing -> do
-        info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
-        either logAndThrow pure
-          (checkWasmBaseCompat Version.version (map (\i -> { name: i.mn, foreignNames: i.foreignNames }) srcInfos))
-        lifted <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
-          Left err -> logAndThrow (i.name <> ": " <> err)
-          Right m -> do
-            either logAndThrow pure (checkCorefnVersions [ m ])
-            pure (Just (liftModule m))
-        compileLinked lifted []
+      Nothing
+        -- Whole-program optimized build (the legacy non-orchestrate path, now UNCACHED — ADR 0040
+        -- retires the `.pmi`/`.pmo` on-disk cache; incremental reuse lives in the orchestrate store).
+        -- Decode every module and run the dependency-ordered optimizer with no cache reuse. Kept as a
+        -- differential oracle for the orchestrate path (diffPurwc / diffPerModule).
+        | opts.optimizeMir -> do
+            info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
+            decoded <- map (Map.fromFoldable <<< Array.catMaybes) $ for srcInfos \i -> case parseModule i.src of
+              Left err -> logAndThrow (i.name <> ": " <> err)
+              Right m -> pure (Just (Tuple i.name m))
+            let decodedModules = Array.fromFoldable (Map.values decoded)
+            either logAndThrow pure (checkWasmBaseCompat Version.version decodedModules)
+            either logAndThrow pure (checkCorefnVersions decodedModules)
+            let
+              inputs = srcInfos <#> \i ->
+                { name: i.name
+                , imports: i.imports
+                , sourceHash: i.sourceHash
+                , cached: Nothing
+                , lift: case Map.lookup i.name decoded of
+                    Just m -> \_ -> liftModule m
+                    Nothing -> \_ -> unsafeCrashWith ("internal: missing decoded module " <> i.name)
+                }
+            -- Drive the dependency-ordered optimizer here (not inside `Compiler`), so each module's
+            -- progress can be reported live (ADR 0034); the per-module work is forced strictly per step.
+            let eff = effectfulForeigns allSigs
+            optimized <- optimizeIncrementalM
+              ( \p ->
+                  when stdoutIsTTY do
+                    Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
+                    Log.info $ Ansi.escapeCodeToString (Ansi.EraseLine Ansi.Entire)
+                    Log.info $ Ansi.escapeCodeToString (Ansi.PreviousLine 2)
+                    Log.info $ Log.cyan $ Fmt.fmt @" >  [{i} of {n}] Compling {name}"
+                      { i: padStart (Str.length $ show p.total) (show p.index)
+                      , n: p.total
+                      , name: p.name
+                      }
+              )
+              eff.names
+              eff.arities
+              inputs
+            br *> info (Log.blue "Linking (lower + codegen)…")
+            compileLinked optimized.modules optimized.writes
+        -- Cold / `--no-opt`: translate + lambda-lift each module and drop its CoreFn before the next,
+        -- so the whole program is never resident as CoreFn *and* MIR at once (copy-reduction — the
+        -- front-half memory floor that blocks self-compilation). `--no-opt` does no whole-program
+        -- optimization, so per-module `liftModule` is the full middle-end.
+        | otherwise -> do
+            info (Fmt.fmt @"Compiling {count} module(s)…" { count: Array.length srcInfos })
+            either logAndThrow pure
+              (checkWasmBaseCompat Version.version (map (\i -> { name: i.mn, foreignNames: i.foreignNames }) srcInfos))
+            lifted <- map Array.catMaybes $ for srcInfos \i -> case parseModule i.src of
+              Left err -> logAndThrow (i.name <> ": " <> err)
+              Right m -> do
+                either logAndThrow pure (checkCorefnVersions [ m ])
+                pure (Just (liftModule m))
+            compileLinked lifted []
   case linkResult of
     Left err -> logAndThrow err
     Right l -> do
-      -- Persist cache misses (ADR 0034) before the merge, so a later failure still leaves a usable
-      -- cache. `cacheWrites` is empty unless this was a `--cache` build.
-      when (not (Array.null l.cacheWrites)) do
+      -- `--per-module-codegen` (the differential oracle, ADR 0037): write each module's `.pmi`
+      -- interface next to its `_build/<M>.wasm`, so `diffPurwc` can byte-compare the worker's `.pmi`
+      -- against this whole-program-derived one. No `.pmo` — the optimized-MIR object is retired (ADR
+      -- 0040). The default whole-program / orchestrate paths persist nothing here.
+      when (args.perModuleCodegen && not (Array.null l.cacheWrites)) do
         mkdirP cacheDir
         for_ l.cacheWrites \w -> do
           pmiPath <- joinPath [ cacheDir, w.name <> ".pmi" ]
-          pmoPath <- joinPath [ cacheDir, w.name <> ".pmo" ]
-          -- The lowering interface (ADR 0038 Phase B): derive this module's signature tables from
-          -- its finalized MIR + its own foreigns, so the `.pmi` is the complete interface.
           let mForeignNames = maybe [] (\i -> map (\b -> w.name <> "." <> b) i.foreignNames) (Array.find (\i -> i.name == w.name) srcInfos)
           let iface = moduleInterface (ctorFieldReps externs) allSigs mForeignNames w.entry.finalMod
           writeBinary pmiPath
@@ -823,20 +784,6 @@ buildCmd cliRoot binaryenBinDir args = do
                 , labels: iface.labels
                 }
             )
-          writeBinary pmoPath (encodePmo w.entry.finalMod)
-      -- `--dump-mir` on a cached build: the optimized MIR is in the target's `.pmo` (just written
-      -- if it was a miss, otherwise the unchanged hit), so pretty-print that — no re-optimize, no
-      -- cache disable. (`--no-opt` has no `.pmo`; it took the whole-program `mirTrace` path above.)
-      case args.dumpMir of
-        Just target | useCache -> do
-          mirPath <- joinPath [ bundleDir, target <> ".mir.txt" ]
-          pmoPath <- joinPath [ cacheDir, target <> ".pmo" ]
-          readBinary pmoPath >>= case _ of
-            Just bytes -> case decodePmo bytes of
-              Right m -> writeText mirPath (printMir m) *> info (Log.blue ("✓ Wrote MIR for " <> target <> " to " <> mirPath))
-              Left e -> warn (Log.yellow ("--dump-mir: could not decode " <> target <> ".pmo: " <> e))
-            Nothing -> warn (Log.yellow ("--dump-mir: no cached .pmo for " <> target <> " (is it in the reachable set?)"))
-        _ -> pure unit
       -- Resolve each foreign module along the ADR 0014 ladder; a `foreign.wasm`/`.wat` provider is
       -- merged (speaks the internal ABI), else it falls back to the JS loader. `foreignModules` is
       -- the precise set the codegen emitted imports for (no byte re-parse).

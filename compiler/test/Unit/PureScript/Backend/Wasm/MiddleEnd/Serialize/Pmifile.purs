@@ -2,7 +2,7 @@
 -- | ADR 0034) AND the lowering interface (funcs/ctors/dictCtors/enumCtors/foreignSigs/foreignNames/
 -- | labels, ADR 0038 Phase B). Checks that every field — including a `CtorInfo` with mixed
 -- | `fieldReps` and a deeply-nested recursive `MarshalKind` — survives a round-trip, and that a
--- | non-`.pmi` byte string (e.g. a `.pmo`) is rejected.
+-- | non-`.pmi` byte string (e.g. a raw MIR encoding) is rejected.
 module Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (spec) where
 
 import Prelude
@@ -13,8 +13,8 @@ import Data.Tuple (Tuple(..))
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (MarshalKind(..), Rep(..))
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
+import PureScript.Backend.Wasm.MiddleEnd.Serialize (encode)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (PmiEntry, decodePmi, encodePmi)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile (encodePmo)
 import PureScript.CoreFn (Qualified(..))
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)
@@ -67,5 +67,5 @@ spec = describe "PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile" do
         }
     decodePmi (encodePmi e) `shouldEqual` Right e
 
-  it "rejects a non-.pmi byte string (a .pmo object)" do
-    isLeft (decodePmi (encodePmo summaryMod)) `shouldEqual` true
+  it "rejects a non-.pmi byte string (a raw MIR encoding)" do
+    isLeft (decodePmi (encode summaryMod)) `shouldEqual` true

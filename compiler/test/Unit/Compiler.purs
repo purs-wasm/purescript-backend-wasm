@@ -23,7 +23,6 @@ import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize as Serialize
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash as SerializeHash
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile as SerializePmifile
-import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmofile as SerializePmofile
 import Test.Unit.PureScript.Backend.Wasm.SourceForeigns as SourceForeigns
 import Test.Unit.PureScript.Backend.Wasm.Ulib.Interface as UlibInterface
 import Test.Unit.PureScript.Backend.Wasm.MiddleEnd.Transl as Transl
@@ -51,7 +50,6 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   Serialize.spec
   SerializeHash.spec
   SerializePmifile.spec
-  SerializePmofile.spec
   SourceForeigns.spec
   UlibInterface.spec
   FreeVars.spec

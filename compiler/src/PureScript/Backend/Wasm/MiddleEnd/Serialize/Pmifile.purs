@@ -9,11 +9,12 @@
 -- |  - `summary` — the pruned MIR dependents OPTIMIZE against (ADR 0021 b1);
 -- |  - the **lowering interface** (ADR 0038 Phase B): `funcs`/`ctors`/`dictCtors`/`enumCtors`/
 -- |    `foreignSigs`/`foreignNames` — the symbol signatures a dependent LOWERS against (so it can
--- |    codegen a cross-module callee without ever reading this module's `.pmo`); and `labels`,
+-- |    codegen a cross-module callee without ever reading this module's compiled body); and `labels`,
 -- |    this module's record-label ids (for the orchestrator's pre-merge hash-collision check).
 -- |
--- | Its object companion is the `.pmo` (`Serialize.Pmofile`, the finalized MIR) — being retired
--- | as the interface absorbs everything dependents need; the two still share one format version.
+-- | The `.pmi` interface + summary and the per-module `.wasm` object are the cache artifacts (ADR
+-- | 0040): the separate optimized-MIR object (`.pmo`) is retired — the interface absorbs everything
+-- | dependents need, and the orchestrate store holds the compiled `.wasm`.
 module PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile
   ( PmiEntry
   , encodePmi
@@ -63,8 +64,9 @@ type PmiEntry =
 magic :: Array Int
 magic = [ 0x50, 0x57, 0x50, 0x4D, 0x49 ]
 
--- | Bumped to 2 for the lowering-interface fields (ADR 0038 Phase B M2a). Shared with `.pmo`
--- | (`Pmofile`); a stale v1 cache fails the version guard and degrades to a clean miss.
+-- | Bumped to 2 for the lowering-interface fields (ADR 0038 Phase B M2a); a stale v1 `.pmi` fails the
+-- | version guard and degrades to a clean miss. The format itself is unchanged by retiring `.pmo`
+-- | (ADR 0040) — the `.pmi` bytes are the same, so existing store artifacts stay valid.
 formatVersion :: Int
 formatVersion = 2
 
