@@ -11,6 +11,7 @@ module PureScript.Backend.Wasm.Compiler
   , compilePerModule
   , PerModuleArtifacts
   , compileModuleWasm
+  , compileModuleWasmShared
   , ModuleArtifact
   , moduleInterface
   , ModuleInterfaceTables
@@ -41,7 +42,7 @@ import Foreign.Object as Object
 import PureScript.Backend.Wasm.Codegen (buildLinkGlue, buildModule, buildModuleSingle)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
-import PureScript.Backend.Wasm.Lower (DepInterface, lowerModuleWithInterfaces, lowerModules, lowerProgramFragments)
+import PureScript.Backend.Wasm.Lower (DepInterface, LoweredTarget, SharedLowerInfo, lowerModuleAgainstInfo, lowerModuleWithInterfaces, lowerModules, lowerProgramFragments)
 import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels)
 import PureScript.Backend.Wasm.Lower.IR (Rep)
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
@@ -258,30 +259,46 @@ compileModuleWasm
 compileModuleWasm opts foreignSigs' foreignNames externs deps isEntry target =
   case lowerModuleWithInterfaces (ctorFieldReps externs) foreignSigs' foreignNames deps isEntry target of
     Left err -> pure (Left ("linking failed: " <> show err))
-    Right lowered -> do
-      let dotted = joinWith "." target.name
-      let meta = { moduleName: dotted, keyHomeModule: lowered.keyHomeModule, crossModuleRefs: lowered.crossModuleRefs }
-      single <- buildModuleSingle meta { funcs: lowered.fragment.funcs, labels: lowered.labels, exportSigs: lowered.fragment.exportSigs }
-      ok <- B.validate single.mod
-      if not ok then do
-        wat <- B.emitText single.mod
-        B.dispose single.mod
-        pure (Left ("per-module codegen: " <> dotted <> " failed validation:\n" <> wat))
-      else do
-        when opts.optimize (B.optimize single.mod)
-        bytes <- B.emitBinary single.mod
-        B.dispose single.mod
-        -- Over-export the cross-module-referenced keys HOMED in this module (merge resolves them;
-        -- the orchestrator internalises + DCEs post-merge) plus this module's own `caf_init$M`.
-        let homed = Set.toUnfoldable (Set.filter (\k -> Object.lookup k lowered.keyHomeModule == Just dotted) lowered.crossModuleRefs)
-        pure
-          ( Right
-              { bytes
-              , cafInitExport: single.cafInitExport
-              , foreignModules: single.foreignModules
-              , crossModuleExports: homed <> maybe [] (\e -> [ e ]) single.cafInitExport
-              }
-          )
+    Right lowered -> emitLoweredTarget opts lowered target
+
+-- | Like `compileModuleWasm`, but lowers the target against a prebuilt whole-program lowering context
+-- | (`buildSharedInfo`, ADR 0038 Phase C2) instead of folding the dependency interfaces afresh — so a
+-- | long-lived `compile-batch` worker pays the interface merge ONCE for the batch, not per module
+-- | (O(N) not O(N²)). The emitted artifact is behaviour-identical (the shared context's extra,
+-- | non-dependency entries are inert).
+compileModuleWasmShared :: CompileOptions -> SharedLowerInfo -> Boolean -> M.Module -> Effect (Either String ModuleArtifact)
+compileModuleWasmShared opts shared isEntry target =
+  case lowerModuleAgainstInfo shared isEntry target of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right lowered -> emitLoweredTarget opts lowered target
+
+-- | Codegen a lowered target to its (optimised) wasm bytes + link facts, shared by the per-module
+-- | (`compileModuleWasm`) and shared-context (`compileModuleWasmShared`) lowering paths.
+emitLoweredTarget :: CompileOptions -> LoweredTarget -> M.Module -> Effect (Either String ModuleArtifact)
+emitLoweredTarget opts lowered target = do
+  let dotted = joinWith "." target.name
+  let meta = { moduleName: dotted, keyHomeModule: lowered.keyHomeModule, crossModuleRefs: lowered.crossModuleRefs }
+  single <- buildModuleSingle meta { funcs: lowered.fragment.funcs, labels: lowered.labels, exportSigs: lowered.fragment.exportSigs }
+  ok <- B.validate single.mod
+  if not ok then do
+    wat <- B.emitText single.mod
+    B.dispose single.mod
+    pure (Left ("per-module codegen: " <> dotted <> " failed validation:\n" <> wat))
+  else do
+    when opts.optimize (B.optimize single.mod)
+    bytes <- B.emitBinary single.mod
+    B.dispose single.mod
+    -- Over-export the cross-module-referenced keys HOMED in this module (merge resolves them;
+    -- the orchestrator internalises + DCEs post-merge) plus this module's own `caf_init$M`.
+    let homed = Set.toUnfoldable (Set.filter (\k -> Object.lookup k lowered.keyHomeModule == Just dotted) lowered.crossModuleRefs)
+    pure
+      ( Right
+          { bytes
+          , cafInitExport: single.cafInitExport
+          , foreignModules: single.foreignModules
+          , crossModuleExports: homed <> maybe [] (\e -> [ e ]) single.cafInitExport
+          }
+      )
 
 -- | The lowering-interface tables of ONE module (ADR 0038 Phase B): the symbol signatures a
 -- | dependent merges into its `ModuleInfo` to lower this module's cross-module callees — derived

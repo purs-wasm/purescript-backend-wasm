@@ -5,10 +5,12 @@ export const execFileImpl = (cmd) => (args) => () => {
   execFileSync(cmd, args, { stdio: "inherit" });
 };
 
-// Pipe `input` to the child's stdin while inheriting stdout/stderr (so its progress shows). Used to
-// feed a long-lived `purwc` batch worker its whole module work-list in one spawn (ADR 0038 C2).
+// Pipe `input` to the child's stdin; DISCARD its stdout but inherit its stderr. Used to feed a
+// long-lived `purwc` batch worker its whole module work-list in one spawn (ADR 0038 C2). The batch
+// worker is silent on stdout by design (the orchestrator owns the build's progress display), so
+// discarding it just drops the dev-build banner; a worker error still surfaces (it logs to stderr).
 export const execFileInputImpl = (cmd) => (args) => (input) => () => {
-  execFileSync(cmd, args, { input, stdio: ["pipe", "inherit", "inherit"], maxBuffer: 1e9 });
+  execFileSync(cmd, args, { input, stdio: ["pipe", "ignore", "inherit"], maxBuffer: 1e9 });
 };
 
 // Read all of this process's stdin synchronously (fd 0). The batch worker's work-list.

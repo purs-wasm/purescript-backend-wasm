@@ -1,7 +1,18 @@
 -- | The `compile-batch` command (ADR 0038 Phase C2): a long-lived worker that compiles EVERY module
--- | in a stdin work-list, in order, within ONE process. Each line is a module name, `*`-prefixed if it
--- | is the program entry (host-ABI bare exports); the orchestrator streams the topologically-ordered
--- | list so a dependency is compiled before any dependent reads its interface.
+-- | in a stdin work-list, in order, within ONE process. The orchestrator streams the
+-- | topologically-ordered list; each line is one of:
+-- |
+-- |   * `@<name>\t<pmiStoreKey>`                      — a store HIT (a library dependency already
+-- |       compiled): the worker reads its `.pmi` straight from `$PURS_WASM_STORE/<key>.pmi` to seed
+-- |       the optimization context. Its `.wasm`/`.link.json` are NOT needed here (the orchestrator
+-- |       links them from the store directly).
+-- |   * `<*?><name>\t<pmiKey>\t<wasmKey>\t<0|1 library>` — a MISS to compile (`*` = the program entry).
+-- |
+-- | `_build` (`-O`) holds the project's OWN modules only (ADR 0040): a compiled LIBRARY module's
+-- | artifacts go to the content-addressed store (keyed by the orchestrator's `<pmiKey>`/`<wasmKey>`)
+-- | and are removed from `_build`, so library artifacts never accumulate there across builds. A
+-- | library dependency's `.pmi` is therefore read from the store (the `@` hit lines), never copied
+-- | into `_build`.
 -- |
 -- | The point is amortisation AND O(N) scaling. Binaryen.js' Emscripten init (~1.3 s) is paid once for
 -- | the process, not per module. Crucially, the batch drives the *incremental* optimizer itself — it
@@ -19,8 +30,9 @@ module Purwc.CLI.Batch
 import Prelude
 
 import Data.Array as Array
-import Data.Either (Either(..))
-import Data.Foldable (foldM)
+import Data.Either (Either(..), hush)
+import Data.Foldable (foldM, for_)
+import Data.FoldableWithIndex (forWithIndex_)
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set as Set
 import Data.String (Pattern(..))
@@ -30,49 +42,59 @@ import Foreign.Object as Object
 import Fmt as Fmt
 import PureScript.Backend.Wasm.CLI.Compat (toolchainTag)
 import PureScript.Backend.Wasm.CLI.Corefn (corefnForeignNames)
-import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, joinPath, logAndThrow, readBinary, readStdin, readText)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, joinPath, logAndThrow, readBinary, readStdin, readText, unlink)
 import PureScript.Backend.Wasm.CLI.Externs (readExterns)
 import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PureScript.Backend.Wasm.CLI.Lib (resolveLibPath)
 import PureScript.Backend.Wasm.CLI.Module (entryRoot)
 import PureScript.Backend.Wasm.CLI.Store (putStoreFile)
-import PureScript.Backend.Wasm.Compiler (effectfulForeigns, parseModule)
+import PureScript.Backend.Wasm.Compiler (compileModuleWasmShared, effectfulForeigns, parseModule)
+import PureScript.Backend.Wasm.Lower (buildSharedInfo)
 import PureScript.Backend.Wasm.MiddleEnd (batchInlineKeys, emptyIncAccum, incDepStep, incMissStep, liftModule)
 import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (hashString)
-import Purwc.CLI.Compile (depInterfaceOf, emitModule, loadDepInterfaces)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Pmifile (decodePmi)
+import Purwc.CLI.Compile (codegenArtifact, depInterfaceOf, writeModulePmi)
 import Purwc.CLI.Options.Types (BatchOption)
-import Run (EFFECT, Run)
+import Effect (Effect)
+import Run (EFFECT, Run, liftEffect)
 import Type.Row (type (+))
+
+-- | Whether the worker's stderr is a TTY (live progress is rendered only then) + a raw stderr write
+-- | (no trailing newline) for the carriage-return-overwritten progress line. See `Batch.js`.
+foreign import stderrIsTTY :: Boolean
+foreign import progressWriteImpl :: String -> Effect Unit
 
 batchCmd :: forall r. FilePath -> FilePath -> BatchOption -> Run (ENV + FS + PROC + LOG + EFFECT + r) Unit
 batchCmd cliRoot binaryenBinDir args = do
   raw <- readStdin
-  -- Each line is tab-separated `<*?>name\t<pmiStoreKey>\t<wasmStoreKey>\t<0|1 library>` (the
-  -- orchestrator's store keys + library flag; a bare name with no tabs degrades to "no store keys",
-  -- so a hand-run batch still works). `*` marks the program entry (host-ABI bare exports).
+  -- Split the work-list into store HITS (`@`-prefixed: `@<name>\t<pmiStoreKey>`) and MISSES to compile
+  -- (`<*?>name\t<pmiKey>\t<wasmKey>\t<0|1 library>`; `*` = program entry). A bare miss name with no
+  -- tabs degrades to "no store keys", so a hand-run batch still works.
+  let lines = Array.filter (not <<< Str.null) (map Str.trim (Str.split (Pattern "\n") raw))
+  let { yes: hitLines, no: missLines } = Array.partition (\l -> Str.take 1 l == "@") lines
   let
-    misses = Array.filter (not <<< Str.null <<< _.name) $
-      Str.split (Pattern "\n") raw <#> \rawLine ->
-        let
-          cols = Str.split (Pattern "\t") (Str.trim rawLine)
-          rawName = fromMaybe "" (Array.index cols 0)
-          entry = Str.take 1 rawName == "*"
-        in
-          { entry
-          , name: if entry then Str.drop 1 rawName else rawName
-          , sk: fromMaybe "" (Array.index cols 1)
-          , wk: fromMaybe "" (Array.index cols 2)
-          , library: Array.index cols 3 == Just "1"
-          }
-  let missNames = Set.fromFoldable (map _.name misses)
+    misses = missLines <#> \rawLine ->
+      let
+        cols = Str.split (Pattern "\t") rawLine
+        rawName = fromMaybe "" (Array.index cols 0)
+        entry = Str.take 1 rawName == "*"
+      in
+        { entry
+        , name: if entry then Str.drop 1 rawName else rawName
+        , sk: fromMaybe "" (Array.index cols 1)
+        , wk: fromMaybe "" (Array.index cols 2)
+        , library: Array.index cols 3 == Just "1"
+        }
   let opts = { optimize: not args.debug, optimizeMir: not args.noOpt, perModuleRep: false }
   libPath <- resolveLibPath cliRoot Nothing
 
-  -- The store-hit summaries the orchestrator copied into `--deps` (= `_build`) before the batch:
-  -- every staged `.pmi` whose module is NOT itself a miss. Decoded ONCE here and used to seed the
-  -- optimization accumulator and the codegen dependency-interface set (a dependent never re-decodes).
-  allPmis <- loadDepInterfaces args.depsDir
-  let hitEntries = Array.filter (\e -> not (Set.member (Str.joinWith "." e.summary.name) missNames)) allPmis
+  -- The store-hit summaries: read each hit's `.pmi` straight from the store (`<store>/<pmiKey>.pmi`),
+  -- decoded ONCE, to seed the optimization accumulator + the codegen dependency-interface set. A
+  -- corrupt/missing artifact contributes nothing (surfaces later as a hard `unknown callee`).
+  hitEntries <- map Array.catMaybes $ for hitLines \l -> do
+    let sk = fromMaybe "" (Array.index (Str.split (Pattern "\t") l) 1)
+    bytes <- readBinary =<< joinPath [ args.storeDir, sk <> ".pmi" ]
+    pure (bytes >>= (hush <<< decodePmi))
 
   -- Read + lift every miss exactly once (its CoreFn, source hash, externs, and foreign sigs), so the
   -- whole-batch effectful-foreign set and `summaryInlineKeys` can be computed up front (oracle-style)
@@ -111,48 +133,72 @@ batchCmd cliRoot binaryenBinDir args = do
   -- All program module names (for the precise-reference filter) and the whole-program inline keyset
   -- (which bodies a summary retains), both computed ONCE — exactly as `optimizeIncrementalM` does.
   let hitNames = Array.fromFoldable (map (\e -> Str.joinWith "." e.summary.name) hitEntries)
-  let names = Set.union missNames (Set.fromFoldable hitNames)
+  let names = Set.union (Set.fromFoldable (map _.name misses)) (Set.fromFoldable hitNames)
   let summaryInlineKeys = batchInlineKeys eff.names (map _.summary hitEntries <> map _.lifted missData)
 
-  -- Seed the optimization accumulator and the codegen dependency-interface set from the hits, then
-  -- thread both across the misses in topo order: optimize each against the running accumulator
-  -- (`incMissStep`) and codegen it against the accumulated interfaces, appending its own.
+  let env = { binaryenBinDir, input: args.input, outDir: args.outDir, text: false, opts, quiet: true }
+
+  -- PHASE 1 (optimize): thread the incremental accumulator across the misses in topo order, optimizing
+  -- each against the running accumulator (`incMissStep`) — the same O(N) accumulation the in-process
+  -- whole-program loop does — and write each module's `.pmi` interface. Collect each finalized MIR +
+  -- its codegen-facing `DepInterface` for the shared lowering context.
   let accum0 = Array.foldl (\acc e -> incDepStep eff.names { name: Str.joinWith "." e.summary.name, summary: e.summary, key: e.key } acc) emptyIncAccum hitEntries
-  let env = { binaryenBinDir, input: args.input, outDir: args.outDir, text: false, opts }
-  _ <- foldM
+  phase1 <- foldM
     ( \st m -> do
         let
           s = incMissStep eff.names eff.arities names summaryInlineKeys
             { name: m.target, sourceHash: m.sourceHash, lifted: m.lifted }
             st.accum
-        iface <- emitModule env
+        di <- writeModulePmi env
           { target: m.target
-          , programEntry: m.programEntry
           , externs: m.externs
           , allSigs: m.allSigs
           , foreignNameSet: m.foreignNameSet
-          , depInterfaces: st.depIfaces
           , sourceHash: m.sourceHash
           , finalMod: s.finalMod
           , summary: s.summary
           , deps: s.deps
           , key: s.key
           }
-        -- ADR 0040 §P3: as soon as a LIBRARY module finishes, write its three artifacts to the store
-        -- under the orchestrator's per-line keys (the entry + project-own modules stay in `_build`).
-        -- Incremental — a crashed batch still leaves every completed library object cached.
-        when (args.storeDir /= "" && m.library && not m.programEntry) do
-          storeArtifacts args.storeDir args.outDir m.target m.sk m.wk
-        pure { accum: s.accum, depIfaces: Array.snoc st.depIfaces iface }
+        pure
+          { accum: s.accum
+          , done: Array.snoc st.done
+              { target: m.target, programEntry: m.programEntry, finalMod: s.finalMod, sk: m.sk, wk: m.wk, library: m.library, di }
+          }
     )
-    { accum: accum0, depIfaces: map depInterfaceOf hitEntries }
+    { accum: accum0, done: [] }
     missData
-  pure unit
+
+  -- The whole-program lowering context, built ONCE from every module's interface (hits + all misses):
+  -- so each module's codegen below lowers against a shared, prebuilt `ModuleInfo` rather than re-merging
+  -- every dependency interface per module (O(N), not O(N²) over the batch — ADR 0038 Phase C2).
+  let shared = buildSharedInfo (map depInterfaceOf hitEntries <> map _.di phase1.done)
+
+  -- PHASE 2 (codegen): lower + codegen each miss against the shared context, write its `.wasm` +
+  -- `.link.json`. A compiled LIBRARY module's artifacts are written to the content-addressed store
+  -- under the orchestrator's keys as soon as it finishes (ADR 0040 §P3) and then REMOVED from
+  -- `_build`, so `_build` holds the project's own modules only; the entry + own modules stay in
+  -- `_build`. With no store ($PURS_WASM_STORE unset) there is nowhere to put library artifacts, so
+  -- they stay in `_build` (the pre-store fallback).
+  let total = Array.length phase1.done
+  forWithIndex_ phase1.done \ix d -> do
+    -- Live progress on stderr (TTY only): a carriage-return-overwritten ` >  [i of n] Compiling M`,
+    -- matching the whole-program build's progress line (the orchestrator's stdout owns the framing).
+    when stderrIsTTY $ liftEffect $ progressWriteImpl
+      ("\r\x1b[36m >  [" <> show (ix + 1) <> " of " <> show total <> "] Compiling " <> d.target <> "\x1b[0m\x1b[K")
+    codegenArtifact env d.target d.finalMod
+      (compileModuleWasmShared opts shared d.programEntry d.finalMod)
+    when (args.storeDir /= "" && d.library && not d.programEntry) do
+      storeArtifacts args.storeDir args.outDir d.target d.sk d.wk
+      for_ [ ".pmi", ".wasm", ".link.json" ] \suffix ->
+        unlink =<< joinPath [ args.outDir, d.target <> suffix ]
+  -- Erase the progress line so the orchestrator's next message starts clean.
+  when (stderrIsTTY && total > 0) $ liftEffect $ progressWriteImpl "\r\x1b[K"
 
 -- | Copy a just-compiled library module's three `_build` artifacts into the content-addressed store
 -- | under the orchestrator-supplied keys (`.pmi` under the recursive `.pmi` key, `.wasm`/`.link.json`
 -- | under the codegen-specific `.wasm` key). `putStoreFile` is a no-op if the content is already
--- | present, so a re-run is idempotent.
+-- | present, so a re-run is idempotent. The caller removes the `_build` copies afterwards (own-only).
 storeArtifacts :: forall r. FilePath -> FilePath -> String -> String -> String -> Run (FS + EFFECT + r) Unit
 storeArtifacts root buildDir name sk wk = do
   let

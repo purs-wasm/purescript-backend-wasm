@@ -247,21 +247,25 @@ try {
   build(orc1);
   const ran1 = (await mainStdout(orc1)).includes("(Just 42)");
   const pmis = readdirSync(store).filter((f) => f.endsWith(".pmi"));
-  // a library module (Data.Maybe) IS in the store; the OWN entry (Examples.IntPatch.Main) is NOT.
-  const inStore = (m) => existsSync(join(orc1, "_build", m)) && pmis.some((f) => sha(join(store, f)) === sha(join(orc1, "_build", m)));
-  const dmInStore = inStore("Data.Maybe.pmi");
-  const ownInStore = inStore("Examples.IntPatch.Main.pmi");
+  // `_build` is OWN-ONLY (ADR 0040): a LIBRARY module's artifacts live in the store, NOT in `_build`;
+  // the OWN entry lives in `_build`, NOT in the store. (The store is content-/hash-named, so a library
+  // module is verified by its ABSENCE from `_build` + the store holding the library closure; the own
+  // module's `_build` content is checked to NOT match any store entry.)
+  const ownPmiInBuild = existsSync(join(orc1, "_build", "Examples.IntPatch.Main.pmi"));
+  const libPmiInBuild = existsSync(join(orc1, "_build", "Data.Maybe.pmi"));
+  const buildOwnOnly = ownPmiInBuild && !libPmiInBuild;
+  const ownInStore = pmis.some((f) => sha(join(store, f)) === sha(join(orc1, "_build", "Examples.IntPatch.Main.pmi")));
   // build 2: fresh output, same store → library modules hit, own modules recompile
   const log2 = build(orc2);
   const hit = / \((\d+) from store\)/.exec(log2);
-  const compiled2 = /compiling (\d+) module/.exec(log2)?.[1];
+  const compiled2 = /Compiling (\d+) module/.exec(log2)?.[1];
   const ran2 = (await mainStdout(orc2)).includes("(Just 42)");
   const merged = sha(join(orc1, "index.wasm")) === sha(join(orc2, "index.wasm"));
   const after = readdirSync(store).filter((f) => f.endsWith(".pmi")).length;
-  const ok = ran1 && ran2 && pmis.length > 0 && dmInStore && !ownInStore && pmis.length === after
+  const ok = ran1 && ran2 && pmis.length > 0 && buildOwnOnly && !ownInStore && pmis.length === after
     && hit && Number(hit[1]) > 0 && Number(compiled2) >= 1 && merged;
   if (!ok) failures++;
-  console.log(`${ok ? "✓" : "✗"} store ${pmis.length} pmi (Data.Maybe in:${dmInStore ? "yes" : "NO"}, own in:${ownInStore ? "YES(bad)" : "no"}) | build2: ${compiled2} compiled (own), ${hit ? hit[1] : 0} from store | index.wasm match ${merged ? "yes" : "no"} | runs ${ran1 && ran2 ? "yes" : "NO"}`);
+  console.log(`${ok ? "✓" : "✗"} store ${pmis.length} lib pmi | _build own-only (own in:${ownPmiInBuild ? "yes" : "NO"}, lib in:${libPmiInBuild ? "YES(bad)" : "no"}) | own in store:${ownInStore ? "YES(bad)" : "no"} | build2: ${compiled2} compiled (own), ${hit ? hit[1] : 0} from store | index.wasm match ${merged ? "yes" : "no"} | runs ${ran1 && ran2 ? "yes" : "NO"}`);
 } catch (e) {
   failures++;
   console.log(`ERROR: ${e?.message ?? e}`);
@@ -284,7 +288,7 @@ try {
     ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc, "--force"],
     { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env }).toString();
   const hit = / \((\d+) from store\)/.exec(log);
-  const compiled = /compiling (\d+) module/.exec(log)?.[1];
+  const compiled = /Compiling (\d+) module/.exec(log)?.[1];
   const ran = (await mainStdout(orc)).includes("(Just 42)");
   const ok = prewarmed > 0 && hit && Number(hit[1]) > 0 && Number(compiled) >= 1 && ran && noManifest;
   if (!ok) failures++;

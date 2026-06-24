@@ -2,6 +2,7 @@
 /output
 /output-es
 /output-wasm
+/output-purwc
 /dist
 # generated from runtime/runtime.wat by `npm run build:runtime` (chained into test:e2e)
 /runtime/runtime.wasm

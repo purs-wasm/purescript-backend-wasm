@@ -35,6 +35,9 @@ module PureScript.Backend.Wasm.Lower
   , lowerModules
   , lowerProgramFragments
   , lowerModuleWithInterfaces
+  , buildSharedInfo
+  , lowerModuleAgainstInfo
+  , SharedLowerInfo
   , ModuleFragment
   , LoweredProgram
   , DepInterface
@@ -996,3 +999,61 @@ lowerModuleWithInterfaces fieldReps foreignSigs foreignNames deps isEntry target
   let hostRoots = if isEntry then [ target.name ] else []
   fragment <- lowerOneFragment info reachable crossModuleRefs hostRoots info.foreignSigs target
   pure { fragment, labels: Object.toUnfoldable tLabels, keyHomeModule, crossModuleRefs }
+
+-- | A whole-program lowering context built ONCE from every module's interface: the merged symbol
+-- | tables (`ModuleInfo`, with `labelIds` left empty — it is per-target) and the whole-program
+-- | key→home-module map. Built by `buildSharedInfo`, consumed by `lowerModuleAgainstInfo`.
+type SharedLowerInfo = { info :: ModuleInfo, keyHomeModule :: Object String }
+
+-- | Build the whole-program lowering context once, from every module's `DepInterface` (ADR 0038
+-- | Phase C2). The `purwc compile-batch` worker builds this ONCE for the batch and lowers each
+-- | module's fragment against it (`lowerModuleAgainstInfo`), instead of re-folding every dependency
+-- | interface into a fresh `ModuleInfo` per module (`lowerModuleWithInterfaces` — O(N²) over the
+-- | batch). The tables are keyed by module-qualified names, so the union is disjoint and
+-- | order-independent; a module references only entries that precede it in dependency order, so the
+-- | extra (non-dependency) entries are inert. `labelIds` is left empty — `lowerModuleAgainstInfo`
+-- | sets it per target.
+buildSharedInfo :: Array DepInterface -> SharedLowerInfo
+buildSharedInfo ifaces =
+  { info:
+      { knownFuncs
+      , ctors: foldl (\acc d -> Object.union acc d.ctors) Object.empty ifaces
+      , dictCtors: foldl (\acc d -> Object.union acc d.dictCtors) Object.empty ifaces
+      , enumCtors: foldl (\acc d -> Object.union acc d.enumCtors) Object.empty ifaces
+      , labelIds: Object.empty
+      , foreignSigs: foldl (\acc d -> Object.union acc d.foreignSigs) Object.empty ifaces
+      , foreignNames: foldl (\acc d -> Set.union acc (Set.fromFoldable d.foreignNames)) Set.empty ifaces
+      }
+  , keyHomeModule: Object.fromFoldable (map (\k -> Tuple k (homeModuleOfKey k)) (Object.keys knownFuncs))
+  }
+  where
+  knownFuncs = foldl (\acc d -> Object.union acc d.funcs) Object.empty ifaces
+
+-- | The defining (home) module of a qualified key `Module.ident` — the prefix before the last dot.
+homeModuleOfKey :: String -> String
+homeModuleOfKey k = maybe k (\i -> Str.take i k) (Str.lastIndexOf (Pattern ".") k)
+
+-- | Lower ONE module against a prebuilt whole-program context (`buildSharedInfo`). Behaviour-identical
+-- | to `lowerModuleWithInterfaces`: the target's own functions are already in the shared `knownFuncs`
+-- | (the context is built from every module's interface, including the target's own), and the extra
+-- | non-dependency entries are inert (a module references only its dependencies). Only `labelIds`,
+-- | `decls`/`rootKeys`/`reachable`, and `crossModuleRefs` are per-target; the heavy interface merge is
+-- | NOT redone per module, so the batch lowering is O(N), not O(N²).
+lowerModuleAgainstInfo :: SharedLowerInfo -> Boolean -> Module -> Either LowerError LoweredTarget
+lowerModuleAgainstInfo shared isEntry target = do
+  let
+    tDict = collectDictCtors [ target ]
+    tLabels = collectLabels [ target ]
+    info = shared.info { labelIds = tLabels }
+    decls = functionDecls tDict target
+    rootKeys = map (\(Tuple ident _) -> qualifiedKey target.name ident) decls
+    functions = Object.fromFoldable (decls <#> \(Tuple ident e) -> Tuple (qualifiedKey target.name ident) e)
+    reachable = reachableFunctions functions rootKeys
+    -- over-export every own function (the worker cannot see its dependents); merge-time DCE prunes.
+    crossModuleRefs = Set.fromFoldable rootKeys
+  case Array.head (labelCollisions tLabels) of
+    Just clash -> Left (LabelHashCollision clash)
+    Nothing -> pure unit
+  let hostRoots = if isEntry then [ target.name ] else []
+  fragment <- lowerOneFragment info reachable crossModuleRefs hostRoots info.foreignSigs target
+  pure { fragment, labels: Object.toUnfoldable tLabels, keyHomeModule: shared.keyHomeModule, crossModuleRefs }

@@ -191,7 +191,7 @@ compileBatchToStore
      , entryNames :: Set.Set String
      }
   -> Array { name :: String, imports :: Array String, sourceHash :: String, library :: Boolean | b }
-  -> Run (FS + PROC + LOG + EFFECT + r) Unit
+  -> Run (FS + PROC + LOG + EFFECT + r) (Array PlanEntry)
 compileBatchToStore cfg ordered = do
   mkdirP cfg.buildDir
   purwcPath <- joinPath [ cfg.cliRoot, "purwc", "index.dev.js" ]
@@ -220,60 +220,53 @@ compileBatchToStore cfg ordered = do
         pure (p && w && l)
       _ -> pure false
     pure { name: m.name, isEntry, sk, wk, hit, library: m.library }
-  -- Copy every HIT's three artifacts from the store into `_build` BEFORE the batch, so a miss reads a
-  -- hit dependency's `.pmi` from `--deps`, and the final merge sees every module's `.wasm`.
-  for_ cfg.storeDir \root -> for_ (Array.filter _.hit plan) \p -> do
-    let
-      copy storeName buildName = do
-        mb <- readBinary =<< joinPath [ root, storeName ]
-        case mb of
-          Just b -> do
-            dst <- joinPath [ cfg.buildDir, buildName ]
-            writeBinary dst b
-          Nothing -> logAndThrow ("orchestrate: store hit but missing artifact " <> storeName)
-    copy (p.sk <> ".pmi") (p.name <> ".pmi")
-    copy (p.wk <> ".wasm") (p.name <> ".wasm")
-    copy (p.wk <> ".link.json") (p.name <> ".link.json")
-  -- Drive ONE long-lived `purwc compile-batch` over the topo-ordered MISSES (each `*`-prefixed if it
-  -- is the program entry), streamed on stdin. One process compiles every miss in order, so the
-  -- dominant per-spawn cost (Binaryen.js init ~1.3 s) is paid once for the batch (ADR 0038 Phase C2);
-  -- topo order keeps each dependency's `.pmi` on disk (a hit's copied above, a miss's compiled
-  -- earlier) before a dependent reads it from `--deps` (= the shared `_build`).
+  -- `_build` holds the project's OWN modules only (ADR 0040): a HIT is a LIBRARY module already in the
+  -- content-addressed store, so it is NOT copied into `_build` — the worker reads its `.pmi` straight
+  -- from the store (the `@<name>\t<pmiKey>` work-list lines below) and the orchestrator links its
+  -- `.wasm`/`.link.json` from the store (`orchestrateModules`). The worker writes each compiled library
+  -- MISS to the store too, then removes it from `_build`, so library artifacts never accumulate there.
   let misses = Array.filter (not <<< _.hit) plan
+  -- Match the whole-program build's progress framing (`Compiling N module(s)…`); the per-module
+  -- spam is suppressed in the worker (the orchestrator owns the display).
   info
-    ( Log.cyan
-        ( Fmt.fmt @" >  compiling {n} module(s) (purwc batch){extra}"
-            { n: Array.length misses
-            , extra: case Array.length plan - Array.length misses of
-                0 -> ""
-                k -> Fmt.fmt @" ({k} from store)" { k }
-            }
-        )
+    ( Fmt.fmt @"Compiling {n} module(s)…{extra}"
+        { n: Array.length misses
+        , extra: case Array.length plan - Array.length misses of
+            0 -> ""
+            k -> Fmt.fmt @" ({k} from store)" { k }
+        }
     )
-  -- Each work-list line carries the orchestrator-computed store keys + library flag (tab-separated:
-  -- `<*?>name\t<pmiKey>\t<wasmKey>\t<0|1 library>`), so the worker can write each compiled LIBRARY
-  -- module's three artifacts to the store under THOSE keys the moment it finishes that module —
-  -- incrementally, not in a post-batch copy pass (ADR 0040 §P3; the entry + own modules stay local).
-  -- The store keys are the orchestrator's (recursive, import-based content keys), distinct from the
-  -- worker's own `.pmi` key, so they must be passed in; the worker treats them as opaque file names.
+  -- Drive ONE long-lived `purwc compile-batch` (amortises Binaryen init), streaming the topo-ordered
+  -- work-list on stdin: `@<name>\t<pmiKey>` for each store HIT (the worker reads it from the store to
+  -- seed the optimizer) followed by `<*?>name\t<pmiKey>\t<wasmKey>\t<0|1 library>` for each MISS. The
+  -- store keys are the orchestrator's (recursive, import-based content keys), distinct from the worker's
+  -- own `.pmi` key, so they are passed in; the worker treats them as opaque file names.
   when (not (Array.null misses)) do
     let
-      workList = joinWith "\n"
-        ( misses <#> \p ->
-            joinWith "\t"
-              [ (if p.isEntry then "*" else "") <> p.name
-              , p.sk
-              , p.wk
-              , if p.library then "1" else "0"
-              ]
-        )
+      hitLines = Array.filter _.hit plan <#> \p -> "@" <> p.name <> "\t" <> p.sk
+      missLines = misses <#> \p ->
+        joinWith "\t"
+          [ (if p.isEntry then "*" else "") <> p.name
+          , p.sk
+          , p.wk
+          , if p.library then "1" else "0"
+          ]
     execFileInput "node"
-      ( [ purwcPath, "compile-batch", "-I", cfg.purwcInput, "--deps", cfg.buildDir, "-O", cfg.buildDir ]
+      ( [ purwcPath, "compile-batch", "-I", cfg.purwcInput, "-O", cfg.buildDir ]
           <> maybe [] (\root -> [ "--store", root ]) cfg.storeDir
           <> (if cfg.debug then [ "-g" ] else [])
           <> (if cfg.noOpt then [ "--no-opt" ] else [])
       )
-      workList
+      (joinWith "\n" (hitLines <> missLines))
+  pure plan
+
+-- | The per-module compile/link plan (ADR 0040): the orchestrator's content keys (`sk` = recursive
+-- | `.pmi` key, `wk` = codegen-specific `.wasm`/`.link.json` key), whether the module is a store HIT,
+-- | and whether it is a shareable LIBRARY module (its artifacts live in the store) or the project's
+-- | OWN code (its artifacts live in `_build`). `orchestrateModules` uses it to read each module's
+-- | artifacts from the right place when linking.
+type PlanEntry =
+  { name :: String, isEntry :: Boolean, sk :: String, wk :: String, hit :: Boolean, library :: Boolean }
 
 -- | ADR 0040 P4: prewarm the global store from a package set's compiler output, so a project's build
 -- | hits the store for the whole library closure instead of compiling it. Unlike the lib directory
@@ -325,7 +318,7 @@ prewarmCmd cliRoot input = do
       stageDir <- joinPath [ root, ".prewarm-stage" ]
       buildDir <- joinPath [ root, ".prewarm-build" ]
       stageOrchestrateInput stageDir input libPath allModNames srcInfos
-      compileBatchToStore
+      _ <- compileBatchToStore
         { cliRoot
         , purwcInput: stageDir
         , buildDir
@@ -358,9 +351,11 @@ orchestrateModules
 orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
   let ordered = topoBySrcImports srcInfos
   let entryNames = Set.fromFoldable args.entryModules
-  -- ADR 0040 P3: compile each module into `_build` (reusing the store where the content key hits);
-  -- library modules are written back to the store, own modules stay local.
-  compileBatchToStore
+  -- ADR 0040 P3: compile each module (reusing the store where the content key hits). LIBRARY modules'
+  -- artifacts live in the content-addressed store (keyed by `sk`/`wk`); the project's OWN modules' live
+  -- in `_build` (keyed by module name). The returned plan says which is which, so the link below reads
+  -- each module's `.link.json`/`.pmi`/`.wasm` from the right place.
+  plan <- compileBatchToStore
     { cliRoot
     , purwcInput
     , buildDir
@@ -372,13 +367,21 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
     , entryNames
     }
     ordered
+  let planMap = Map.fromFoldable (map (\p -> Tuple p.name p) plan)
+  -- The on-disk path of a module's artifact: a LIBRARY module's lives in the store under its content
+  -- key (`sk` for `.pmi`, `wk` for `.wasm`/`.link.json`); everything else (own modules, or any module
+  -- when no store is configured) lives in `_build` under its dotted name.
+  let
+    artPath name suffix keyOf = case Map.lookup name planMap, storeDir of
+      Just p, Just root | p.library -> joinPath [ root, keyOf p <> suffix ]
+      _, _ -> joinPath [ buildDir, name <> suffix ]
   metas <- for ordered \m -> do
-    mTxt <- readText =<< joinPath [ buildDir, m.name <> ".link.json" ]
+    mTxt <- readText =<< artPath m.name ".link.json" _.wk
     case mTxt >>= decodeLinkMeta of
       Just lm -> pure { name: m.name, meta: lm }
       Nothing -> logAndThrow ("orchestrate: missing/corrupt link metadata for " <> m.name)
   pmis <- for ordered \m -> do
-    mb <- readBinary =<< joinPath [ buildDir, m.name <> ".pmi" ]
+    mb <- readBinary =<< artPath m.name ".pmi" _.sk
     case mb >>= (hush <<< decodePmi) of
       Just e -> pure e
       Nothing -> logAndThrow ("orchestrate: missing/corrupt .pmi for " <> m.name)
@@ -415,7 +418,7 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
         )
       gluePath <- joinPath [ buildDir, "link.glue.wasm" ]
       preWritten <- for ordered \m -> do
-        p <- joinPath [ buildDir, m.name <> ".wasm" ]
+        p <- artPath m.name ".wasm" _.wk
         pure (Tuple p m.name)
       -- ADR 0040 §P2: a foreign module whose own `{F}.wasm` self-merged its provider (a kept foreign
       -- staged under `purwcInput`) is already self-contained — a cross-module import of it resolves

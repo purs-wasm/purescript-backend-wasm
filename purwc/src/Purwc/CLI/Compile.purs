@@ -17,10 +17,13 @@
 module Purwc.CLI.Compile
   ( compileCmd
   , emitModule
+  , writeModulePmi
+  , codegenArtifact
   , depInterfaceOf
   , loadDepInterfaces
   , EmitEnv
   , ModuleArtifactInput
+  , PmiInput
   ) where
 
 import Prelude
@@ -48,7 +51,8 @@ import PureScript.Backend.Wasm.CLI.ForeignSigs (buildForeignSigs)
 import PureScript.Backend.Wasm.CLI.Lib (resolveLibPath)
 import PureScript.Backend.Wasm.CLI.Module (entryRoot)
 import PureScript.Backend.Wasm.CLI.Paths (wasmDisBin)
-import PureScript.Backend.Wasm.Compiler (CompileOptions, compileModuleWasm, effectfulForeigns, moduleInterface, parseModule)
+import Effect (Effect)
+import PureScript.Backend.Wasm.Compiler (CompileOptions, ModuleArtifact, compileModuleWasm, effectfulForeigns, moduleInterface, parseModule)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps)
 import PureScript.Backend.Wasm.Lower (DepInterface)
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
@@ -109,7 +113,7 @@ compileCmd cliRoot binaryenBinDir args = do
   -- Optimize the single module against its dependency summaries, then emit its artifacts.
   let out = compileModuleMir eff.names eff.arities { sourceHash, lifted: liftModule decoded, depSummaries, depKeys }
   _ <- emitModule
-    { binaryenBinDir, input: args.input, outDir: args.outDir, text: args.text, opts }
+    { binaryenBinDir, input: args.input, outDir: args.outDir, text: args.text, opts, quiet: false }
     { target
     , programEntry: args.programEntry
     , externs
@@ -136,6 +140,10 @@ type EmitEnv =
   , outDir :: FilePath
   , text :: Boolean
   , opts :: CompileOptions
+  -- Suppress the per-module `✓ Wrote …` / `✓ compiled …` progress lines. The long-lived
+  -- `compile-batch` worker sets this (the orchestrator owns the build's progress display, matching
+  -- the whole-program build); the one-shot `purwc compile` leaves it off so it still reports.
+  , quiet :: Boolean
   }
 
 type ModuleArtifactInput =
@@ -152,11 +160,28 @@ type ModuleArtifactInput =
   , key :: String
   }
 
-emitModule :: forall r. EmitEnv -> ModuleArtifactInput -> Run (FS + PROC + LOG + EFFECT + r) DepInterface
-emitModule env m = do
-  let target = m.target
+-- | The inputs to write ONE module's `.pmi` interface — the pmi header (source hash, key, precise
+-- | deps) + the module's finalized MIR (the interface is derived from it).
+type PmiInput =
+  { target :: String
+  , externs :: Array ExternsFile
+  , allSigs :: Object ForeignSig
+  , foreignNameSet :: Set String
+  , sourceHash :: String
+  , finalMod :: M.Module
+  , summary :: M.Module
+  , deps :: Array String
+  , key :: String
+  }
+
+-- | Write ONE module's `.pmi` interface and return its codegen-facing `DepInterface`. The interface
+-- | is derived from the finalized MIR alone (`moduleInterface`), independent of how the module's wasm
+-- | is later codegenned — so the batch worker can write every `.pmi` up front, then build the shared
+-- | lowering context, then codegen each module against it.
+writeModulePmi :: forall r. EmitEnv -> PmiInput -> Run (FS + EFFECT + r) DepInterface
+writeModulePmi env m = do
   mkdirP env.outDir
-  pmiPath <- joinPath [ env.outDir, target <> ".pmi" ]
+  pmiPath <- joinPath [ env.outDir, m.target <> ".pmi" ]
   let iface = moduleInterface (ctorFieldReps m.externs) m.allSigs (Set.toUnfoldable m.foreignNameSet) m.finalMod
   writeBinary pmiPath
     ( encodePmi
@@ -173,9 +198,15 @@ emitModule env m = do
         , labels: iface.labels
         }
     )
+  pure (depInterfaceOf iface)
 
-  -- Lower + codegen the single module against its dependency interfaces, and write its wasm.
-  liftEffect (compileModuleWasm env.opts m.allSigs m.foreignNameSet m.externs m.depInterfaces m.programEntry m.finalMod) >>= case _ of
+-- | Run a module's lowering+codegen action (`compileModuleWasm` against dependency interfaces, or
+-- | `compileModuleWasmShared` against the prebuilt batch context), write its `.wasm`, self-merge any
+-- | kept foreign provider, and emit the `.link.json` orchestrator sidecar (+ `.wat` on `--text`).
+-- | Shared by the one-shot `compile` and the `compile-batch` worker.
+codegenArtifact :: forall r. EmitEnv -> String -> M.Module -> Effect (Either String ModuleArtifact) -> Run (FS + PROC + LOG + EFFECT + r) Unit
+codegenArtifact env target finalMod lower =
+  liftEffect lower >>= case _ of
     Left err -> logAndThrow err
     Right art -> do
       wasmPath <- joinPath [ env.outDir, target <> ".wasm" ]
@@ -189,7 +220,7 @@ emitModule env m = do
           mergeForeignInto env.binaryenBinDir wasmPath target prov.wasm
           when prov.assembled (unlink prov.wasm)
         Nothing -> pure unit
-      info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: wasmPath })
+      when (not env.quiet) (info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: wasmPath }))
       -- The orchestrator-facing link metadata (ADR 0038 Phase C): the per-module facts the
       -- `purs-wasm` orchestrator needs to build the link glue, resolve foreigns, and internalise
       -- cross-module exports after `wasm-merge`. Kept out of the `.pmi` (which is the dependent-facing
@@ -205,16 +236,35 @@ emitModule env m = do
             -- CAF whose init calls a non-marshallable foreign must never be eagerly initialized).
             , Tuple "bindingRefs"
                 ( fromObject $ Object.fromFoldable
-                    (declRefMap m.finalMod <#> \(Tuple k refs) -> Tuple k (fromArray (map fromString refs)))
+                    (declRefMap finalMod <#> \(Tuple k refs) -> Tuple k (fromArray (map fromString refs)))
                 )
             ]
         )
       when env.text do
         watPath <- joinPath [ env.outDir, target <> ".wat" ]
         execFile (wasmDisBin env.binaryenBinDir) [ wasmPath, "-o", watPath, "--all-features" ]
-        info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: watPath })
-      info $ Log.strong (Log.green (Fmt.fmt @"✓ compiled {m}" { m: target }))
-      pure (depInterfaceOf iface)
+        when (not env.quiet) (info $ Log.blue (Fmt.fmt @"✓ Wrote {f}" { f: watPath }))
+      when (not env.quiet) (info $ Log.strong (Log.green (Fmt.fmt @"✓ compiled {m}" { m: target })))
+
+-- | The one-shot `compile` codegen tail: write the `.pmi`, then codegen the module against its
+-- | dependency interfaces (`compileModuleWasm`). The batch worker drives `writeModulePmi` +
+-- | `codegenArtifact` directly (with the shared lowering context) instead.
+emitModule :: forall r. EmitEnv -> ModuleArtifactInput -> Run (FS + PROC + LOG + EFFECT + r) DepInterface
+emitModule env m = do
+  di <- writeModulePmi env
+    { target: m.target
+    , externs: m.externs
+    , allSigs: m.allSigs
+    , foreignNameSet: m.foreignNameSet
+    , sourceHash: m.sourceHash
+    , finalMod: m.finalMod
+    , summary: m.summary
+    , deps: m.deps
+    , key: m.key
+    }
+  codegenArtifact env m.target m.finalMod
+    (compileModuleWasm env.opts m.allSigs m.foreignNameSet m.externs m.depInterfaces m.programEntry m.finalMod)
+  pure di
 
 -- | The codegen-facing dependency interface (`DepInterface`) projected from a `.pmi` entry or a
 -- | freshly-computed module interface (both share the field shape; `labels` is orchestrator-only).
