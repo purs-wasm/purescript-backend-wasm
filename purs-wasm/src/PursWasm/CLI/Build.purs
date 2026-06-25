@@ -194,7 +194,7 @@ compileBatchToStore
   -> Run (FS + PROC + LOG + EFFECT + r) (Array PlanEntry)
 compileBatchToStore cfg ordered = do
   mkdirP cfg.buildDir
-  purwcPath <- joinPath [ cfg.cliRoot, "purwc", "index.dev.js" ]
+  purwcPath <- joinPath [ cfg.cliRoot, "purwc", "index.js" ]
   let buildSet = Set.fromFoldable (map _.name ordered)
   let
     storeKeys = Array.foldl

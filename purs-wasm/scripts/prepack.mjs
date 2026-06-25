@@ -31,10 +31,10 @@ cpSync(join(repo, "LICENSE"), join(pkg, "LICENSE"));
 //    `.spago` first by building `bench` (its closure pulls wasm-base + the shadows' deps). `install`
 //    (re)builds the lib at <repo>/lib; copy it into the package so it ships in the tarball.
 run("spago", ["build", "-p", "bench", "--output", join(repo, "bench", "output")]);
-// `ulib-tooling`'s `index.dev.js` runs its compiled output, so build it to `output/` first (a clean
+// `ulib-tooling`'s `index.js` runs its compiled output, so build it to `output/` first (a clean
 // checkout has not compiled it).
 run("spago", ["build", "-p", "ulib-tooling"]);
-run("node", [join(repo, "ulib-tooling", "index.dev.js"), "install", "-f"]);
+run("node", [join(repo, "ulib-tooling", "index.js"), "install", "-f"]);
 const lib = join(pkg, "lib");
 rmSync(lib, { recursive: true, force: true });
 cpSync(join(repo, "lib"), lib, { recursive: true });

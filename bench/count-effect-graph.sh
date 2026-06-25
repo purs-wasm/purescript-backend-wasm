@@ -14,7 +14,7 @@ spago build -p bench --output bench/output
 purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es --int-tags
 # 3. our wasm backend, in its OWN output dir (see count-state-graph.sh: the shared `output-wasm` is
 # `Bench.Main`'s, and the comparison-tables CI step re-runs the .mjs without rebuilding)
-node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-count-effect -e CountEffect
+node ./purs-wasm/index.js build -I ./bench/output -O ./bench/output-wasm-count-effect -e CountEffect
 
 cd "$here"
 node count-effect.mjs

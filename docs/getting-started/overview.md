@@ -43,13 +43,13 @@ spago build -p purs-wasm   # compile the CLI
 
 # build + install the bundled ulib library the CLI links against
 spago build -p bench --output bench/output
-node ulib-tooling/index.dev.js install
+node ulib-tooling/index.js install
 ```
 
 The CLI then runs through its dev entry, which resolves `runtime/` and `lib/` from the repo root:
 
 ```sh
-node purs-wasm/index.dev.js build -e Main -I output -O output-wasm
+node purs-wasm/index.js build -e Main -I output -O output-wasm
 ```
 
 To produce an installable tarball identical to the npm release, run `cd purs-wasm && npm pack`

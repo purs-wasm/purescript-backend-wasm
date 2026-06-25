@@ -23,7 +23,7 @@ execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit
 const bundle = mkdtempSync(join(tmpdir(), "refcore-bundle-"));
 execFileSync(
   "node",
-  ["purs-wasm/index.dev.js", "build", "-e", "Examples.EffRef.Core", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.js", "build", "-e", "Examples.EffRef.Core", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 

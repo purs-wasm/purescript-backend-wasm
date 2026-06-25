@@ -25,7 +25,7 @@ The repository is a **monorepo** setup using pnpm and spago: `compiler`, `purs-w
 
 ## Running the dev CLI (`purs-wasm`)
 
-`purs-wasm` is the user-facing build CLI. In development you run it through its dev entry `purs-wasm/index.dev.js`, which resolves `runtime/` and `lib/` from the repo root (the published package resolves them from the package dir).
+`purs-wasm` is the user-facing build CLI. You run it through `purs-wasm/index.js` — a single entry that auto-detects its environment: in the monorepo it imports the spago output and resolves `runtime/` and `lib/` from the repo root; a published package imports the bundled CLI and resolves the assets from the package dir.
 
 One-time setup — compile the CLI and install the bundled `ulib` library it links against:
 
@@ -39,14 +39,14 @@ spago build -p ulib-tooling                     # compile the maintainer tool
 spago build
 
 # Then install ulib packages. 
-node ulib-tooling/index.dev.js install
+node ulib-tooling/index.js install
 ```
 
 Then build any project whose `purs` artifacts (`corefn.json` + `externs.cbor`) sit under an
 input directory:
 
 ```sh
-node purs-wasm/index.dev.js build -e Main -I output -O output-wasm
+node purs-wasm/index.js build -e Main -I output -O output-wasm
 ```
 
 Key flags (full list in [overview.md](../getting-started/overview.md#compiler-options)):
@@ -135,14 +135,14 @@ at build time (ADR [0031](../design-decisions/0031-ulib-unified-library-modules.
 
    ```sh
    spago build -p bench --output bench/output    # ensure .spago has the shadows' deps
-   node ulib-tooling/index.dev.js install         # -> lib/<Module>/{corefn.json,externs.cbor,foreign.wasm,foreign.wat}
+   node ulib-tooling/index.js install         # -> lib/<Module>/{corefn.json,externs.cbor,foreign.wasm,foreign.wat}
    #                                              add -f to force a clean rebuild
    ```
 
 4. **Verify the installed shadows match their public interface**:
 
    ```sh
-   node ulib-tooling/index.dev.js check
+   node ulib-tooling/index.js check
    ```
 
 A build reads `$PURS_WASM_LIB` (and `$PURS_WASM_LIB/ulib-manifest.json`) at link time, so re-run `install` after

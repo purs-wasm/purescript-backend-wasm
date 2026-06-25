@@ -111,11 +111,11 @@ for (const c of CORPUS) {
 
     sh("spago", ["build", "-p", c.pkg, "--output", corefn]);
     // oracle: whole-program per-module core → _build/<M>.{pmi,wasm} + merged index.wasm
-    sh("node", ["purs-wasm/index.dev.js", "build", "--per-module-codegen", "-e", c.entry, "-I", corefn, "-O", oracleOut, "--force"]);
+    sh("node", ["purs-wasm/index.js", "build", "--per-module-codegen", "-e", c.entry, "-I", corefn, "-O", oracleOut, "--force"]);
     // candidate A: compile each module in dep order; a dependent reads earlier modules' .pmi (--deps).
     // Only the entry is compiled with --entry (host-ABI bare exports); libraries export keys only.
     for (const m of c.modules) {
-      sh("node", ["purwc/index.dev.js", "compile", "-e", m, "-I", corefn, "--deps", purwcOut, "-O", purwcOut, ...(m === c.entry ? ["--entry"] : [])]);
+      sh("node", ["purwc/index.js", "compile", "-e", m, "-I", corefn, "--deps", purwcOut, "-O", purwcOut, ...(m === c.entry ? ["--entry"] : [])]);
     }
     // ensure the worker wrote NO .pmo
     const wrotePmo = c.modules.some((m) => existsSync(join(purwcOut, `${m}.pmo`)));
@@ -123,7 +123,7 @@ for (const c of CORPUS) {
     const mergeArgs = c.modules.flatMap((m) => [join(purwcOut, `${m}.wasm`), m]);
     sh(wasmMerge, [...mergeArgs, "-o", join(purwcOut, "merged.wasm"), "--all-features"]);
     // candidate B: the real Phase-C orchestrator (purs-wasm spawns purwc per module + links)
-    sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", c.entry, "-I", corefn, "-O", orchOut, "--force"]);
+    sh("node", ["purs-wasm/index.js", "build", "--orchestrate", "-e", c.entry, "-I", corefn, "-O", orchOut, "--force"]);
 
     // every module's `.pmi` must byte-match the oracle's (interface is dependent-independent);
     // the per-module `.wasm` byte match is reported but NOT required (over-export divergence).
@@ -171,8 +171,8 @@ try {
   const cf = tmp("ulibcf"), ora = tmp("ulibora"), orc = tmp("uliborc");
   tmps.push(cf, ora, orc);
   sh("spago", ["build", "-p", "examples-helloworld", "--output", cf]);
-  sh("node", ["purs-wasm/index.dev.js", "build", "-e", "Examples.HelloWorld.Main", "-I", cf, "-O", ora, "--force"]);
-  sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.HelloWorld.Main", "-I", cf, "-O", orc]);
+  sh("node", ["purs-wasm/index.js", "build", "-e", "Examples.HelloWorld.Main", "-I", cf, "-O", ora, "--force"]);
+  sh("node", ["purs-wasm/index.js", "build", "--orchestrate", "-e", "Examples.HelloWorld.Main", "-I", cf, "-O", orc]);
   const sA = await mainStdout(ora);
   const sB = await mainStdout(orc);
   const ok = sA === sB && sB.includes("Hello from WASM World") && !sB.includes("should not be printed");
@@ -194,8 +194,8 @@ try {
   const cf = tmp("intcf"), ora = tmp("intora"), orc = tmp("intorc");
   tmps.push(cf, ora, orc);
   sh("spago", ["build", "-p", "examples-intpatch", "--output", cf]);
-  sh("node", ["purs-wasm/index.dev.js", "build", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", ora, "--force"]);
-  sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc]);
+  sh("node", ["purs-wasm/index.js", "build", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", ora, "--force"]);
+  sh("node", ["purs-wasm/index.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc]);
   const sA = await mainStdout(ora);
   const sB = await mainStdout(orc);
   const ok = sA === sB && sB.includes("(Just 42)");
@@ -218,8 +218,8 @@ try {
   const cf = tmp("runcf"), ora = tmp("runora"), orc = tmp("runorc");
   tmps.push(cf, ora, orc);
   sh("spago", ["build", "-p", "examples-run", "--output", cf]);
-  sh("node", ["purs-wasm/index.dev.js", "build", "-e", "Examples.Run.Main", "-I", cf, "-O", ora, "--force"]);
-  sh("node", ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.Run.Main", "-I", cf, "-O", orc]);
+  sh("node", ["purs-wasm/index.js", "build", "-e", "Examples.Run.Main", "-I", cf, "-O", ora, "--force"]);
+  sh("node", ["purs-wasm/index.js", "build", "--orchestrate", "-e", "Examples.Run.Main", "-I", cf, "-O", orc]);
   const sA = await mainStdout(ora);
   const sB = await mainStdout(orc);
   const ok = sA === sB && sB.includes("famished");
@@ -242,7 +242,7 @@ try {
   tmps.push(cf, orc1, orc2, store);
   sh("spago", ["build", "-p", "examples-intpatch", "--output", cf]);
   const build = (out) => execFileSync("node",
-    ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", out, "--force"],
+    ["purs-wasm/index.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", out, "--force"],
     { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PURS_WASM_STORE: store } }).toString();
   build(orc1);
   const ran1 = (await mainStdout(orc1)).includes("(Just 42)");
@@ -281,11 +281,11 @@ try {
   tmps.push(cf, orc, store);
   sh("spago", ["build", "-p", "examples-intpatch", "--output", cf]);
   const env = { ...process.env, PURS_WASM_STORE: store };
-  execFileSync("node", ["purs-wasm/index.dev.js", "prewarm", "-I", cf], { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env });
+  execFileSync("node", ["purs-wasm/index.js", "prewarm", "-I", cf], { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env });
   const prewarmed = readdirSync(store).filter((f) => f.endsWith(".pmi")).length;
   const noManifest = !existsSync(join(store, "manifest.json"));
   const log = execFileSync("node",
-    ["purs-wasm/index.dev.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc, "--force"],
+    ["purs-wasm/index.js", "build", "--orchestrate", "-e", "Examples.IntPatch.Main", "-I", cf, "-O", orc, "--force"],
     { cwd: repo, stdio: ["ignore", "pipe", "pipe"], env }).toString();
   const hit = / \((\d+) from store\)/.exec(log);
   const compiled = /Compiling (\d+) module/.exec(log)?.[1];

@@ -18,7 +18,7 @@ purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es 
 done
 # 3. our wasm backend, in its OWN output dir (see count-state-graph.sh: the shared `output-wasm` is
 # `Bench.Main`'s, and the comparison-tables CI step re-runs the .mjs without rebuilding)
-node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-curry -e BenchCurry
+node ./purs-wasm/index.js build -I ./bench/output -O ./bench/output-wasm-curry -e BenchCurry
 
 cd "$here"
 node curry.mjs

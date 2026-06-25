@@ -24,7 +24,7 @@ execFileSync("spago", ["build", "-p", "examples-helloworld", "--output", compile
 const bundle = mkdtempSync(join(tmpdir(), "runstr-bundle-"));
 execFileSync(
   "node",
-  ["purs-wasm/index.dev.js", "build", "-e", "Examples.HelloWorld.StrEff", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.js", "build", "-e", "Examples.HelloWorld.StrEff", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 

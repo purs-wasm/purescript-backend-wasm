@@ -17,14 +17,14 @@ const fail = (m) => {
 };
 
 execFileSync("spago", ["build", "-p", "ulib-tooling"], { cwd: repo, stdio: "inherit" });
-execFileSync("node", ["ulib-tooling/index.dev.js", "install"], { cwd: repo, stdio: "inherit" });
+execFileSync("node", ["ulib-tooling/index.js", "install"], { cwd: repo, stdio: "inherit" });
 
 const compiled = mkdtempSync(join(tmpdir(), "intgen-out-"));
 execFileSync("spago", ["build", "-p", "examples-helloworld", "--output", compiled], { cwd: repo, stdio: "inherit" });
 const bundle = mkdtempSync(join(tmpdir(), "intgen-bundle-"));
 execFileSync(
   "node",
-  ["purs-wasm/index.dev.js", "build", "-e", "Examples.HelloWorld.IntGenericCheck", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.js", "build", "-e", "Examples.HelloWorld.IntGenericCheck", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 
