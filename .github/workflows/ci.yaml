@@ -38,12 +38,28 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    # The DEFAULT build is now orchestrate (ADR 0042): the compiler leg's e2e/bin tests build their
+    # fixtures through the `purwc` worker against this content-addressed store. Sharing it across the
+    # run means the library closure (Prelude, …) is compiled once and every later test program hits it.
+    env:
+      PURS_WASM_STORE: ${{ github.workspace }}/.purs-wasm-store
     strategy:
       matrix:
         target: [compiler, binaryen, purs-wasm, ulib-tooling]
     steps:
       # Setup Nix envirionment
       - uses: actions/checkout@v5
+      # Persist the store across runs so even the first test program hits a warm library closure. Keyed
+      # on the codegen-affecting sources (the compiler / cli-lib key logic / worker / lib) + the purs
+      # pin: any change to them re-fills a fresh store, so a stale artifact can never be served. No
+      # restore-keys — a partial/older store is a correctness risk, not just a slower build. Only the
+      # compiler leg builds wasm, so only it caches (avoids an empty-store leg racing to save the key).
+      - name: Cache purs-wasm store
+        if: matrix.target == 'compiler'
+        uses: actions/cache@v4
+        with:
+          path: .purs-wasm-store
+          key: ${{ runner.os }}-purs-wasm-store-${{ hashFiles('compiler/src/**', 'cli-lib/src/**', 'purwc/src/**', 'ulib/**', 'flake.lock', 'spago.lock') }}
       # v30 ships Nix >= 2.18, required by the pinned nixos-25.11 nixpkgs.
       - uses: cachix/install-nix-action@v30
         with:

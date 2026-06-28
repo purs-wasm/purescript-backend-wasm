@@ -22,6 +22,8 @@ importers:
 
   bench/output-wasm-curry: {}
 
+  bench/output-wasm-run: {}
+
   binaryen:
     dependencies:
       binaryen:

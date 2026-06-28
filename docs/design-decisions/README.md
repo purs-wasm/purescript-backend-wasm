@@ -89,7 +89,7 @@ language and are kept out of version control.)
 | 0039 | [ulib as a patch on registry packages, with content-based lenient versioning](0039-ulib-as-registry-package-patch.md) | Accepted — §1/§3/§4 implemented (foreign-only abolished, presence-driven resolution, lenient versioning; blocker ② fixed), §2 partial (full source-overlay deferred to 0040) |
 | 0040 | [A global content-addressed library cache (`$PURS_WASM_LIB`)](0040-global-content-addressed-library-cache.md) | Accepted — P1–P6 implemented (content-addressed store, own/library write-back partition, `.pmo` retired); §2 distribution model revised by 0041, build default by 0042; §4 "Layer C required" outdated (full-`.pmi` keying sound) |
 | 0041 | [Library artifacts ship pre-built; a build-time content-based compatibility gate](0041-prebuilt-library-artifacts-and-compatibility-gate.md) | Proposed (revises 0040 §2 / 0039 §3 — ship pre-built corefn not raw `.purs`, gate the patch on interface compat, drop `ulib install`) |
-| 0042 | [Orchestrate as the default build; retiring the whole-program path and its differential oracles](0042-orchestrate-default-and-oracle-retirement.md) | Proposed (orchestrate default, drop `--orchestrate`/`--per-module-rep`, trigger-based oracle retirement) |
+| 0042 | [Orchestrate as the default build; retiring the whole-program path and its differential oracles](0042-orchestrate-default-and-oracle-retirement.md) | Accepted (stage 1 done: orchestrate is default, `--orchestrate`/`--per-module-rep` removed, whole-program via `--legacy`; oracle retirement still trigger-based) |
 
 ## Scope
 

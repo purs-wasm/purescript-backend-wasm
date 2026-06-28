@@ -29,8 +29,10 @@ const entries = walk(srcDir).map(moduleOf).sort();
 // the build tooling the CLI needs: its own compile, the installed ulib lib, and the fixtures' corefn.
 // `purs-wasm` must be built explicitly — `ulib-tooling` no longer depends on it (the maintainer CLI was
 // decoupled from the orchestrator, ADR 0038), so building ulib-tooling alone leaves `PursWasm.CLI.Main`
-// (the `index.js` entry) uncompiled.
+// (the `index.js` entry) uncompiled. `purwc` too: the DEFAULT build is now orchestrate (ADR 0042),
+// which spawns the `purwc` worker as a subprocess — its `output/Purwc` entry must exist.
 run("spago", ["build", "-p", "purs-wasm"]);
+run("spago", ["build", "-p", "purwc"]);
 run("spago", ["build", "-p", "ulib-tooling"]);
 // `ulib install` compiles the shadows over `.spago/p` (incl. the resolved `wasm-base` package — it is
 // an extraPackage now, not a local dir); prime `.spago` by building `bench` (its closure pulls

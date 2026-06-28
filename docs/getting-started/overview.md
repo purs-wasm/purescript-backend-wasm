@@ -166,3 +166,8 @@ details.
 - `--dump-mir <Module>` — dump the module's middle IR at the optimizer's snapshot points
   (specialized input, per-module optimized, post-inline specialization) to
   `<output>/<Module>.mir.txt` (debugging).
+- `--legacy` — use the legacy whole-program build (compile every module in-process and link with
+  `finishLink`) instead of the default **orchestrate** build (the standalone `purwc` worker driven
+  as a subprocess against the content-addressed store `$PURS_WASM_STORE`, ADR 0042). The two are
+  behaviour-identical; orchestrate is the default and scales to large module counts, `--legacy` is
+  the simpler single-process path.

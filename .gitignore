@@ -3,6 +3,9 @@
 /output-es
 /output-wasm
 /output-purwc
+# ADR 0042/0040: the local content-addressed store the test suite / pre-push hook share via
+# $PURS_WASM_STORE (so the library closure compiles once across test programs).
+/.purs-wasm-store
 /dist
 # generated from runtime/runtime.wat by `npm run build:runtime` (chained into test:e2e)
 /runtime/runtime.wasm

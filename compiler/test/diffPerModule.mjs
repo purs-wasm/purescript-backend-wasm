@@ -115,7 +115,7 @@ for (const c of corpus) {
     const bundleB = tmp(`permod-${c.name}`);
     tmps.push(bundleA, bundleB);
     const baseArgs = (out) => ["purs-wasm/index.js", "build", "-e", c.entry, "-I", corefn, "-O", out, "--force"];
-    sh("node", baseArgs(bundleA)); // oracle: whole-program core
+    sh("node", [...baseArgs(bundleA), "--legacy"]); // oracle: whole-program core
     sh("node", [...baseArgs(bundleB), "--per-module-codegen"]); // candidate: per-module core
 
     const hashA = sha(join(bundleA, "index.wasm"));

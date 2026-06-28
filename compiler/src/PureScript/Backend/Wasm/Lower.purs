@@ -720,14 +720,12 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
 -- | `roots` modules are lowered (so a `Prelude` module's unused — and possibly
 -- | unsupported — instances are never visited); the roots' own functions are
 -- | exported, the rest are internal.
--- | `perModuleRep` (ADR 0037 ③) restricts the representation analysis to a per-module
--- | boundary: a function reached across a module boundary is pinned to the boxed ABI, so
--- | only intra-module signatures are unboxed. It does not change *what* is lowered (the
--- | build is still whole-program here) — it constrains the rep solver so the result matches
--- | what a separately-compiled per-module build would produce, for A/B measurement before
--- | the codegen split. `false` is the original whole-program rep analysis.
-lowerModules :: Boolean -> Boolean -> Object (Array Rep) -> Object ForeignImport -> Set String -> Array (Array String) -> Array Module -> Either LowerError Program
-lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modules = do
+-- | Lower a whole program (in-process): the rep solver runs over the whole module set, so
+-- | cross-module signatures are unboxed just like intra-module ones. (The per-module-rep A/B knob
+-- | — pinning cross-module-visible functions to the boxed ABI to mimic a separately-compiled build —
+-- | was retired with ADR 0042; the orchestrate `purwc` path now pins per module at its own boundary.)
+lowerModules :: Boolean -> Object (Array Rep) -> Object ForeignImport -> Set String -> Array (Array String) -> Array Module -> Either LowerError Program
+lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
   let
     dictCtors = collectDictCtors modules
     labelIds = collectLabels modules
@@ -750,22 +748,6 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
     rootKeys = Array.mapMaybe (\e -> if e.isRoot then Just e.key else Nothing) entries
     reachable = reachableFunctions functions rootKeys
     toLower = Array.filter (\e -> Object.member e.key reachable) entries
-    -- functions reached by a reference from a *different* module: in a per-module build
-    -- each is imported/exported with a fixed boxed ABI, so the rep solver must pin them
-    -- (ADR 0037 ③). Computed from the MIR refs; `Set.empty` keeps the whole-program rep.
-    keyModule = Object.fromFoldable (entries <#> \e -> Tuple e.key e.moduleName)
-    crossModulePins =
-      if perModuleRep then
-        Set.fromFoldable
-          ( toLower >>= \e ->
-              Array.mapMaybe
-                ( \ref -> case Object.lookup ref keyModule of
-                    Just refMod | refMod /= e.moduleName -> Just (FuncName ref)
-                    _ -> Nothing
-                )
-                (qualifiedRefs e.expr)
-          )
-      else Set.empty
   -- A hashed label id (ADR 0037 ④) is a pure function of the name, so two distinct
   -- labels can in principle collide — which would merge two record fields. Reject it
   -- here rather than emit a corrupt record. Cheap: it only groups the computed ids.
@@ -788,7 +770,7 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
       pure (Tuple ident sig)
   -- representation analysis (ADR 0013): unbox `Int`/`Number` where it avoids boxing
   pure
-    { funcs: if optimize then assignProgramReps crossModulePins allFuncs else allFuncs
+    { funcs: if optimize then assignProgramReps Set.empty allFuncs else allFuncs
     , labels: Object.toUnfoldable info.labelIds
     , exportSigs
     }
@@ -797,7 +779,7 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
 -- | functions (the single-module case of `lowerModules`). A single module has no
 -- | cross-module references, so `perModuleRep` is irrelevant here (passed `false`).
 lowerModule :: Boolean -> Module -> Either LowerError Program
-lowerModule optimize m = lowerModules false optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]
+lowerModule optimize m = lowerModules optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]
 
 -- | One module's lowered functions plus its export signatures, kept separate (NOT recombined) so
 -- | the per-module codegen (ADR 0037 Phase 2, Slice 2.2) can emit it to its own wasm.

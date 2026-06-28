@@ -85,7 +85,7 @@ batchCmd cliRoot binaryenBinDir args = do
         , wk: fromMaybe "" (Array.index cols 2)
         , library: Array.index cols 3 == Just "1"
         }
-  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt, perModuleRep: false }
+  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
   libPath <- resolveLibPath cliRoot Nothing
 
   -- The store-hit summaries: read each hit's `.pmi` straight from the store (`<store>/<pmiKey>.pmi`),

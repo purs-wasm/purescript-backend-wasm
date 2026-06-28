@@ -73,17 +73,15 @@ toolchainTag :: String
 toolchainTag = "corefn=" <> Str.joinWith "," supportedCorefn <> ";backend=" <> backendCacheVersion
 
 -- | The codegen-axis component of the `.wasm` / `.link.json` content-address (ADR 0040 §2 / P3): the
--- | axes that affect the *object* but not the `.pmi` — target platform, optimization on/off, and the
--- | per-module-rep flag — plus the backend version. Combined with the `.pmi` key (which already
--- | carries `toolchainTag`) it forms the object's store key, so two builds that differ only in
--- | platform/opt get distinct `.wasm` artifacts but can still share the platform-independent `.pmi`.
-codegenTag :: { platform :: String, optimize :: Boolean, perModuleRep :: Boolean } -> String
+-- | axes that affect the *object* but not the `.pmi` — target platform and optimization on/off — plus
+-- | the backend version. Combined with the `.pmi` key (which already carries `toolchainTag`) it forms
+-- | the object's store key, so two builds that differ only in platform/opt get distinct `.wasm`
+-- | artifacts but can still share the platform-independent `.pmi`.
+codegenTag :: { platform :: String, optimize :: Boolean } -> String
 codegenTag o =
   "platform=" <> o.platform
     <> ";opt="
     <> (if o.optimize then "1" else "0")
-    <> ";pmr="
-    <> (if o.perModuleRep then "1" else "0")
     <> ";backend="
     <> backendCacheVersion
 

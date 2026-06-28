@@ -20,6 +20,12 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
+# The DEFAULT build is now orchestrate (ADR 0042): the compiler test suite builds its fixtures through
+# the `purwc` worker against `$PURS_WASM_STORE`. Point it at a persistent repo-local store so the
+# library closure (Prelude, …) is compiled once and reused across test programs (and across pushes),
+# instead of a cold orchestrate per program. Respects an externally-set store.
+export PURS_WASM_STORE="${PURS_WASM_STORE:-$PWD/.purs-wasm-store}"
+
 for target in compiler binaryen; do
   echo "[pre-push] $target: compile → test → check"
   pnpm -F "$target" run compile

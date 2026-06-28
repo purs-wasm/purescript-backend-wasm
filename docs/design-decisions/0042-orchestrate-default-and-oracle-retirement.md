@@ -1,7 +1,18 @@
 # 0042. Orchestrate as the default build; retiring the whole-program path and its differential oracles
 
-- Status: Proposed
-- Date: 2026-06-24
+- Status: Accepted
+- Date: 2026-06-24 (accepted & implemented 2026-06-29)
+
+> **Update (2026-06-29) — accepted & implemented (stage 1).** Orchestrate is now the DEFAULT build.
+> Changes landed: `--orchestrate` removed (always on); `--per-module-rep` removed entirely (the
+> per-module-rep A/B knob — its `perModuleRep` axis is gone from `CompileOptions`, `lowerModules`, and
+> the `codegenTag` store key). **Deviation from the original decision:** rather than make the
+> whole-program path internal-only, a user-facing **`--legacy`** flag selects it (in-process
+> `finishLink`) — the orchestrate-vs-legacy choice stays in users' hands. `--per-module-codegen`
+> remains as the per-module **oracle** entry (still drives `diffPerModule`/`diffPurwc`). The
+> behavioural suites (`compiler` `test:e2e` + `test:bin`) + `bench` now build through the orchestrate
+> path, sharing a `$PURS_WASM_STORE` (CI caches it across runs); this is the precondition the oracle
+> retirement (decision §4) waits on. Oracles are NOT yet retired.
 
 > Builds on [ADR 0037](0037-separate-per-module-codegen-and-linking.md) (per-module codegen) and
 > [ADR 0038](0038-separated-compilation-purwc-worker-and-cli-lib.md) (the `purwc` worker + orchestrator),
@@ -32,7 +43,7 @@ path survives only as an internal oracle until it has earned retirement.
 
 | Intended | Current | Status |
 | --- | --- | --- |
-| orchestrate is the default; `--orchestrate` / `--per-module-rep` removed; `--per-module-codegen` not user-facing | orchestrate opt-in; all three flags present; whole-program is the default | not done |
+| orchestrate is the default; `--orchestrate` / `--per-module-rep` removed; `--per-module-codegen` not user-facing | orchestrate is the default; `--orchestrate` removed, `--per-module-rep` removed; whole-program is opt-in via `--legacy`; `--per-module-codegen` kept as the oracle entry | done (stage 1; see the 2026-06-29 note) |
 
 ## Decision
 

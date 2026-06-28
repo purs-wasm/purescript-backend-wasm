@@ -187,7 +187,6 @@ compileBatchToStore
      , debug :: Boolean
      , noOpt :: Boolean
      , platform :: String
-     , perModuleRep :: Boolean
      , entryNames :: Set.Set String
      }
   -> Array { name :: String, imports :: Array String, sourceHash :: String, library :: Boolean | b }
@@ -206,7 +205,7 @@ compileBatchToStore cfg ordered = do
       )
       Map.empty
       ordered
-  let ct = codegenTag { platform: cfg.platform, optimize: not cfg.debug, perModuleRep: cfg.perModuleRep }
+  let ct = codegenTag { platform: cfg.platform, optimize: not cfg.debug }
   plan <- for ordered \m -> do
     watTxt <- readText =<< joinPath [ cfg.purwcInput, m.name, "foreign.wat" ]
     let sk = fromMaybe m.sourceHash (Map.lookup m.name storeKeys)
@@ -328,7 +327,6 @@ prewarmCmd cliRoot input = do
         -- Match a default `purs-wasm build`'s codegen axes (`show args.platform` → `Node`), so the
         -- `.wasm` keys agree and a default node build hits the prewarmed objects.
         , platform: show Node
-        , perModuleRep: false
         , entryNames: Set.empty
         }
         (topoBySrcImports srcInfos)
@@ -363,7 +361,6 @@ orchestrateModules cliRoot purwcInput args buildDir storeDir srcInfos = do
     , debug: args.debug
     , noOpt: args.noOpt
     , platform: show args.platform
-    , perModuleRep: args.perModuleRep
     , entryNames
     }
     ordered
@@ -565,10 +562,6 @@ buildCmd cliRoot binaryenBinDir args = do
         , extra: if Array.null injected then "" else Fmt.fmt @" (+{k} ulib internal)" { k: Array.length injected }
         }
     )
-  -- ADR 0038 Phase C: the subprocess orchestrator stages every module's corefn into one `-I` for the
-  -- worker (incl. ulib-shadowed modules, whose corefn is in the lib). It has no in-process optimized
-  -- MIR, so `--dump-mir` is unsupported.
-  when (args.orchestrate && isJust args.dumpMir) (logAndThrow "--orchestrate does not support --dump-mir.")
   -- Materialize the plan (ADR 0039): a `libSourced` module's corefn comes from the lib (it is a
   -- reimpl patch or an injected helper — both guaranteed to have a lib corefn now that wat-only
   -- patches are never lib-sourced). Every other reached module's corefn comes from the user output
@@ -621,7 +614,12 @@ buildCmd cliRoot binaryenBinDir args = do
         , MEffect _ <- s.result -> pure unit
       Just _ -> logAndThrow "--executable requires the entry module's `main` to have type `Effect Unit`."
       Nothing -> logAndThrow "--executable: no `main` export found in the entry module(s)."
-  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt, perModuleRep: args.perModuleRep }
+  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
+  -- The DEFAULT build is orchestrate (ADR 0042): the standalone `purwc` worker driven as a subprocess
+  -- against the content-addressed store. `--legacy` selects the in-process whole-program `finishLink`;
+  -- `--per-module-codegen` (the per-module oracle) and `--dump-mir` (needs the whole-program decode)
+  -- also run in-process, so they opt out of orchestrate too.
+  let isOrchestrate = not (args.legacy || args.perModuleCodegen || isJust args.dumpMir)
   -- One bundle per build, written flat under `--output` (no per-module subdir): the build emits a
   -- single linked wasm + optional loader, not per-module artifacts (ADR 0009), so a module-named
   -- directory would be misleading.
@@ -688,11 +686,11 @@ buildCmd cliRoot binaryenBinDir args = do
         built <- liftEffect (finishLink opts roots allSigs foreignNames externs modules cacheWrites)
         pure (map wholeLinked built)
   stageDir <- joinPath [ cacheDir, "stage" ]
-  when args.orchestrate (stageOrchestrateInput stageDir args.input libPath allModNames srcInfos)
+  when isOrchestrate (stageOrchestrateInput stageDir args.input libPath allModNames srcInfos)
   -- ADR 0040 P3: the global content-addressed store (`$PURS_WASM_STORE`); `Nothing` disables it.
   storeDir <- storeRoot
   linkResult <-
-    if args.orchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir srcInfos
+    if isOrchestrate then orchestrateModules cliRoot stageDir args cacheDir storeDir srcInfos
     else case args.dumpMir of
       -- `--dump-mir` (whole-program debug): decode everything and write the optimizer's MIR trace
       -- straight from memory — no per-module codegen, no on-disk cache (ADR 0040 retires `.pmo`).
@@ -834,7 +832,7 @@ buildCmd cliRoot binaryenBinDir args = do
       -- `wasm-merge`; the oracle never exported dependency-module functions) and run a cheap DCE pass
       -- (`remove-unused-module-elements`) to drop the now-unreachable, matching the oracle's surface.
       -- The whole-program path already optimised before merge, so this is per-module only.
-      when ((args.perModuleCodegen || args.orchestrate) && opts.optimize) do
+      when ((args.perModuleCodegen || isOrchestrate) && opts.optimize) do
         info (Log.blue "Internalizing cross-module exports + DCE…")
         readBinary wasmPath >>= case _ of
           Nothing -> logAndThrow ("merged wasm not found: " <> wasmPath)

@@ -70,7 +70,7 @@ compileCmd cliRoot binaryenBinDir args = do
   let target = args.entryModule
   let mn = entryRoot target
   info $ Log.strong (Log.cyan (Fmt.fmt @"purwc — compiling {m}" { m: target }))
-  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt, perModuleRep: false }
+  let opts = { optimize: not args.debug, optimizeMir: not args.noOpt }
 
   -- The target's CoreFn (decoded for the full optimize/codegen) + cheap metadata (source hash for
   -- the cache key, the bare foreign-import names for lowering's qualified foreign set).
