@@ -67,6 +67,10 @@ module Binaryen
   , globalSet
   , optimize
   , runPasses
+  , setOptimizeLevel
+  , setShrinkLevel
+  , getOptimizeLevel
+  , getShrinkLevel
   , validate
   , emitText
   , emitBinary
@@ -590,6 +594,26 @@ foreign import runPassesImpl :: Module -> Array String -> Effect Unit
 -- | `remove-unused-module-elements` to DCE internalised exports cheaply (ADR 0037 Phase 3).
 runPasses :: Module -> Array String -> Effect Unit
 runPasses = runPassesImpl
+
+foreign import setOptimizeLevelImpl :: Int -> Effect Unit
+foreign import setShrinkLevelImpl :: Int -> Effect Unit
+foreign import getOptimizeLevelImpl :: Effect Int
+foreign import getShrinkLevelImpl :: Effect Int
+
+-- | The global optimize / shrink levels Binaryen's `optimize` (and pass pipeline) reads. `-O3` is
+-- | optimize level 3, shrink level 0; the defaults are 2 / 1. Global to the Binaryen instance, so a
+-- | caller that changes them for one `optimize` should restore them after (see `getOptimizeLevel`).
+setOptimizeLevel :: Int -> Effect Unit
+setOptimizeLevel = setOptimizeLevelImpl
+
+setShrinkLevel :: Int -> Effect Unit
+setShrinkLevel = setShrinkLevelImpl
+
+getOptimizeLevel :: Effect Int
+getOptimizeLevel = getOptimizeLevelImpl
+
+getShrinkLevel :: Effect Int
+getShrinkLevel = getShrinkLevelImpl
 
 foreign import validateImpl :: Module -> Effect Boolean
 

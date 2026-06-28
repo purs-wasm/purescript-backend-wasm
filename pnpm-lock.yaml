@@ -78,6 +78,8 @@ importers:
 
   compiler/test/e2e-build/E2E.Guards: {}
 
+  compiler/test/e2e-build/E2E.IntConv: {}
+
   compiler/test/e2e-build/E2E.LinkB: {}
 
   compiler/test/e2e-build/E2E.Literals: {}
@@ -87,6 +89,8 @@ importers:
   compiler/test/e2e-build/E2E.Mon: {}
 
   compiler/test/e2e-build/E2E.NestedRecordPat: {}
+
+  compiler/test/e2e-build/E2E.Num: {}
 
   compiler/test/e2e-build/E2E.PerformUserEffect: {}
 

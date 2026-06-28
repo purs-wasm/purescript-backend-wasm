@@ -13,6 +13,18 @@
 > behavioural suites (`compiler` `test:e2e` + `test:bin`) + `bench` now build through the orchestrate
 > path, sharing a `$PURS_WASM_STORE` (CI caches it across runs); this is the precondition the oracle
 > retirement (decision §4) waits on. Oracles are NOT yet retired.
+>
+> **Self-containment (§5 link-time optimization, first cut).** Making orchestrate default surfaced that
+> its merged wasm was not self-contained: the worker over-exports every module's bindings, so the merge
+> drags in dead cross-module instance code (typeclass dictionaries whose closures `call` foreign
+> impls), which the cheap post-merge `remove-unused-module-elements` could not drop — it stayed
+> statically reachable through the closure/dict indirection, leaving live JS-foreign imports (a
+> standalone build then has unresolved imports; the whole-program path eliminates this code at the MIR
+> optimizer before codegen). Fixed by running a full **`-O3`** on the merged module instead (its
+> inlining collapses the indirection and proves the code dead). Measured on metatheory (131 modules):
+> the `-O3` itself adds ~1.5 s and shrinks the wasm 183 KB → 105 KB (closer to legacy's 90 KB); the
+> orchestrate-vs-legacy wall-clock gap that remains (≈11 s vs 4 s) is the merge/load/subprocess
+> overhead, the real §5 frontier, NOT the `-O3`.
 
 > Builds on [ADR 0037](0037-separate-per-module-codegen-and-linking.md) (per-module codegen) and
 > [ADR 0038](0038-separated-compilation-purwc-worker-and-cli-lib.md) (the `purwc` worker + orchestrator),

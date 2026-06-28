@@ -826,14 +826,18 @@ buildCmd cliRoot binaryenBinDir args = do
       execFile (wasmMergeBin binaryenBinDir) (appMerges <> [ runtimeWasm cliRoot, "rt" ] <> mergeForeigns <> [ "-o", wasmPath, "--all-features" ])
       for_ l.cleanup unlink
       for_ providers \p -> when p.assembled (maybe (pure unit) unlink p.wasm)
-      -- Each per-module wasm is already optimised independently (ADR 0037 Phase 3 — verified to keep
-      -- GC types canonical under merge), so the merged wasm needs no whole-program re-optimise. Post
-      -- merge, internalise the cross-module function exports (now resolved — they only existed for
-      -- `wasm-merge`; the oracle never exported dependency-module functions) and run a cheap DCE pass
-      -- (`remove-unused-module-elements`) to drop the now-unreachable, matching the oracle's surface.
-      -- The whole-program path already optimised before merge, so this is per-module only.
+      -- Post merge, internalise the cross-module function exports (now resolved — they only existed
+      -- for `wasm-merge`; the oracle never exported dependency-module functions) and re-optimise the
+      -- whole merged module. The orchestrate worker over-exports every module's bindings (it can't see
+      -- which dependents use what), so the merge drags in dead cross-module instance code — typeclass
+      -- dictionaries whose closures `call` foreign impls. A cheap DCE (`remove-unused-module-elements`)
+      -- leaves that code (and its JS foreign imports) statically reachable through the closure/dict
+      -- indirection; only the full `-O3` pipeline's inlining collapses the indirection and proves it
+      -- dead, matching the whole-program path's self-contained wasm (ADR 0042 §5 — link-time
+      -- optimization is the orchestrate perf frontier). The per-module wasms are each already optimised
+      -- (ADR 0037 Phase 3 — GC types verified canonical under merge); this is the whole-program pass.
       when ((args.perModuleCodegen || isOrchestrate) && opts.optimize) do
-        info (Log.blue "Internalizing cross-module exports + DCE…")
+        info (Log.blue "Internalizing cross-module exports + optimizing…")
         readBinary wasmPath >>= case _ of
           Nothing -> logAndThrow ("merged wasm not found: " <> wasmPath)
           Just merged -> do
@@ -843,7 +847,15 @@ buildCmd cliRoot binaryenBinDir args = do
               -- GC before emitting or the GC type/supertype encoding is written invalid.
               B.setFeaturesGC mod
               for_ l.crossModuleExports (B.removeExport mod)
-              B.runPasses mod [ "remove-unused-module-elements" ]
+              -- `-O3` (optimize level 3 / shrink 0). Restore the global levels after — they are global
+              -- to the Binaryen instance, and a later in-process build must see the defaults.
+              o0 <- B.getOptimizeLevel
+              s0 <- B.getShrinkLevel
+              B.setOptimizeLevel 3
+              B.setShrinkLevel 0
+              B.optimize mod
+              B.setOptimizeLevel o0
+              B.setShrinkLevel s0
               out <- B.emitBinary mod
               B.dispose mod
               pure out
