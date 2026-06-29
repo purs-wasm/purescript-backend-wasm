@@ -38,6 +38,10 @@ _draft
 # purs-wasm npm bundle build artifacts
 purs-wasm/bundle/
 purs-wasm/.build/
+purs-wasm/_build/
+purs-wasm/_build-purwc/
+# the bundled `purwc` worker prepack ships inside the package (NOT the top-level `purwc/` workspace)
+purs-wasm/purwc/
 purs-wasm/runtime/
 purs-wasm/lib/
 purs-wasm/*.tgz

@@ -14,6 +14,14 @@ const run = (cmd, args) => execFileSync(cmd, args, { stdio: "inherit", cwd: repo
 // 1. The CLI bundle (bundle/index.js).
 run("node", [join(pkg, "scripts", "bundle.mjs")]);
 
+// 1b. The `purwc` worker — the DEFAULT build mode is orchestrate (ADR 0042), which spawns
+//     `<pkg>/purwc/index.js` per build, so ship the worker inside the package: its bundle
+//     (`purwc/bundle/index.js`) + the loader (`purwc/index.js`, whose `cliRoot` = `<pkg>` so it
+//     resolves `<pkg>/lib`). `files` includes `purwc/`. Without this the published default build
+//     fails with "Cannot find module …/purwc/index.js".
+run("node", [join(pkg, "scripts", "bundle-purwc.mjs")]);
+cpSync(join(repo, "purwc", "index.js"), join(pkg, "purwc", "index.js"));
+
 // 2. Runtime assets -> <pkg>/runtime. Assemble `runtime.wasm` from `runtime.wat` first — it is a
 //    git-ignored build artifact, so a clean checkout (CI) has only the `.wat`.
 const wasmAs = join(repo, "binaryen", "node_modules", "binaryen", "bin", "wasm-as");
