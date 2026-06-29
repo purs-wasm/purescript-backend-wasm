@@ -76,6 +76,7 @@ module Binaryen
   , emitBinary
   , readBinary
   , removeExport
+  , removeExports
   -- Wasm GC
   , HeapType
   , TypeBuilder
@@ -641,6 +642,13 @@ readBinary :: Uint8Array -> Effect Module
 readBinary = readBinaryImpl
 
 foreign import removeExportImpl :: Module -> String -> Effect Unit
+
+-- | Remove many exports in one flat JS loop — stack-safe over the thousands of cross-module exports an
+-- | orchestrate self-host build produces (a PureScript `for_ … removeExport` overflows the stack).
+foreign import removeExportsImpl :: Module -> Array String -> Effect Unit
+
+removeExports :: Module -> Array String -> Effect Unit
+removeExports = removeExportsImpl
 
 -- | Remove an export by its external name (internalise it). After `wasm-merge` resolves a
 -- | cross-module function export, removing it lets the optimiser DCE the function if now unused.

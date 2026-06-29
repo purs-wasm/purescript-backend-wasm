@@ -846,7 +846,7 @@ buildCmd cliRoot binaryenBinDir args = do
               -- `readBinary` defaults to MVP features; the merged module is wasm-GC, so re-enable
               -- GC before emitting or the GC type/supertype encoding is written invalid.
               B.setFeaturesGC mod
-              for_ l.crossModuleExports (B.removeExport mod)
+              B.removeExports mod l.crossModuleExports
               -- `-O3` (optimize level 3 / shrink 0). Restore the global levels after — they are global
               -- to the Binaryen instance, and a later in-process build must see the defaults.
               o0 <- B.getOptimizeLevel

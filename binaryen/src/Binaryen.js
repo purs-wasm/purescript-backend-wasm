@@ -298,6 +298,13 @@ export const addFunctionExportImpl =
 // cross-module function export, so the now-redundant export no longer pins the function (ADR 0037).
 export const removeExportImpl = (mod) => (externalName) => () => mod.removeExport(externalName);
 
+// Remove many exports in one flat JS loop. The orchestrate path over-exports every module's bindings
+// (thousands for a self-host build), so a PureScript `for_ … removeExport` builds an Effect bind chain
+// thousands deep and overflows the stack; the loop belongs in JS.
+export const removeExportsImpl = (mod) => (names) => () => {
+  for (let i = 0; i < names.length; i++) mod.removeExport(names[i]);
+};
+
 // Set the module's start function (run automatically at instantiation).
 export const setStartImpl = (mod) => (fn) => () => mod.setStart(fn);
 

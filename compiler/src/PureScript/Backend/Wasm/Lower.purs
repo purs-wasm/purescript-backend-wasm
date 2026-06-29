@@ -999,17 +999,26 @@ buildSharedInfo :: Array DepInterface -> SharedLowerInfo
 buildSharedInfo ifaces =
   { info:
       { knownFuncs
-      , ctors: foldl (\acc d -> Object.union acc d.ctors) Object.empty ifaces
-      , dictCtors: foldl (\acc d -> Object.union acc d.dictCtors) Object.empty ifaces
-      , enumCtors: foldl (\acc d -> Object.union acc d.enumCtors) Object.empty ifaces
+      , ctors: unionAll (map _.ctors ifaces)
+      , dictCtors: unionAll (map _.dictCtors ifaces)
+      , enumCtors: unionAll (map _.enumCtors ifaces)
       , labelIds: Object.empty
-      , foreignSigs: foldl (\acc d -> Object.union acc d.foreignSigs) Object.empty ifaces
+      , foreignSigs: unionAll (map _.foreignSigs ifaces)
       , foreignNames: foldl (\acc d -> Set.union acc (Set.fromFoldable d.foreignNames)) Set.empty ifaces
       }
   , keyHomeModule: Object.fromFoldable (map (\k -> Tuple k (homeModuleOfKey k)) (Object.keys knownFuncs))
   }
   where
-  knownFuncs = foldl (\acc d -> Object.union acc d.funcs) Object.empty ifaces
+  knownFuncs = unionAll (map _.funcs ifaces)
+
+-- | Merge many objects into one, STACK-SAFELY. `Foreign.Object.union acc x` folds *acc* with `foldM`
+-- | in `ST` (whose bind is not stack-safe), so a `foldl union` over the whole program grows the folded
+-- | accumulator until a large input (self-host: thousands of bindings) overflows the stack mid-build.
+-- | `fromFoldable` instead drives `ST.foreach` (a flat JS loop), so flattening every object's entries
+-- | through it stays O(1) in stack depth. Keys are unique qualified names here, so last-wins
+-- | (`fromFoldable`) and first-wins (`union`) coincide.
+unionAll :: forall a. Array (Object a) -> Object a
+unionAll objs = Object.fromFoldable (objs >>= (Object.toUnfoldable :: Object a -> Array (Tuple String a)))
 
 -- | The defining (home) module of a qualified key `Module.ident` — the prefix before the last dot.
 homeModuleOfKey :: String -> String
