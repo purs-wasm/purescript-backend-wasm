@@ -81,10 +81,19 @@ jobs:
           printf 'export const version = "v%s"\n' "${{ steps.ver.outputs.version }}" > src/PursWasm/CLI/Version.js
 
       # `ignore-scripts` (above) also suppresses `prepack` on `npm publish`, so assemble the package
-      # — bundle/ + runtime/ + lib/ — with an explicit `npm run`, which is not suppressed.
+      # — bundle/ + purwc/ + runtime/ + lib/ — with an explicit `npm run`, which is not suppressed.
       - name: Assemble package
         working-directory: purs-wasm
         run: npm run prepack
+
+      # Smoke-test the ASSEMBLED package before publishing: install the tarball into a throwaway
+      # project and run a real DEFAULT (orchestrate) build. The unit `test` above never invokes
+      # `build`, so it cannot catch a runtime asset (purwc / lib / runtime) missing from the package —
+      # this step does (it would have caught the published default build failing with "Cannot find
+      # module …/purwc/index.js" when orchestrate became the default, ADR 0042).
+      - name: Smoke build (published package)
+        working-directory: purs-wasm
+        run: node scripts/smoke.mjs
 
       # `--tag nightly` keeps the stable `latest` tag in place; OIDC trusted publishing needs no token.
       - name: Publish nightly
