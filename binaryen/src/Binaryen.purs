@@ -67,11 +67,16 @@ module Binaryen
   , globalSet
   , optimize
   , runPasses
+  , setOptimizeLevel
+  , setShrinkLevel
+  , getOptimizeLevel
+  , getShrinkLevel
   , validate
   , emitText
   , emitBinary
   , readBinary
   , removeExport
+  , removeExports
   -- Wasm GC
   , HeapType
   , TypeBuilder
@@ -591,6 +596,26 @@ foreign import runPassesImpl :: Module -> Array String -> Effect Unit
 runPasses :: Module -> Array String -> Effect Unit
 runPasses = runPassesImpl
 
+foreign import setOptimizeLevelImpl :: Int -> Effect Unit
+foreign import setShrinkLevelImpl :: Int -> Effect Unit
+foreign import getOptimizeLevelImpl :: Effect Int
+foreign import getShrinkLevelImpl :: Effect Int
+
+-- | The global optimize / shrink levels Binaryen's `optimize` (and pass pipeline) reads. `-O3` is
+-- | optimize level 3, shrink level 0; the defaults are 2 / 1. Global to the Binaryen instance, so a
+-- | caller that changes them for one `optimize` should restore them after (see `getOptimizeLevel`).
+setOptimizeLevel :: Int -> Effect Unit
+setOptimizeLevel = setOptimizeLevelImpl
+
+setShrinkLevel :: Int -> Effect Unit
+setShrinkLevel = setShrinkLevelImpl
+
+getOptimizeLevel :: Effect Int
+getOptimizeLevel = getOptimizeLevelImpl
+
+getShrinkLevel :: Effect Int
+getShrinkLevel = getShrinkLevelImpl
+
 foreign import validateImpl :: Module -> Effect Boolean
 
 -- | Validate the module; `true` means it is well-formed.
@@ -617,6 +642,13 @@ readBinary :: Uint8Array -> Effect Module
 readBinary = readBinaryImpl
 
 foreign import removeExportImpl :: Module -> String -> Effect Unit
+
+-- | Remove many exports in one flat JS loop — stack-safe over the thousands of cross-module exports an
+-- | orchestrate self-host build produces (a PureScript `for_ … removeExport` overflows the stack).
+foreign import removeExportsImpl :: Module -> Array String -> Effect Unit
+
+removeExports :: Module -> Array String -> Effect Unit
+removeExports = removeExportsImpl
 
 -- | Remove an export by its external name (internalise it). After `wasm-merge` resolves a
 -- | cross-module function export, removing it lets the optimiser DCE the function if now unused.

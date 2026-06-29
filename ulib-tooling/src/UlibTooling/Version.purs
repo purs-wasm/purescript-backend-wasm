@@ -1,7 +1,8 @@
--- | Version helpers shared by the ulib shadow resolution (`PursWasm.CLI.Ulib.Shadow`) and the
--- | ulib commands (`PursWasm.CLI.Ulib`). Pure string surgery (ADR 0028).
+-- | Version helpers shared by the ulib shadow resolution (`PureScript.Backend.Wasm.CLI.Ulib.Shadow`) and the
+-- | ulib commands (`PureScript.Backend.Wasm.CLI.Ulib`). Pure string surgery (ADR 0028).
 module UlibTooling.Version
-  ( splitPkgVer
+  ( versionString
+  , splitPkgVer
   , majorMinor
   , pkgVersionFromPath
   , compareVersion
@@ -14,6 +15,14 @@ import Data.Int as Int
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String (Pattern(..))
 import Data.String as Str
+import Fmt as Fmt
+import Spago.Generated.BuildInfo (pursVersion)
+
+-- | The `--version` banner for the maintainer CLI. `ulib-tooling` is a private, unversioned tool, so
+-- | this reports only the purs CoreFn it is compatible with (the user-facing `purs-wasm` binary
+-- | carries its own semantic version in `PursWasm.CLI.Version`).
+versionString :: String
+versionString = Fmt.fmt @"ulib-tooling (compat with purs={pursVersion})" { pursVersion }
 
 -- | Split a `<package>-<version>` directory name on its last `-` (versions carry no `-`, but a
 -- | package name may: `foldable-traversable-6.0.0` → package `foldable-traversable`, ver `6.0.0`).

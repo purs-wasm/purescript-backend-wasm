@@ -15,7 +15,7 @@ purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es 
 # `Bench.Main`): every bench builds a different entry, and the comparison-tables CI step re-runs the
 # .mjs without rebuilding — a shared dir would leave whichever bench built last, so count-state.mjs
 # would read the wrong wasm (no `countTo` export → "wasmCheck is not a function").
-node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-count-state -e CountState
+node ./purs-wasm/index.js build -I ./bench/output -O ./bench/output-wasm-count-state -e CountState
 
 cd "$here"
 node count-state.mjs

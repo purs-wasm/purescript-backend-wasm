@@ -1,6 +1,6 @@
 # 0033. Shipping `ulib` as precompiled MIR (`.pmo`) artifacts
 
-- Status: Proposed _(sequenced after [ADR 0032](0032-caller-homed-specialization-for-incremental-builds.md) phase 4 — it builds on the cache codec and layer)_
+- Status: ~~Proposed~~ **Superseded by [0040](0040-global-content-addressed-library-cache.md)** _(2026-06-20: generalized from "ship ulib's `.pmo`" to a global content-addressed cache of the whole library closure's `.pmi`/`.wasm`/`.link.json`; `.pmo` itself is retired now the `.pmi` summary + `.wasm` object are the real artifacts.)_
 - Date: 2026-06-15
 
 > **Note (2026-06-15):** Phase 4 shipped as a **`.pmi` interface + `.pmo` object** pair

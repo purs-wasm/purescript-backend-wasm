@@ -24,7 +24,7 @@ const fail = (msg) => {
 execFileSync("spago", ["build", "-p", "purs-wasm"], { cwd: repo, stdio: "inherit" });
 
 const bundle = mkdtempSync(join(tmpdir(), "sf-bundle-"));
-execFileSync("node", ["purs-wasm/index.dev.js", "build", "-e", "Priv", "-I", input, "-O", bundle], {
+execFileSync("node", ["purs-wasm/index.js", "build", "-e", "Priv", "-I", input, "-O", bundle], {
   cwd: repo,
   stdio: "inherit",
 });
@@ -44,7 +44,7 @@ cpSync(join(repo, input), fbInput, { recursive: true });
 rmSync(join(fbInput, "cache-db.json"), { force: true });
 const fbBundle = mkdtempSync(join(tmpdir(), "sf-fb-bundle-"));
 try {
-  execFileSync("node", ["purs-wasm/index.dev.js", "build", "-e", "Priv", "-I", fbInput, "-O", fbBundle], {
+  execFileSync("node", ["purs-wasm/index.js", "build", "-e", "Priv", "-I", fbInput, "-O", fbBundle], {
     cwd: repo,
     stdio: "pipe",
   });

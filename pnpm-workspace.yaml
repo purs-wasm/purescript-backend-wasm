@@ -1,7 +1,9 @@
 packages:
   - "./binaryen/**"
   - "./compiler/**"
+  - "./cli-lib/**"
   - "./purs-wasm/**"
+  - "./purwc/**"
   - "./ulib-tooling/**"
   - "./bench/**"
   - "./examples/**"

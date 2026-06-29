@@ -3,8 +3,8 @@
 -- | 0031 §5).
 module PursWasm.CLI.Options.Types
   ( BuildOption
+  , PrewarmOption
   , Command(..)
-  , GlobalOptions
   , Platform(..)
   ) where
 
@@ -14,7 +14,7 @@ import Data.Generic.Rep (class Generic)
 import Data.List.NonEmpty (NonEmptyList)
 import Data.Maybe (Maybe)
 import Data.Show.Generic (genericShow)
-import PursWasm.CLI.Effect.Filesystem (FilePath)
+import PureScript.Backend.Wasm.CLI.Effect.Filesystem (FilePath)
 
 -- | The deployment target a build produces (`-p/--platform`). `Node` and `Browser` emit a single
 -- | wasm plus a JS loader; `Standalone` emits a self-contained single wasm with no loader. (Browser
@@ -29,10 +29,6 @@ derive instance genericPlatform :: Generic Platform _
 instance showPlatform :: Show Platform where
   show = genericShow
 
--- | Options every command accepts, parsed once and threaded to the interpreter — not part of any
--- | command's own option record.
-type GlobalOptions = { verbose :: Boolean }
-
 type BuildOption =
   { input :: FilePath
   , outDir :: FilePath
@@ -45,9 +41,12 @@ type BuildOption =
   , noJsFallback :: Boolean
   , executable :: Boolean
   , force :: Boolean
-  , perModuleRep :: Boolean
   , perModuleCodegen :: Boolean
+  , legacy :: Boolean
   , dumpMir :: Maybe String
   }
 
-data Command = Build BuildOption
+-- | `prewarm --input <corefn>`: precompile a package set's whole closure into `$PURS_WASM_STORE`.
+type PrewarmOption = { input :: FilePath }
+
+data Command = Build BuildOption | Prewarm PrewarmOption

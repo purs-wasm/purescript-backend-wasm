@@ -85,18 +85,25 @@ for rel in $shadows; do
   echo "  ulib: installed $mod ($pv)"
 done
 
-# 6. ADR 0031: wat-only ulib modules — a co-located `<package>/<Module>.wat` with NO sibling `.purs`
-#    (e.g. Data.Int, Data.Show.Generic): NOT shadowed (the build uses the registry corefn); ulib only
-#    provides their foreign from the lib so programs using them stay standalone. Emit foreign.wasm only.
+# 6. ADR 0039 wat-only patches — a co-located `<package>/<Module>.wat` with NO sibling `.purs`
+#    (e.g. Data.Int, Data.Show.Generic): the registry `.purs` is kept VERBATIM, so the build sources
+#    the corefn/externs from the user output (with the module's real imports intact); ulib only
+#    supplies the missing foreign. Emit `foreign.wasm` + `foreign.wat` ONLY.
+#
+#    INVARIANT (load-bearing — do NOT ship a `corefn.json` for a wat-only patch): the build marks a
+#    module `libSourced` iff the lib has a corefn for it (presence-driven, ADR 0039). Shipping a
+#    corefn here would make the wat-only module `libSourced`, collapsing its import surface to the lib
+#    corefn's — which is exactly the abolished "foreign-only" half-shadow that broke per-module builds
+#    with `unknown callee: Data.Number.isFinite` (blocker ②). A wat-only patch MUST have no lib corefn.
 # (exclude `foreign.wat` — those are the global ulib/<Module>/ wat layer, not co-located sources)
 wats="$(cd "$ULIB_SRC" && find . -mindepth 2 -name '*.wat' ! -name 'foreign.wat' | sed 's#^\./##')"
 for rel in $wats; do
   pkg="${rel%%/*}"; mod="$(basename "$rel" .wat)"
-  [ -f "$ULIB_SRC/$pkg/$mod.purs" ] && continue          # a shadow — already handled in step 5
+  [ -f "$ULIB_SRC/$pkg/$mod.purs" ] && continue          # a reimpl patch — already handled in step 5
   pv="$(pkgver "$pkg")"
   dst="$LIB/$mod"
   mkdir -p "$dst"
   assemble_wat "$ULIB_SRC/$rel" "$dst/foreign.wasm"
   cp "$ULIB_SRC/$rel" "$dst/foreign.wat"   # the sig source (see step 5)
-  echo "  ulib: installed $mod ($pv, foreign only)"
+  echo "  ulib: installed $mod ($pv, wat-only patch)"
 done

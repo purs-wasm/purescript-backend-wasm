@@ -12,8 +12,8 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String as Str
 import Data.Tuple (Tuple(..))
-import PursWasm.CLI.Effect.Registry (RegistryF(..))
-import PursWasm.CLI.Effect.Registry as Registry
+import PureScript.Backend.Wasm.CLI.Effect.Registry (RegistryF(..))
+import PureScript.Backend.Wasm.CLI.Effect.Registry as Registry
 import UlibTooling.Compat (CheckRow(..), classifyShadow, pursGuard, querySupported, supportedRange, withinConstraint)
 import UlibTooling.Compat.Types (encodeCompat, readCompatCore)
 import Run (Run, extract)

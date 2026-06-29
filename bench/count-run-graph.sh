@@ -13,7 +13,7 @@ spago build -p bench --output bench/output
 # 2. the optimized JS backend (js-es)
 purs-backend-es build --corefn-dir bench/output --output-dir bench/output-js-es --int-tags
 # 3. our wasm backend, in its OWN output dir (count-run.mjs reads ./output-wasm-run)
-node ./purs-wasm/index.dev.js build -I ./bench/output -O ./bench/output-wasm-run -e CountRun
+node ./purs-wasm/index.js build -I ./bench/output -O ./bench/output-wasm-run -e CountRun
 
 cd "$here"
 node count-run.mjs

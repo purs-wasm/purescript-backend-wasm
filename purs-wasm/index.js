@@ -1,15 +1,24 @@
 #!/usr/bin/env node
 import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { existsSync } from 'fs';
 import { createRequire } from 'module';
 
-import { main } from "./bundle/index.js";
+// A single entry for both the monorepo and the published package. In the monorepo the spago output
+// exists at <repo>/output, so import the CLI straight from there (fast iteration) with assets at the
+// repo root and binaryen from the workspace package. In a published package there is no <repo>/output,
+// so import the self-contained `bundle/index.js` (assembled by `scripts/prepack.mjs`), with the
+// runtime/lib assets + binaryen that ship in/with the package.
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = dirname(here);
+const devEntry = join(repoRoot, "output", "PursWasm.CLI.Main", "index.js");
+const dev = existsSync(devEntry);
 
-// Published package: assets ship inside it (`<cliRoot>/runtime`, `<cliRoot>/lib`), so `cliRoot` is
-// this directory. The binaryen binaries come from the `binaryen` dependency, resolved by node so it
-// works regardless of where npm hoists it.
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const { main } = await import(dev ? pathToFileURL(devEntry).href : "./bundle/index.js");
+const cliRoot = dev ? repoRoot : here;
 const require = createRequire(import.meta.url);
-const binaryenBinDir = join(dirname(require.resolve("binaryen/package.json")), "bin");
+const binaryenBinDir = dev
+  ? join(repoRoot, "binaryen", "node_modules", "binaryen", "bin")
+  : join(dirname(require.resolve("binaryen/package.json")), "bin");
 
-main(__dirname)(binaryenBinDir)();
+main(cliRoot)(binaryenBinDir)();

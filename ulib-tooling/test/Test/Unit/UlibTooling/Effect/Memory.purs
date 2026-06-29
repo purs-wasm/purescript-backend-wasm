@@ -24,10 +24,10 @@ import Data.String (Pattern(..))
 import Data.String as Str
 import Data.Tuple (Tuple(..))
 import Dodo as Dodo
-import PursWasm.CLI.Effect.Env (ENV, Env(..), _env)
-import PursWasm.CLI.Effect.Filesystem (FS, FilesystemF(..), _fs)
-import PursWasm.CLI.Effect.Log (LOG, Log(..), _log)
-import PursWasm.CLI.Effect.Process (PROC, ProcF(..), _proc)
+import PureScript.Backend.Wasm.CLI.Effect.Env (ENV, Env(..), _env)
+import PureScript.Backend.Wasm.CLI.Effect.Filesystem (FS, FilesystemF(..), _fs)
+import PureScript.Backend.Wasm.CLI.Effect.Log (LOG, Log(..), _log)
+import PureScript.Backend.Wasm.CLI.Effect.Process (PROC, ProcF(..), _proc)
 import Run (Run, extract, interpret, on, send)
 import Run.State (STATE, get, modify, runState)
 import Type.Row (type (+))
@@ -91,6 +91,8 @@ interpProc = interpret (on _proc handle send)
     -- is covered by the differential harness and pure-helper tests, not the in-memory interpreter.
     ExecFileCapture cmd args k -> modify (\w -> w { execs = Array.snoc w.execs (Tuple cmd args) })
       $> k (Left "execFileCapture is not stubbed in the in-memory interpreter")
+    ExecFileInput cmd args _ next -> modify (\w -> w { execs = Array.snoc w.execs (Tuple cmd args) }) $> next
+    ReadStdin k -> pure (k "")
 
 interpLog :: forall r. Run (LOG + STATE World + r) ~> Run (STATE World + r)
 interpLog = interpret (on _log handle send)

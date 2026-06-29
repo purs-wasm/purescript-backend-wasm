@@ -16,12 +16,12 @@ import Data.String as Str
 import Data.Traversable (for)
 import Fmt as Fmt
 import PureScript.Backend.Wasm.Ulib.Interface (compatible, diffInterface, interfaceOf)
-import PursWasm.CLI.Build.Paths (wasmAsBin)
-import PursWasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
-import PursWasm.CLI.Effect.Log as Log
-import PursWasm.CLI.Externs (readExterns)
-import PursWasm.CLI.Lib (resolveLibPath)
-import PursWasm.CLI.Ulib.Manifest (isLibModuleDir, manifestModules, readManifest, ulibManifestFile)
+import PureScript.Backend.Wasm.CLI.Paths (wasmAsBin)
+import PureScript.Backend.Wasm.CLI.Effect (ENV, FS, FilePath, LOG, PROC, execFile, info, joinPath, logAndThrow, readDir)
+import PureScript.Backend.Wasm.CLI.Effect.Log as Log
+import PureScript.Backend.Wasm.CLI.Externs (readExterns)
+import PureScript.Backend.Wasm.CLI.Lib (resolveLibPath)
+import PureScript.Backend.Wasm.CLI.Ulib.Manifest (isLibModuleDir, manifestModules, readManifest, ulibManifestFile)
 import UlibTooling.Options (UlibCheckOption, UlibInstallOption)
 import Run (Run, EFFECT)
 import Type.Row (type (+))
@@ -76,13 +76,14 @@ ulibCheckCmd cliRoot opt = do
         libExt <- readExterns =<< joinPath [ libPath, mod, "externs.cbor" ]
         usrExt <- readExterns =<< joinPath [ input, mod, "externs.cbor" ]
         case libExt, usrExt of
-          -- a wat-only ulib module (e.g. Data.Int) has a `foreign.wasm` but no externs — not a
-          -- shadow, so there is no interface to check; the `Nothing` lib externs skips it below.
+          -- a wat-only patch (e.g. Data.Int, ADR 0039) ships a `foreign.wasm` but no corefn/externs —
+          -- it keeps the registry `.purs`, so there is no reimplemented interface to check; the
+          -- `Nothing` lib externs skips it below.
           _, Nothing -> do
             info (Fmt.fmt @"  - {m}: not compiled in your workspace; skipped" { m: mod })
             pure Nothing
           Nothing, _ -> do
-            info (Fmt.fmt @"  - {m}: no shadow externs (foreign-only or unreadable); skipped" { m: mod })
+            info (Fmt.fmt @"  - {m}: wat-only patch (no reimpl externs) or unreadable; skipped" { m: mod })
             pure Nothing
           Just le, Just ue -> do
             let d = diffInterface (interfaceOf ue) (interfaceOf le)

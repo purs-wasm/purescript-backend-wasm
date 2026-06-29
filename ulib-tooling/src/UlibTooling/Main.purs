@@ -1,6 +1,6 @@
 -- | The Node entry point for the maintainer CLI (ADR 0031 §5): parse `argv` via `UlibTooling.Options`
 -- | and run the chosen subcommand (`install` / `check` / `compat`) against the shared synchronous Node
--- | interpreter (`PursWasm.CLI.Node.runNode`). Mirrors `PursWasm.CLI.Main`, but for the maintainer
+-- | interpreter (`PureScript.Backend.Wasm.CLI.Node.runNode`). Mirrors `PursWasm.CLI.Main`, but for the maintainer
 -- | surface — kept out of the lean user `purs-wasm` binary.
 module UlibTooling.Main
   ( main
@@ -16,7 +16,7 @@ import Effect (Effect)
 import Effect.Class.Console as Console
 import Node.Path (FilePath)
 import Node.Process as Process
-import PursWasm.CLI.Node (runNode)
+import PureScript.Backend.Wasm.CLI.Node (runNode)
 import UlibTooling.Commands (ulibCheckCmd, ulibInstallCmd)
 import UlibTooling.Compat (ulibCompatCmd)
 import UlibTooling.Options (Command(..), parse)

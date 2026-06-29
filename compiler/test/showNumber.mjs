@@ -16,11 +16,11 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 const run = (cmd, args) => execFileSync(cmd, args, { cwd: repo, stdio: "inherit" });
 
 run("spago", ["build", "-p", "ulib-tooling"]);
-run("node", ["ulib-tooling/index.dev.js", "install"]);
+run("node", ["ulib-tooling/index.js", "install"]);
 const compiled = mkdtempSync(join(tmpdir(), "shownum-out-"));
 run("spago", ["build", "-p", "e2e-fixtures", "--output", compiled]);
 const bundle = mkdtempSync(join(tmpdir(), "shownum-bundle-"));
-run("node", ["purs-wasm/index.dev.js", "build", "-e", "E2E.ShowNumber", "-I", compiled, "-O", bundle]);
+run("node", ["purs-wasm/index.js", "build", "-e", "E2E.ShowNumber", "-I", compiled, "-O", bundle]);
 
 const m = await import(pathToFileURL(join(bundle, "index.mjs")).href);
 const wasmShow = (n) => m.exports.showNum(n);

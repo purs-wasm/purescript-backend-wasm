@@ -40,6 +40,58 @@
           ]
         }
       },
+      "cli-lib": {
+        "path": "cli-lib",
+        "core": {
+          "dependencies": [
+            "ansi",
+            "argonaut-core",
+            "argparse-basic",
+            "arraybuffer-types",
+            "arrays",
+            "bifunctors",
+            "compiler",
+            "console",
+            "control",
+            "dodo-printer",
+            "effect",
+            "either",
+            "exceptions",
+            "fmt",
+            "foldable-traversable",
+            "foreign-object",
+            "maybe",
+            "node-buffer",
+            "node-fs",
+            "node-path",
+            "node-process",
+            "ordered-collections",
+            "prelude",
+            "run",
+            "strings",
+            "tuples",
+            "typelevel-prelude"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "arraybuffer-types",
+            "arrays",
+            "console",
+            "dodo-printer",
+            "effect",
+            "either",
+            "maybe",
+            "ordered-collections",
+            "prelude",
+            "run",
+            "spec",
+            "spec-node",
+            "strings",
+            "tuples"
+          ]
+        }
+      },
       "compiler": {
         "path": "compiler",
         "core": {
@@ -172,6 +224,21 @@
           "dependencies": []
         }
       },
+      "examples-intpatch": {
+        "path": "examples/intpatch",
+        "core": {
+          "dependencies": [
+            "console",
+            "effect",
+            "integers",
+            "maybe",
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "examples-metatheory": {
         "path": "examples/metatheory",
         "core": {
@@ -254,6 +321,7 @@
             "argparse-basic",
             "arraybuffer-types",
             "arrays",
+            "cli-lib",
             "compiler",
             "console",
             "dodo-printer",
@@ -296,6 +364,48 @@
           ]
         }
       },
+      "purwc": {
+        "path": "purwc",
+        "core": {
+          "dependencies": [
+            "argonaut-core",
+            "argparse-basic",
+            "arrays",
+            "cli-lib",
+            "compiler",
+            "console",
+            "effect",
+            "either",
+            "fmt",
+            "foreign-object",
+            "maybe",
+            "node-path",
+            "node-process",
+            "ordered-collections",
+            "prelude",
+            "run",
+            "tuples",
+            "typelevel-prelude"
+          ]
+        },
+        "test": {
+          "dependencies": [
+            "spec",
+            "spec-node"
+          ]
+        }
+      },
+      "purwc-fixtures": {
+        "path": "purwc-fixtures",
+        "core": {
+          "dependencies": [
+            "prelude"
+          ]
+        },
+        "test": {
+          "dependencies": []
+        }
+      },
       "ulib-tooling": {
         "path": "ulib-tooling",
         "core": {
@@ -306,6 +416,7 @@
             "argonaut-core",
             "argparse-basic",
             "arrays",
+            "cli-lib",
             "compiler",
             "console",
             "dodo-printer",
@@ -322,7 +433,6 @@
             "node-process",
             "ordered-collections",
             "prelude",
-            "purs-wasm",
             "run",
             "strings",
             "transformers"

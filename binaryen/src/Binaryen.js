@@ -298,6 +298,13 @@ export const addFunctionExportImpl =
 // cross-module function export, so the now-redundant export no longer pins the function (ADR 0037).
 export const removeExportImpl = (mod) => (externalName) => () => mod.removeExport(externalName);
 
+// Remove many exports in one flat JS loop. The orchestrate path over-exports every module's bindings
+// (thousands for a self-host build), so a PureScript `for_ … removeExport` builds an Effect bind chain
+// thousands deep and overflows the stack; the loop belongs in JS.
+export const removeExportsImpl = (mod) => (names) => () => {
+  for (let i = 0; i < names.length; i++) mod.removeExport(names[i]);
+};
+
 // Set the module's start function (run automatically at instantiation).
 export const setStartImpl = (mod) => (fn) => () => mod.setStart(fn);
 
@@ -321,6 +328,14 @@ export const optimizeImpl = (mod) => () => mod.optimize();
 // to DCE internalised cross-module exports cheaply (`remove-unused-module-elements`) without the
 // cost of re-optimising the whole merged module (ADR 0037 Phase 3).
 export const runPassesImpl = (mod) => (passes) => () => mod.runPasses(passes);
+
+// The global optimize / shrink levels `mod.optimize()` reads (Binaryen has no per-module setting).
+// `-O3` is optimize level 3 / shrink level 0. Used post-merge to fully DCE the orchestrate path's
+// over-exported cross-module instance code (a cheap pass leaves dead foreign imports — ADR 0042).
+export const setOptimizeLevelImpl = (level) => () => binaryen.setOptimizeLevel(level);
+export const setShrinkLevelImpl = (level) => () => binaryen.setShrinkLevel(level);
+export const getOptimizeLevelImpl = () => binaryen.getOptimizeLevel();
+export const getShrinkLevelImpl = () => binaryen.getShrinkLevel();
 
 // --- Validation & emission --------------------------------------------------
 

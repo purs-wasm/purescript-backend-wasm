@@ -1,0 +1,26 @@
+package:
+  name: purwc
+  dependencies:
+    - argonaut-core
+    - argparse-basic
+    - arrays
+    - cli-lib
+    - compiler
+    - console
+    - effect
+    - either
+    - fmt
+    - foreign-object
+    - maybe
+    - node-path
+    - node-process
+    - ordered-collections
+    - prelude
+    - run
+    - tuples
+    - typelevel-prelude
+  test:
+    main: Test.Purwc
+    dependencies:
+      - spec
+      - spec-node

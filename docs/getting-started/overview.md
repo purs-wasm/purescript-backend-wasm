@@ -43,13 +43,13 @@ spago build -p purs-wasm   # compile the CLI
 
 # build + install the bundled ulib library the CLI links against
 spago build -p bench --output bench/output
-node ulib-tooling/index.dev.js install
+node ulib-tooling/index.js install
 ```
 
 The CLI then runs through its dev entry, which resolves `runtime/` and `lib/` from the repo root:
 
 ```sh
-node purs-wasm/index.dev.js build -e Main -I output -O output-wasm
+node purs-wasm/index.js build -e Main -I output -O output-wasm
 ```
 
 To produce an installable tarball identical to the npm release, run `cd purs-wasm && npm pack`
@@ -166,3 +166,8 @@ details.
 - `--dump-mir <Module>` — dump the module's middle IR at the optimizer's snapshot points
   (specialized input, per-module optimized, post-inline specialization) to
   `<output>/<Module>.mir.txt` (debugging).
+- `--legacy` — use the legacy whole-program build (compile every module in-process and link with
+  `finishLink`) instead of the default **orchestrate** build (the standalone `purwc` worker driven
+  as a subprocess against the content-addressed store `$PURS_WASM_STORE`, ADR 0042). The two are
+  behaviour-identical; orchestrate is the default and scales to large module counts, `--legacy` is
+  the simpler single-process path.

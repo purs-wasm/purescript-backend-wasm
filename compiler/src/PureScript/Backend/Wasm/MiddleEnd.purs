@@ -17,12 +17,25 @@ module PureScript.Backend.Wasm.MiddleEnd
   , optimizeIncrementalM
   , optimizeProgramTrace
   , optimizeModule
+  , compileModuleMir
+  , SingleModuleInput
+  , SingleModuleOutput
+  , declRefMap
   , liftModule
   , CacheInput
   , CacheEntry
   , CacheWrite
   , IncInput
   , noCache
+  -- Shared incremental-step API (ADR 0038 Phase C2): the `purwc compile-batch` worker drives the
+  -- same O(N) accumulation `optimizeIncrementalM` does, so its per-module output is byte-identical.
+  , AccumCtx
+  , IncAccum
+  , emptyIncAccum
+  , depKeysOf
+  , batchInlineKeys
+  , incDepStep
+  , incMissStep
   ) where
 
 import Prelude
@@ -49,8 +62,7 @@ import PureScript.Backend.Wasm.MiddleEnd.Optimize.Purity as Purity
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Simplify (Ctx)
 import PureScript.Backend.Wasm.MiddleEnd.Optimize.Specialize (specializeModule, specializationCalleeKeys)
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize (encode)
-import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (cacheKey, hashBytes)
+import PureScript.Backend.Wasm.MiddleEnd.Serialize.Hash (cacheKey)
 import PureScript.Backend.Wasm.MiddleEnd.Transl (translBind)
 import PureScript.CoreFn (Module)
 
@@ -179,52 +191,40 @@ optimizeIncrementalM onModule eff arities inputs = do
   viewOf i = case i.cached of
     Just c -> c.summary
     Nothing -> i.lift unit
-  summaryInlineKeys = Set.fromFoldable (Map.keys (buildContext eff Set.empty Set.empty (map viewOf inputs)).inline)
+  summaryInlineKeys = batchInlineKeys eff (map viewOf inputs)
 
-  depHashes :: Array String -> Map String String -> Array String
-  depHashes deps sh = Array.mapMaybe (\d -> Map.lookup d sh) deps
-
-  initial = { idx: 0, finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, summaryHashes: Map.empty, writes: [] }
+  initial = { idx: 0, finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, depKeys: Map.empty, writes: [] }
 
   step acc i = do
     let
       idx = acc.idx + 1
       hit = case i.cached of
-        Just c -> cacheKey i.sourceHash (depHashes c.deps acc.summaryHashes) == c.key
+        Just c -> cacheKey i.sourceHash (depKeysOf c.deps acc.depKeys) == c.key
         Nothing -> false
     onModule { index: idx, total, name: i.name, hit }
     pure (apply' acc i hit idx)
 
+  -- Both branches reuse the shared accumulation steps (`incDepStep` / `incMissStep`) so the
+  -- per-module result is byte-identical to the `purwc compile-batch` worker, which drives the
+  -- very same helpers (ADR 0038 Phase C2). The whole-program-only bookkeeping (`idx`, `finalized`,
+  -- `writes`) is layered on here.
   apply' acc i hit idx = case i.cached of
     Just c | hit ->
-      acc
+      (incDepStep eff { name: i.name, summary: c.summary, key: c.key } acc)
         { idx = idx
         , finalized = Array.snoc acc.finalized c.finalMod
-        , summaries = Array.snoc acc.summaries c.summary
-        , accCtx = mergeAccum acc.accCtx (moduleContribs c.summary)
-        , impure = Purity.impureKeys eff acc.impure [ c.summary ]
-        , memEff = Purity.memEffKeys acc.memEff [ c.summary ]
-        , summaryHashes = Map.insert i.name (hashBytes (encode c.summary)) acc.summaryHashes
         }
     _ ->
       let
-        lifted = i.lift unit
-        speced = specializeModule acc.summaries lifted
-        r = localOpt eff arities acc.accCtx acc.impure acc.memEff speced
-        finalMod = finalizeModule eff acc.accCtx acc.summaries r.impure r.memEff r.mod
-        summary = DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod
-        deps = referencedModules names lifted
-        key = cacheKey i.sourceHash (depHashes deps acc.summaryHashes)
+        s = incMissStep eff arities names summaryInlineKeys
+          { name: i.name, sourceHash: i.sourceHash, lifted: i.lift unit }
+          acc
       in
-        acc
+        s.accum
           { idx = idx
-          , finalized = Array.snoc acc.finalized finalMod
-          , summaries = Array.snoc acc.summaries summary
-          , accCtx = mergeAccum acc.accCtx (moduleContribs summary)
-          , impure = r.impure
-          , memEff = r.memEff
-          , summaryHashes = Map.insert i.name (hashBytes (encode summary)) acc.summaryHashes
-          , writes = Array.snoc acc.writes { name: i.name, sourceHash: i.sourceHash, deps, entry: { key, finalMod, summary } }
+          , finalized = Array.snoc acc.finalized s.finalMod
+          , writes = Array.snoc acc.writes
+              { name: i.name, sourceHash: i.sourceHash, deps: s.deps, entry: { key: s.key, finalMod: s.finalMod, summary: s.summary } }
           }
 
 -- | Order incremental inputs so each comes after the modules it imports (within the input set).
@@ -288,11 +288,12 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
 
   -- A module's cache key and the precise dependency names it was keyed against (recorded in
   -- the `.pmi`, ADR 0034). `Nothing` when the module has no source hash, i.e. is uncacheable.
+  -- Keyed against the dependencies' own cache keys (ADR 0040 §2, recursive content-address).
   keyAndDeps :: String -> M.Module -> Map String String -> Maybe { key :: String, deps :: Array String, src :: String }
-  keyAndDeps name m summaryHashes = do
+  keyAndDeps name m depKeys = do
     src <- Map.lookup name cache.sourceHashes
     let deps = Array.filter (_ /= name) (Array.nub (Array.mapMaybe (\k -> Map.lookup k keyModL) (declRefs m)))
-    pure { key: cacheKey src (Array.mapMaybe (\d -> Map.lookup d summaryHashes) deps), deps, src }
+    pure { key: cacheKey src (Array.mapMaybe (\d -> Map.lookup d depKeys) deps), deps, src }
   -- Higher-order specialization is now per module, inside the loop (`step`), against the
   -- dependency summaries (ADR 0032 caller-homed): the pre-loop whole-program pass is gone.
   -- `topoOrder` is over `lifted` — it counts only non-`$spec` references (a spec imposes no
@@ -326,7 +327,7 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
   -- resident (ADR 0021 b1). Every pass is per module (ADR 0032 caller-homed specialization), so the
   -- loop yields finalized modules one at a time and there is no whole-program post-pass.
   result = Array.foldl step
-    { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, trace: [], summaryHashes: Map.empty, writes: [] }
+    { finalized: [], summaries: [], accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, trace: [], depKeys: Map.empty, writes: [] }
     ordered
 
   -- A module is a cache hit iff it has a source hash, a loaded `.pmo`, and that entry's
@@ -336,11 +337,11 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
   -- cacheable) records the entry to persist. With no source hash the `Just` guard fails, so
   -- `noCache` takes the miss path for every module — byte-identical to the non-cached build.
   step acc m =
-    case keyAndDeps (modName m) m acc.summaryHashes of
-      Just kd | Just entry <- Map.lookup (modName m) cache.loaded, entry.key == kd.key -> hitStep acc m entry
+    case keyAndDeps (modName m) m acc.depKeys of
+      Just kd | Just entry <- Map.lookup (modName m) cache.loaded, entry.key == kd.key -> hitStep acc m entry kd.key
       mkd -> missStep acc m mkd
 
-  hitStep acc m entry =
+  hitStep acc m entry key =
     let
       summary = entry.summary
     in
@@ -354,7 +355,7 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
       , impure: Purity.impureKeys effectfulForeigns acc.impure [ summary ]
       , memEff: Purity.memEffKeys acc.memEff [ summary ]
       , trace: acc.trace
-      , summaryHashes: Map.insert (modName m) (hashBytes (encode summary)) acc.summaryHashes
+      , depKeys: Map.insert (modName m) key acc.depKeys
       , writes: acc.writes
       }
 
@@ -377,9 +378,12 @@ runOpt dictElim effectfulForeigns effArities cache traceTarget modules =
             <> [ "=== " <> t <> " (specialized) ===\n" <> printModule speced ]
             <> [ "=== " <> t <> " (optimized) ===\n" <> printModule r.mod ]
           _ -> acc.trace
-      -- Persist a cacheable miss (one with a source hash, hence a key). The summary hash a
-      -- dependent will key against is the same digest whether this module hit or missed.
-      , summaryHashes: Map.insert (modName m) (hashBytes (encode summary)) acc.summaryHashes
+      -- Persist a cacheable miss (one with a source hash, hence a key). The key a dependent
+      -- keys against is the same digest whether this module hit or missed; an uncacheable
+      -- module (no source hash, no key) contributes nothing to dependents' keys.
+      , depKeys: case mkd of
+          Just kd -> Map.insert (modName m) kd.key acc.depKeys
+          Nothing -> acc.depKeys
       , writes: case mkd of
           Just kd -> Array.snoc acc.writes { name: modName m, sourceHash: kd.src, deps: kd.deps, entry: { key: kd.key, finalMod, summary } }
           Nothing -> acc.writes
@@ -431,6 +435,99 @@ mergeAccum a b =
   , dataCtors: Set.union a.dataCtors b.dataCtors
   , instanceFields: Map.union a.instanceFields b.instanceFields
   }
+
+-- | The dependency-ordered optimizer's running state (the five accumulators threaded across
+-- | modules in topo order): the merged inline/ctor/instance context, the impure / memory-effecting
+-- | key sets, the accumulated dependency summaries (specialization + finalization read the array),
+-- | and each finalized module's cache key (`depKeys`). Both the in-process whole-program loop
+-- | (`optimizeIncrementalM`) and the `purwc compile-batch` worker thread *this* state, so a module
+-- | is optimized against `accCtx ⊕ its own contribution` once — O(N) in the module count, not the
+-- | O(N²) of rebuilding the context from every dependency summary per module (ADR 0038 Phase C2).
+type IncAccum =
+  { accCtx :: AccumCtx
+  , impure :: Set String
+  , memEff :: Set String
+  , summaries :: Array M.Module
+  , depKeys :: Map String String
+  }
+
+emptyIncAccum :: IncAccum
+emptyIncAccum =
+  { accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty, summaries: [], depKeys: Map.empty }
+
+-- | ADR 0040 §2: a module is keyed against its dependencies' **cache keys** (recursively), not
+-- | their summary hashes; `depKeys` accumulates each finalized module's key in topo order (all deps
+-- | precede a module, so their keys are known when it is keyed).
+depKeysOf :: Array String -> Map String String -> Array String
+depKeysOf deps dk = Array.mapMaybe (\d -> Map.lookup d dk) deps
+
+-- | The whole-program inline keyset fed to every module's `DictElim.summarize` (which bodies a
+-- | summary retains for downstream inlining). Computed ONCE over the program's available views —
+-- | cached/finalized dependency summaries plus the lifted form of any uncached module — never per
+-- | module, so it costs O(N) total. Identical formula in the whole-program loop and the batch
+-- | worker, so their summaries agree.
+batchInlineKeys :: Set String -> Array M.Module -> Set String
+batchInlineKeys eff views = Set.fromFoldable (Map.keys (buildContext eff Set.empty Set.empty views).inline)
+
+-- | Fold one already-finalized dependency summary (a store/cache hit) into the accumulator: the
+-- | same accumulation a finalized *miss* performs, so seeding the worker's accumulator from its
+-- | store-hit `.pmi`s reproduces the whole-program context exactly. Row-polymorphic over any extra
+-- | bookkeeping fields the caller carries alongside the five accumulators.
+incDepStep
+  :: forall r
+   . Set String
+  -> { name :: String, summary :: M.Module, key :: String }
+  -> { accCtx :: AccumCtx, impure :: Set String, memEff :: Set String, summaries :: Array M.Module, depKeys :: Map String String | r }
+  -> { accCtx :: AccumCtx, impure :: Set String, memEff :: Set String, summaries :: Array M.Module, depKeys :: Map String String | r }
+incDepStep eff dep acc =
+  acc
+    { summaries = Array.snoc acc.summaries dep.summary
+    , accCtx = mergeAccum acc.accCtx (moduleContribs dep.summary)
+    , impure = Purity.impureKeys eff acc.impure [ dep.summary ]
+    , memEff = Purity.memEffKeys acc.memEff [ dep.summary ]
+    , depKeys = Map.insert dep.name dep.key acc.depKeys
+    }
+
+-- | Optimize ONE module (a cache miss) against the current accumulator, returning its finalized
+-- | MIR, pruned summary, precise dependency names, cache key, and the *extended* accumulator. This
+-- | is the per-module miss step of `optimizeIncrementalM`, factored out verbatim so the `purwc`
+-- | batch worker produces byte-identical artifacts. `names` (all program module names) filters the
+-- | precise references; `summaryInlineKeys` is the whole-program set from `batchInlineKeys`.
+incMissStep
+  :: forall r
+   . Set String
+  -> Map String Int
+  -> Set String
+  -> Set String
+  -> { name :: String, sourceHash :: String, lifted :: M.Module }
+  -> { accCtx :: AccumCtx, impure :: Set String, memEff :: Set String, summaries :: Array M.Module, depKeys :: Map String String | r }
+  -> { finalMod :: M.Module
+     , summary :: M.Module
+     , deps :: Array String
+     , key :: String
+     , accum :: { accCtx :: AccumCtx, impure :: Set String, memEff :: Set String, summaries :: Array M.Module, depKeys :: Map String String | r }
+     }
+incMissStep eff arities names summaryInlineKeys i acc =
+  let
+    speced = specializeModule acc.summaries i.lifted
+    r = localOpt eff arities acc.accCtx acc.impure acc.memEff speced
+    finalMod = finalizeModule eff acc.accCtx acc.summaries r.impure r.memEff r.mod
+    summary = DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod
+    deps = referencedModules names i.lifted
+    key = cacheKey i.sourceHash (depKeysOf deps acc.depKeys)
+  in
+    { finalMod
+    , summary
+    , deps
+    , key
+    , accum: acc
+        { summaries = Array.snoc acc.summaries summary
+        , accCtx = mergeAccum acc.accCtx (moduleContribs summary)
+        , impure = r.impure
+        , memEff = r.memEff
+        , depKeys = Map.insert i.name key acc.depKeys
+        }
+    }
 
 -- | The full simplifier `Ctx` for optimizing `m`: the accumulated dependency context (`accCtx`)
 -- | merged with `m`'s *own* context built over `[m]` alone. The own-context uses `buildContext [m]`
@@ -530,8 +627,81 @@ declRefs m = m.decls >>= case _ of
   where
   isSpec i = contains (Pattern "$spec") i
 
+-- | The per-binding reference graph of a (finalized) module: each top-level binding's qualified key
+-- | paired with the qualified keys its body references. Unlike `declRefs` (which drops `$spec`
+-- | bindings for *ordering*), this keeps every binding and every reference, because the orchestrator
+-- | uses it for **reachability** (ADR 0040 §P2 / #19): a `caf_init$M` must run only if the module is
+-- | reachable from the program's entry points, so dead CAFs (whose init may call a foreign that cannot
+-- | marshal back across the JS boundary) are never eagerly initialized. The graph is exact (taken from
+-- | the optimized bodies), so reachability is not polluted by the worker's over-export.
+declRefMap :: M.Module -> Array (Tuple String (Array String))
+declRefMap m = m.decls >>= case _ of
+  M.NonRec _ i e -> [ Tuple (key m.name i) (Array.nub (references e)) ]
+  M.Rec rs -> map (\r -> Tuple (key m.name r.ident) (Array.nub (references r.expr))) rs
+
 -- | Optimize a single self-contained module (its own bindings only). A convenience
 -- | for callers with one module; cross-module dictionary elimination needs
 -- | `optimizeProgram` over all linked modules.
 optimizeModule :: Module -> M.Module
 optimizeModule m = fromMaybe { name: m.name, decls: [] } (Array.head (optimizeProgram true Set.empty Map.empty [ m ]))
+
+-- | Inputs to optimize ONE module in isolation (ADR 0038 Phase B — the `purwc` worker): the
+-- | target's translated + lambda-lifted MIR (`liftModule`), its `corefn.json` source hash, and its
+-- | transitive dependencies' `.pmi` summaries **in topological order** (each after the modules it
+-- | imports). The summaries are the necessary-and-sufficient optimization context (ADR 0034) — the
+-- | same data a cache hit folds into `accCtx`/`impure`/`memEff` in `optimizeIncrementalM`.
+type SingleModuleInput =
+  { sourceHash :: String
+  , lifted :: M.Module
+  , depSummaries :: Array M.Module
+  -- The dependencies' cache keys (dotted module name → `.pmi` key), read from their `.pmi`s.
+  -- The module is keyed against these recursively (ADR 0040 §2); they enter the key in the
+  -- same way `optimizeIncrementalM` keys against the dep keys accumulated in topo order, so a
+  -- module's `.pmi` key is identical whether built by the worker or the whole-program loop.
+  , depKeys :: Map String String
+  }
+
+-- | The isolated-optimization result: the finalized MIR (the `.pmo` body, for codegen), the pruned
+-- | summary (the `.pmi` body, for *this* module's dependents), the precise referenced-dependency
+-- | names + cache key (the `.pmi` header), and the impure / memory-effecting key sets.
+type SingleModuleOutput =
+  { finalMod :: M.Module
+  , summary :: M.Module
+  , deps :: Array String
+  , key :: String
+  , impure :: Set String
+  , memEff :: Set String
+  }
+
+-- | Optimize one module against its dependencies' summaries (ADR 0038 Phase B). Folds the
+-- | topo-ordered dep summaries to rebuild the optimization context exactly as
+-- | `optimizeIncrementalM`'s cache-hit path does (`mergeAccum (moduleContribs …)` + `Purity.*Keys`),
+-- | then runs the per-module miss step verbatim (specialize → `localOpt` → `finalizeModule` →
+-- | `DictElim.summarize`). `summaryInlineKeys` is taken over `deps ∪ target` rather than the whole
+-- | program; since `summarize` keeps only the target's own bindings, this differs from the batch
+-- | result only in which *pure* cross-module bodies the summary retains — an inlining-opportunity
+-- | (perf) difference, never a correctness one.
+compileModuleMir :: Set String -> Map String Int -> SingleModuleInput -> SingleModuleOutput
+compileModuleMir eff arities i =
+  let
+    folded =
+      Array.foldl
+        ( \acc s ->
+            { accCtx: mergeAccum acc.accCtx (moduleContribs s)
+            , impure: Purity.impureKeys eff acc.impure [ s ]
+            , memEff: Purity.memEffKeys acc.memEff [ s ]
+            }
+        )
+        { accCtx: emptyAccum, impure: Set.empty, memEff: Set.empty }
+        i.depSummaries
+    summaryInlineKeys =
+      Set.fromFoldable (Map.keys (buildContext eff Set.empty Set.empty (Array.snoc i.depSummaries i.lifted)).inline)
+    speced = specializeModule i.depSummaries i.lifted
+    r = localOpt eff arities folded.accCtx folded.impure folded.memEff speced
+    finalMod = finalizeModule eff folded.accCtx i.depSummaries r.impure r.memEff r.mod
+    summary = DictElim.summarize (Set.unions [ summaryInlineKeys, r.impure, r.memEff, specializationCalleeKeys r.mod ]) r.mod
+    names = Set.fromFoldable (map modName i.depSummaries)
+    deps = referencedModules names i.lifted
+    key = cacheKey i.sourceHash (Array.mapMaybe (\d -> Map.lookup d i.depKeys) deps)
+  in
+    { finalMod, summary, deps, key, impure: r.impure, memEff: r.memEff }

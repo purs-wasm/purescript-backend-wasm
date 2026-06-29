@@ -2,6 +2,10 @@
 /output
 /output-es
 /output-wasm
+/output-purwc
+# ADR 0042/0040: the local content-addressed store the test suite / pre-push hook share via
+# $PURS_WASM_STORE (so the library closure compiles once across test programs).
+/.purs-wasm-store
 /dist
 # generated from runtime/runtime.wat by `npm run build:runtime` (chained into test:e2e)
 /runtime/runtime.wasm
@@ -29,10 +33,15 @@ compiler/test/e2e-fixtures-out/
 
 #
 _draft
+.claude-session
 
 # purs-wasm npm bundle build artifacts
 purs-wasm/bundle/
 purs-wasm/.build/
+purs-wasm/_build/
+purs-wasm/_build-purwc/
+# the bundled `purwc` worker prepack ships inside the package (NOT the top-level `purwc/` workspace)
+purs-wasm/purwc/
 purs-wasm/runtime/
 purs-wasm/lib/
 purs-wasm/*.tgz

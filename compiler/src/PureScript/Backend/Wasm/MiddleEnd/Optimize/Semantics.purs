@@ -61,12 +61,14 @@ data Sem
   -- a recursive group, never unfolded: bindings (bodies already evaluated with the group
   -- names opaque) plus the continuation semantic value.
   | SLetRec (Array RecB) Sem
-  -- a value shared across use sites, tagged with the memo key it was unfolded from (ADR 0035
-  -- Layer B). Transparent to *reduction* — `unShared` strips it wherever a value is consumed
-  -- (β / projection / match / perform) so it never blocks a redex — but opaque to `quote`, which
-  -- CSEs it: the first occurrence is bound once to a hoisted `let` and the rest reference it,
-  -- killing the M2 re-quote explosion. The key is the inline binding's name (already unique).
-  | SShared String Sem
+  -- a top-level inline candidate that was unfolded, tagged with the qualified binding it came from
+  -- (ADR 0035 Layer B/C). Transparent to *reduction* — `unShared` strips it wherever a value is
+  -- consumed (β / projection / match / perform) so it never blocks a redex. The tag survives to
+  -- `quote` only when the value was used as a *value*, never consumed by a redex: there ADR 0035
+  -- Layer C reifies it as a plain **call** to the original binding (`M.Var q`) — shared at the top
+  -- level, never copied — rather than materialising the (re-quoted) body. A *trivial* body (an
+  -- alias / literal / nullary constructor — unfolding never grows code) is still inlined instead.
+  | SShared (Qualified String) Sem
   | SNeu Neu
 
 type RecB = { meta :: Maybe Meta, ident :: String, expr :: Sem }
@@ -158,9 +160,11 @@ eval ctx memo = go
     q@(Qualified (Just _) _) -> case qkey q of
       Just k
         -- unfold a binding in the inline set (ADR 0020), but **once** per `normalize`: every
-        -- reference shares the memoized `Sem` (ADR 0035 Layer A) instead of re-evaluating the
-        -- body. `memo` has an entry for exactly the inline-set keys (`ctx.inline`).
-        | Just lz <- Map.lookup k memo -> SShared k (force lz)
+        -- reference shares the memoized `Sem` (ADR 0035 Layer A) instead of re-evaluating the body.
+        -- `memo` has an entry for exactly the inline-set keys (`ctx.inline`). The unfolded value is
+        -- `SShared`-tagged with `q` so a use site that *consumes* it fires the redex (`unShared`)
+        -- while one that uses it *as a value* reifies to a call to `q` at `quote` (ADR 0035 Layer C).
+        | Just lz <- Map.lookup k memo -> SShared q (force lz)
         | Set.member k ctx.dataCtors -> SCtorApp q []
         | otherwise -> SNeu (NTop q)
       Nothing -> SNeu (NTop q)
@@ -175,11 +179,80 @@ unShared = case _ of
   SShared _ s -> unShared s
   s -> s
 
+-- | A semantic value whose unfolding never grows code — an alias to another binding, a literal, or a
+-- | nullary constructor. ADR 0035 Layer C still inlines such a value at an unconsumed (value) use
+-- | site; anything larger is reified as a plain call to its top-level binding.
+trivialSem :: Sem -> Boolean
+trivialSem = case _ of
+  SNeu (NTop _) -> true
+  SNeu (NLocal _) -> true
+  SLit _ -> true
+  SCtorApp _ [] -> true
+  _ -> false
+
+-- | The per-application inline-size budget (ADR 0035 Layer C). Inlining a top-level binding is
+-- | worthwhile only when applying it *reduces* — fires β / projection / known-`case` to shrink the
+-- | code. The pathological case is the derived `genericShow` / `genericEq` of a large ADT applied to
+-- | an *opaque* value: every dictionary projection fires, materialising the whole generic-dispatch
+-- | machinery, yet the terminal `case <opaque> of …` stays stuck — so the result is bulk, not
+-- | reduction (a hand-written `show` of the same type is ~30× smaller). When the β-result of an
+-- | inline-set binding's application exceeds this budget, keep it a plain **call** to the binding
+-- | (`NTop`) rather than inlining the materialised bulk — the same shape `--no-opt` emits, and the
+-- | reduction-aware decision [ADR 0020](0020) deferred to stage 3. The guard fires only on inline-set
+-- | bindings (`SShared`), so a genuine recursive function — already a call, never in the inline set —
+-- | is untouched; and a result that merely *shares* a large value (CSE'd by `quote`) counts small.
+perAppInlineBudget :: Int
+perAppInlineBudget = 2048
+
+-- | Whether a semantic value's reified size would exceed `budget`, measured with bounded fuel (so a
+-- | huge result short-circuits cheaply). A shared value (`SShared`) counts as 1 — `quote` CSEs it to
+-- | a single hoisted binding — and an un-applied lambda body is opaque (counts 1), so this bounds the
+-- | *stuck materialised* structure (the genericShow blow-up) rather than reducible closures.
+exceedsBudget :: Int -> Sem -> Boolean
+exceedsBudget budget s0 = sizeFuel budget s0 < 0
+  where
+  sizeFuel fuel s
+    | fuel < 0 = fuel
+    | otherwise = case s of
+        SLam _ _ -> fuel - 1
+        SShared _ _ -> fuel - 1
+        SLit lit -> litFuel (fuel - 1) lit
+        SRecord fs -> Array.foldl (\f (Tuple _ v) -> sizeFuel f v) (fuel - 1) fs
+        SCtorApp _ as -> Array.foldl sizeFuel (fuel - 1) as
+        SLet _ rhs _ -> sizeFuel (fuel - 1) rhs
+        SLetRec rs k -> sizeFuel (Array.foldl (\f r -> sizeFuel f r.expr) (fuel - 1) rs) k
+        SNeu n -> neuFuel (fuel - 1) n
+  litFuel fuel = case _ of
+    LitArray es -> Array.foldl sizeFuel fuel es
+    LitObject kvs -> Array.foldl (\f (Tuple _ v) -> sizeFuel f v) fuel kvs
+    _ -> fuel
+  neuFuel fuel n
+    | fuel < 0 = fuel
+    | otherwise = case n of
+        NLocal _ -> fuel
+        NTop _ -> fuel
+        NCtorDecl _ -> fuel
+        NApp h as -> Array.foldl sizeFuel (sizeFuel fuel h) as
+        NAccessor _ x -> sizeFuel fuel x
+        NUpdate x _ kvs -> Array.foldl (\f (Tuple _ v) -> sizeFuel f v) (sizeFuel fuel x) kvs
+        NCase ss alts -> Array.foldl altFuel (Array.foldl sizeFuel fuel ss) alts
+        NPerform x -> sizeFuel fuel x
+  altFuel fuel alt = case alt.result of
+    Right e -> sizeFuel fuel e
+    Left gs -> Array.foldl (\f g -> sizeFuel (sizeFuel f g.guard) g.expression) fuel gs
+
 apply :: Sem -> Array Sem -> Sem
 apply head args
   | Array.null args = head
   | otherwise = case head of
-      SShared _ s -> apply s args
+      -- ADR 0035 Layer C: an inline-set binding (`q`) applied to arguments inlines only when the
+      -- β-result actually reduces (stays within budget); a result that merely materialises stuck
+      -- bulk (the `genericShow` of an opaque value) is kept a plain call to `q`, not copied.
+      SShared q s ->
+        let
+          r = apply s args
+        in
+          if exceedsBudget perAppInlineBudget r then SNeu (NApp (SNeu (NTop q)) args) else r
       SLam ps fn ->
         let
           np = Array.length ps
@@ -394,20 +467,17 @@ quote pctx sem = case sem of
     rs' <- traverse (\r -> (\e -> { meta: r.meta, ident: r.ident, expr: e }) <$> quote pctx r.expr) rs
     body' <- quote pctx body
     pure (M.Let [ M.Rec rs' ] body')
-  -- CSE a shared value (ADR 0035 Layer B): quote it **once** into a hoisted `let` (recorded in
-  -- `defs`) and emit a reference; every later occurrence of the same key reuses the binding. The
-  -- name is reserved before quoting the body, so a (defensive) self/mutual reference reuses it
-  -- rather than recursing forever.
-  SShared k s -> do
-    st <- get
-    case Map.lookup k st.shared of
-      Just name -> pure (M.Var (Qualified Nothing name))
-      Nothing -> do
-        name <- fresh "$shared"
-        modify_ \st' -> st' { shared = Map.insert k name st'.shared }
-        e <- quote pctx s
-        modify_ \st' -> st' { defs = Tuple name e : st'.defs }
-        pure (M.Var (Qualified Nothing name))
+  -- ADR 0035 Layer C: an unfolded candidate that survived to `quote` was used *as a value* (a
+  -- consuming use site would have stripped the `SShared` tag and fired a redex). Reify it as a plain
+  -- **call** to the original top-level binding — shared at the top level, never copying the body —
+  -- which also avoids the M2 re-quote explosion (the body is quoted once, in its own declaration).
+  -- A *trivial* body (alias / literal / nullary constructor) is inlined instead, since unfolding it
+  -- never grows code and keeps a direct intrinsic / literal at the use site.
+  SShared q s ->
+    let
+      s' = unShared s
+    in
+      if trivialSem s' then quote pctx s' else pure (M.Var q)
   SNeu n -> quoteNeu pctx n
 
 quoteNeu :: PCtx -> Neu -> Q M.Expr

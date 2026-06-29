@@ -23,9 +23,12 @@ foreign import hashBytes :: Uint8Array -> String
 foreign import hashString :: String -> String
 
 -- | The cache key for a module: a digest of its own source hash combined with the
--- | hashes of the dependency summaries it consumed. Dependency hashes are sorted so the
--- | key is independent of import order (the dependency *set*, not its sequence, is what
--- | the module's optimized output depends on — ADR 0032).
+-- | **cache keys** of the dependencies it consumed (ADR 0040 §2 — a recursive,
+-- | content-addressed key). Keying on each dependency's *own key* (rather than its summary
+-- | hash) makes the key a Merkle digest of the whole transitive input, so a module's store
+-- | path is derivable bottom-up from sources alone without materializing any summary.
+-- | Dependency keys are sorted so the key is independent of import order (the dependency
+-- | *set*, not its sequence, is what the module's optimized output depends on — ADR 0032).
 cacheKey :: String -> Array String -> String
-cacheKey sourceHash depSummaryHashes =
-  hashString (sourceHash <> "\n" <> joinWith "\n" (Array.sort depSummaryHashes))
+cacheKey sourceHash depKeys =
+  hashString (sourceHash <> "\n" <> joinWith "\n" (Array.sort depKeys))

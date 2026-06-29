@@ -17,8 +17,8 @@ import Effect (Effect)
 import Effect.Class.Console as Console
 import Node.Path (FilePath)
 import Node.Process as Process
-import PursWasm.CLI.Build (buildCmd)
-import PursWasm.CLI.Node (runNode)
+import PursWasm.CLI.Build (buildCmd, prewarmCmd)
+import PureScript.Backend.Wasm.CLI.Node (runNode)
 import PursWasm.CLI.Options (parse)
 import PursWasm.CLI.Options.Types (Command(..))
 
@@ -34,3 +34,4 @@ main cliRoot binaryenBinDir = do
     Left err -> Console.error (ArgParser.printArgError err)
     Right (Tuple globals cmd) -> runNode globals $ case cmd of
       Build args -> buildCmd cliRoot binaryenBinDir args
+      Prewarm args -> prewarmCmd cliRoot args.input

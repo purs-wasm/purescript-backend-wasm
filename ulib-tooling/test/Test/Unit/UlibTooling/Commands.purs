@@ -10,7 +10,7 @@ import Prelude
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..), fst)
-import PursWasm.CLI.Build.Paths (wasmAsBin)
+import PureScript.Backend.Wasm.CLI.Paths (wasmAsBin)
 import UlibTooling.Commands (ulibInstallCmd)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual)

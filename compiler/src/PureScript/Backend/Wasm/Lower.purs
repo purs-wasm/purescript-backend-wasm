@@ -34,8 +34,14 @@ module PureScript.Backend.Wasm.Lower
   ( lowerModule
   , lowerModules
   , lowerProgramFragments
+  , lowerModuleWithInterfaces
+  , buildSharedInfo
+  , lowerModuleAgainstInfo
+  , SharedLowerInfo
   , ModuleFragment
   , LoweredProgram
+  , DepInterface
+  , LoweredTarget
   , module ReExport
   ) where
 
@@ -47,10 +53,12 @@ import Data.Char (toCharCode)
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
 import Control.Alt ((<|>))
+import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Set (Set)
 import Data.Set as Set
-import Data.String (joinWith)
+import Data.String (Pattern(..), joinWith)
+import Data.String as Str
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), fst, snd)
 import Foreign.Object (Object)
@@ -65,6 +73,7 @@ import PureScript.Backend.Wasm.Lower.Monad (LowerError(..)) as ReExport
 import PureScript.Backend.Wasm.Lower.Types (CtorInfo, ModuleInfo, ctorSig, peelAbs, qualifiedFuncName, qualifiedKey, qualifiedKeyOf)
 import PureScript.Backend.Wasm.Lower.Unbox (assignProgramReps)
 import PureScript.Backend.Wasm.MiddleEnd.FreeVars (freeVars)
+import PureScript.Backend.Wasm.MiddleEnd.Subst (substMany)
 import PureScript.Backend.Wasm.MiddleEnd.IR (Bind(..), Module)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.CoreFn (Binder(..), Literal(..), Qualified(..))
@@ -447,6 +456,16 @@ lowerCoreLetK env binds body finish = case Array.uncons binds of
           { codeName, captures } <- liftLambda (Just r.ident) env param (reAbs rest recBody)
           bindRhs (RMkClosure codeName captures) \fAtom ->
             lowerCoreLetK (env { locals = Object.insert r.ident fAtom env.locals }) tail body finish
+    [ r ]
+      -- A single recursive binding that is neither a syntactic lambda (closure path above)
+      -- nor a known callable (eta path in `lowerRecBind`) is a recursive *value* — tie its
+      -- knot through `newWithSelf` rather than `LetRec`, which only patches closures. A
+      -- *saturated constructor* is the exception: that is genuine recursive *data* (ADR 0006,
+      -- CAF-globalized at top level; a cyclic local one diverges), so leave it to the reject
+      -- path rather than silently allocating a self-referential cell with a null placeholder.
+      | Nothing <- recBindEtaArity env (recBindFunctionForm r.expr)
+      , not (recBindIsData env (recBindFunctionForm r.expr)) ->
+          lowerRecValueLet env r tail body finish
     _ -> do
       -- Mutual recursion: pre-allocate a slot per binding so each member's closure
       -- can refer to its siblings (as forward references resolved by the `LetRec`
@@ -459,6 +478,58 @@ lowerCoreLetK env binds body finish = case Array.uncons binds of
       recBindsIR <- traverse (lowerRecBind env') bound
       rest <- lowerCoreLetK env' tail body finish
       pure (LetRec recBindsIR rest)
+
+-- | Legalize a single-binding recursive *value* `let` — `let rec go = rhs in body` whose
+-- | RHS denotes a value, not a function (so neither the closure path nor the eta path in
+-- | `lowerRecBind` applies; e.g. `Control.Lazy.fix f = go where go = f (defer \_ -> go)`).
+-- | Lowering's `LetRec` knot-tying only back-patches closures, so we instead tie the knot
+-- | through the `Effect.Ref.newWithSelf` primitive (ADR 0017): allocate a self-referential
+-- | cell whose content is `rhs` with each self-reference rewritten to `read self`, then
+-- | bind `go` to `read cell`. The rewrite is then re-fed through `lowerCoreLetK` as two
+-- | ordinary `NonRec` bindings.
+-- |
+-- | Sound only when the self-reference is *lazy* — guarded behind a thunk, as `defer` is.
+-- | A strict self-reference reads the null placeholder and traps, which is the faithful
+-- | image of a binding that already diverges under this IR's strict evaluation.
+lowerRecValueLet
+  :: Env
+  -> M.RecBinding
+  -> Array Bind
+  -> M.Expr
+  -> (Env -> M.Expr -> Lower AnfExpr)
+  -> Lower AnfExpr
+lowerRecValueLet env r tail body finish = do
+  Slot nCell <- fresh
+  Slot nSelf <- fresh
+  let cellId = "$reccell" <> show nCell
+  let selfId = "$recself" <> show nSelf
+  let rhs' = substMany (Map.singleton r.ident (readRef selfId)) r.expr
+  lowerCoreLetK env
+    ( [ NonRec Nothing cellId (newWithSelf (M.Abs [ selfId ] rhs'))
+      , NonRec Nothing r.ident (readRef cellId)
+      ] <> tail
+    )
+    body
+    finish
+  where
+  -- The trailing `LitInt 0` is the perform-unit the effectful-intrinsic ABI expects (ADR 0018).
+  effectRef name args = M.App (M.Var (Qualified (Just [ "Effect", "Ref" ]) name)) (args <> [ M.Lit (LitInt 0) ])
+  readRef v = effectRef "read" [ M.Var (Qualified Nothing v) ]
+  newWithSelf fn = effectRef "newWithSelf" [ fn ]
+
+-- | Does a recursive binding's defining expression denote genuine recursive *data* — a
+-- | saturated (or over-applied) constructor, or a `Constructor` node — rather than a value
+-- | that could be tied lazily? Such a binding builds a cyclic data structure, which under
+-- | this IR's strict evaluation is either a top-level CAF (globalized, ADR 0006) or a
+-- | divergent local; either way it is not legalized through the `newWithSelf` knot-tie.
+recBindIsData :: Env -> M.Expr -> Boolean
+recBindIsData env = case _ of
+  M.Constructor _ _ _ -> true
+  M.App (M.Var q) args
+    | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors -> Array.length args >= info.arity
+  M.Var q
+    | Just info <- Object.lookup (qualifiedKeyOf q) env.ctors -> info.arity == 0
+  _ -> false
 
 -- | Lower one member of a mutually-recursive `let` group, given its pre-allocated
 -- | slot. Captures are resolved in an environment where every group member is
@@ -649,14 +720,12 @@ lowerTopFunc info moduleName isRoot (Tuple ident expr) = do
 -- | `roots` modules are lowered (so a `Prelude` module's unused — and possibly
 -- | unsupported — instances are never visited); the roots' own functions are
 -- | exported, the rest are internal.
--- | `perModuleRep` (ADR 0037 ③) restricts the representation analysis to a per-module
--- | boundary: a function reached across a module boundary is pinned to the boxed ABI, so
--- | only intra-module signatures are unboxed. It does not change *what* is lowered (the
--- | build is still whole-program here) — it constrains the rep solver so the result matches
--- | what a separately-compiled per-module build would produce, for A/B measurement before
--- | the codegen split. `false` is the original whole-program rep analysis.
-lowerModules :: Boolean -> Boolean -> Object (Array Rep) -> Object ForeignImport -> Set String -> Array (Array String) -> Array Module -> Either LowerError Program
-lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modules = do
+-- | Lower a whole program (in-process): the rep solver runs over the whole module set, so
+-- | cross-module signatures are unboxed just like intra-module ones. (The per-module-rep A/B knob
+-- | — pinning cross-module-visible functions to the boxed ABI to mimic a separately-compiled build —
+-- | was retired with ADR 0042; the orchestrate `purwc` path now pins per module at its own boundary.)
+lowerModules :: Boolean -> Object (Array Rep) -> Object ForeignImport -> Set String -> Array (Array String) -> Array Module -> Either LowerError Program
+lowerModules optimize fieldReps foreignSigs foreignNames roots modules = do
   let
     dictCtors = collectDictCtors modules
     labelIds = collectLabels modules
@@ -679,22 +748,6 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
     rootKeys = Array.mapMaybe (\e -> if e.isRoot then Just e.key else Nothing) entries
     reachable = reachableFunctions functions rootKeys
     toLower = Array.filter (\e -> Object.member e.key reachable) entries
-    -- functions reached by a reference from a *different* module: in a per-module build
-    -- each is imported/exported with a fixed boxed ABI, so the rep solver must pin them
-    -- (ADR 0037 ③). Computed from the MIR refs; `Set.empty` keeps the whole-program rep.
-    keyModule = Object.fromFoldable (entries <#> \e -> Tuple e.key e.moduleName)
-    crossModulePins =
-      if perModuleRep then
-        Set.fromFoldable
-          ( toLower >>= \e ->
-              Array.mapMaybe
-                ( \ref -> case Object.lookup ref keyModule of
-                    Just refMod | refMod /= e.moduleName -> Just (FuncName ref)
-                    _ -> Nothing
-                )
-                (qualifiedRefs e.expr)
-          )
-      else Set.empty
   -- A hashed label id (ADR 0037 ④) is a pure function of the name, so two distinct
   -- labels can in principle collide — which would merge two record fields. Reject it
   -- here rather than emit a corrupt record. Cheap: it only groups the computed ids.
@@ -717,7 +770,7 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
       pure (Tuple ident sig)
   -- representation analysis (ADR 0013): unbox `Int`/`Number` where it avoids boxing
   pure
-    { funcs: if optimize then assignProgramReps crossModulePins allFuncs else allFuncs
+    { funcs: if optimize then assignProgramReps Set.empty allFuncs else allFuncs
     , labels: Object.toUnfoldable info.labelIds
     , exportSigs
     }
@@ -726,7 +779,7 @@ lowerModules perModuleRep optimize fieldReps foreignSigs foreignNames roots modu
 -- | functions (the single-module case of `lowerModules`). A single module has no
 -- | cross-module references, so `perModuleRep` is irrelevant here (passed `false`).
 lowerModule :: Boolean -> Module -> Either LowerError Program
-lowerModule optimize m = lowerModules false optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]
+lowerModule optimize m = lowerModules optimize Object.empty Object.empty Set.empty [ m.name ] [ m ]
 
 -- | One module's lowered functions plus its export signatures, kept separate (NOT recombined) so
 -- | the per-module codegen (ADR 0037 Phase 2, Slice 2.2) can emit it to its own wasm.
@@ -850,3 +903,148 @@ lowerOneModule info reachable crossModuleRefs roots m = do
           mFuncs
       )
   pure (assignProgramReps pins mFuncs)
+
+-- | A dependency's lowering interface (ADR 0038 Phase B M2b): the symbol tables a dependent merges
+-- | into its `ModuleInfo` to resolve cross-module callees — loaded from the dep's `.pmi`, never its
+-- | `.pmo`. Keys are module-qualified, so merging is a left-biased `Object.union`. (No `labels`: a
+-- | dependent hashes its OWN labels; a dep's labels matter only to the orchestrator's pre-merge
+-- | collision check.)
+type DepInterface =
+  { funcs :: Object Int
+  , ctors :: Object CtorInfo
+  , dictCtors :: Object Unit
+  , enumCtors :: Object Unit
+  , foreignSigs :: Object ForeignImport
+  , foreignNames :: Array String
+  }
+
+-- | One target module lowered against its dependency interfaces, with the link facts a per-module
+-- | codegen needs. `crossModuleRefs` over-exports ALL the target's own functions (a single-module
+-- | worker cannot see which a dependent calls; the orchestrator internalises + DCEs the unused after
+-- | merge), so a dependency-having module's wasm is BEHAVIOUR-identical to the whole-program oracle,
+-- | not byte-identical.
+type LoweredTarget =
+  { fragment :: ModuleFragment
+  , labels :: Array (Tuple String Int)
+  , keyHomeModule :: Object String
+  , crossModuleRefs :: Set String
+  }
+
+-- | Lower ONE target module against its dependencies' INTERFACES (ADR 0038 Phase B M2b) — no access
+-- | to any dependency body. `info` is the target's own `collect*` tables merged with the dep
+-- | interfaces (qualified keys ⇒ a plain `Object.union`); only the target's reachable functions are
+-- | lowered. A cross-module callee resolves via `info` (`knownFuncs`/`ctors`/`foreignSigs`); a callee
+-- | absent from every table is a hard `unknown callee` error (so the dep `.pmi` must be complete).
+-- | No whole-program label-collision check (that is the orchestrator's pre-merge job, Phase C); only
+-- | a local self-check. `isEntry` decouples the two roles of "root": every module is its own
+-- | REACHABILITY root (keep + over-export all its functions, as a library module a dependent may
+-- | call), but only the program ENTRY is a HOST-ABI root — so only the entry emits the i32 export
+-- | shim under bare ident names. A library module exports only its qualified cross-module keys, so
+-- | modules sharing a method name (`conj`, `append`, …) never collide as bare exports at merge time.
+lowerModuleWithInterfaces
+  :: Object (Array Rep)
+  -> Object ForeignImport
+  -> Set String
+  -> Array DepInterface
+  -> Boolean
+  -> Module
+  -> Either LowerError LoweredTarget
+lowerModuleWithInterfaces fieldReps foreignSigs foreignNames deps isEntry target = do
+  let
+    tDict = collectDictCtors [ target ]
+    tLabels = collectLabels [ target ]
+    info =
+      { knownFuncs: foldl (\acc d -> Object.union acc d.funcs) (collectFuncs tDict [ target ]) deps
+      , ctors: foldl (\acc d -> Object.union acc d.ctors) (collectCtors fieldReps [ target ]) deps
+      , dictCtors: foldl (\acc d -> Object.union acc d.dictCtors) tDict deps
+      , enumCtors: foldl (\acc d -> Object.union acc d.enumCtors) (collectEnumCtors [ target ]) deps
+      , labelIds: tLabels
+      , foreignSigs: foldl (\acc d -> Object.union acc d.foreignSigs) foreignSigs deps
+      , foreignNames: foldl (\acc d -> Set.union acc (Set.fromFoldable d.foreignNames)) foreignNames deps
+      }
+    decls = functionDecls tDict target
+    rootKeys = map (\(Tuple ident _) -> qualifiedKey target.name ident) decls
+    functions = Object.fromFoldable (decls <#> \(Tuple ident e) -> Tuple (qualifiedKey target.name ident) e)
+    reachable = reachableFunctions functions rootKeys
+    -- over-export every own function (the worker cannot see its dependents); merge-time DCE prunes.
+    crossModuleRefs = Set.fromFoldable rootKeys
+    dotted = joinWith "." target.name
+    homeOf k = maybe k (\i -> Str.take i k) (Str.lastIndexOf (Pattern ".") k)
+    keyHomeModule = Object.fromFoldable
+      ( map (\k -> Tuple k dotted) rootKeys
+          <> (deps >>= \d -> map (\k -> Tuple k (homeOf k)) (Object.keys d.funcs))
+      )
+  case Array.head (labelCollisions tLabels) of
+    Just clash -> Left (LabelHashCollision clash)
+    Nothing -> pure unit
+  -- host-ABI (bare) exports only for the program entry; reachability/over-export are unchanged.
+  let hostRoots = if isEntry then [ target.name ] else []
+  fragment <- lowerOneFragment info reachable crossModuleRefs hostRoots info.foreignSigs target
+  pure { fragment, labels: Object.toUnfoldable tLabels, keyHomeModule, crossModuleRefs }
+
+-- | A whole-program lowering context built ONCE from every module's interface: the merged symbol
+-- | tables (`ModuleInfo`, with `labelIds` left empty — it is per-target) and the whole-program
+-- | key→home-module map. Built by `buildSharedInfo`, consumed by `lowerModuleAgainstInfo`.
+type SharedLowerInfo = { info :: ModuleInfo, keyHomeModule :: Object String }
+
+-- | Build the whole-program lowering context once, from every module's `DepInterface` (ADR 0038
+-- | Phase C2). The `purwc compile-batch` worker builds this ONCE for the batch and lowers each
+-- | module's fragment against it (`lowerModuleAgainstInfo`), instead of re-folding every dependency
+-- | interface into a fresh `ModuleInfo` per module (`lowerModuleWithInterfaces` — O(N²) over the
+-- | batch). The tables are keyed by module-qualified names, so the union is disjoint and
+-- | order-independent; a module references only entries that precede it in dependency order, so the
+-- | extra (non-dependency) entries are inert. `labelIds` is left empty — `lowerModuleAgainstInfo`
+-- | sets it per target.
+buildSharedInfo :: Array DepInterface -> SharedLowerInfo
+buildSharedInfo ifaces =
+  { info:
+      { knownFuncs
+      , ctors: unionAll (map _.ctors ifaces)
+      , dictCtors: unionAll (map _.dictCtors ifaces)
+      , enumCtors: unionAll (map _.enumCtors ifaces)
+      , labelIds: Object.empty
+      , foreignSigs: unionAll (map _.foreignSigs ifaces)
+      , foreignNames: foldl (\acc d -> Set.union acc (Set.fromFoldable d.foreignNames)) Set.empty ifaces
+      }
+  , keyHomeModule: Object.fromFoldable (map (\k -> Tuple k (homeModuleOfKey k)) (Object.keys knownFuncs))
+  }
+  where
+  knownFuncs = unionAll (map _.funcs ifaces)
+
+-- | Merge many objects into one, STACK-SAFELY. `Foreign.Object.union acc x` folds *acc* with `foldM`
+-- | in `ST` (whose bind is not stack-safe), so a `foldl union` over the whole program grows the folded
+-- | accumulator until a large input (self-host: thousands of bindings) overflows the stack mid-build.
+-- | `fromFoldable` instead drives `ST.foreach` (a flat JS loop), so flattening every object's entries
+-- | through it stays O(1) in stack depth. Keys are unique qualified names here, so last-wins
+-- | (`fromFoldable`) and first-wins (`union`) coincide.
+unionAll :: forall a. Array (Object a) -> Object a
+unionAll objs = Object.fromFoldable (objs >>= (Object.toUnfoldable :: Object a -> Array (Tuple String a)))
+
+-- | The defining (home) module of a qualified key `Module.ident` — the prefix before the last dot.
+homeModuleOfKey :: String -> String
+homeModuleOfKey k = maybe k (\i -> Str.take i k) (Str.lastIndexOf (Pattern ".") k)
+
+-- | Lower ONE module against a prebuilt whole-program context (`buildSharedInfo`). Behaviour-identical
+-- | to `lowerModuleWithInterfaces`: the target's own functions are already in the shared `knownFuncs`
+-- | (the context is built from every module's interface, including the target's own), and the extra
+-- | non-dependency entries are inert (a module references only its dependencies). Only `labelIds`,
+-- | `decls`/`rootKeys`/`reachable`, and `crossModuleRefs` are per-target; the heavy interface merge is
+-- | NOT redone per module, so the batch lowering is O(N), not O(N²).
+lowerModuleAgainstInfo :: SharedLowerInfo -> Boolean -> Module -> Either LowerError LoweredTarget
+lowerModuleAgainstInfo shared isEntry target = do
+  let
+    tDict = collectDictCtors [ target ]
+    tLabels = collectLabels [ target ]
+    info = shared.info { labelIds = tLabels }
+    decls = functionDecls tDict target
+    rootKeys = map (\(Tuple ident _) -> qualifiedKey target.name ident) decls
+    functions = Object.fromFoldable (decls <#> \(Tuple ident e) -> Tuple (qualifiedKey target.name ident) e)
+    reachable = reachableFunctions functions rootKeys
+    -- over-export every own function (the worker cannot see its dependents); merge-time DCE prunes.
+    crossModuleRefs = Set.fromFoldable rootKeys
+  case Array.head (labelCollisions tLabels) of
+    Just clash -> Left (LabelHashCollision clash)
+    Nothing -> pure unit
+  let hostRoots = if isEntry then [ target.name ] else []
+  fragment <- lowerOneFragment info reachable crossModuleRefs hostRoots info.foreignSigs target
+  pure { fragment, labels: Object.toUnfoldable tLabels, keyHomeModule: shared.keyHomeModule, crossModuleRefs }

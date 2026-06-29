@@ -1,6 +1,6 @@
 # 0031. ulib as a single library-module layer: last-wins artifact merge, retiring the shadow/wat duality
 
-- Status: Accepted
+- Status: ~~Accepted~~ **Superseded by [0039](0039-ulib-as-registry-package-patch.md)** _(2026-06-20: ulib is recast as a pure source-level patch on registry packages with content-based lenient versioning; the exact-version manifest gate and the "foreign-only" module category are retired — the latter was the root of the per-module `unknown callee: Data.Number.isFinite` failure. The companion [0040](0040-global-content-addressed-library-cache.md) replaces this ADR's precompiled `lib/` with a global content-addressed artifact cache.)_
 - Date: 2026-06-11
 - Supersedes: [0012](0012-ulib-curated-package-ffi.md) (its hand-written-`.wat`-as-general-provider mechanism), [0028](0028-ulib-library-layer-shadowing.md) (its in-code `shadowOrRegistry` per-module version match)
 - Refines: [0029](0029-ulib-lib-distribution-and-purs-pinning.md) (precompiled lib + version pinning), [0026](0026-wasmbase-primitive-layer.md) (WasmBase)

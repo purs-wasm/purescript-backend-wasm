@@ -10,6 +10,11 @@ module PureScript.Backend.Wasm.Compiler
   , finishLink
   , compilePerModule
   , PerModuleArtifacts
+  , compileModuleWasm
+  , compileModuleWasmShared
+  , ModuleArtifact
+  , moduleInterface
+  , ModuleInterfaceTables
   , effectfulForeigns
   , compileModules
   , compileModulesText
@@ -26,17 +31,21 @@ import Data.Array as Array
 import Data.ArrayBuffer.Types (Uint8Array)
 import Data.Either (Either(..))
 import Data.Map (Map)
-import Data.Maybe (Maybe, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.Traversable (sequence, traverse)
 import Effect (Effect)
 import Foreign.Object (Object)
+import Foreign.Object as Object
 import PureScript.Backend.Wasm.Codegen (buildLinkGlue, buildModule, buildModuleSingle)
 import PureScript.Backend.Wasm.Externs (ForeignSig, ctorFieldReps, effectfulForeignAritiesFromSigs, effectfulForeignNamesFromSigs)
 import PureScript.Backend.Wasm.Intrinsics (effectfulForeignNames)
-import PureScript.Backend.Wasm.Lower (lowerModules, lowerProgramFragments)
+import PureScript.Backend.Wasm.Lower (DepInterface, LoweredTarget, SharedLowerInfo, lowerModuleAgainstInfo, lowerModuleWithInterfaces, lowerModules, lowerProgramFragments)
+import PureScript.Backend.Wasm.Lower.Collect (collectCtors, collectDictCtors, collectEnumCtors, collectFuncs, collectLabels)
+import PureScript.Backend.Wasm.Lower.IR (Rep)
+import PureScript.Backend.Wasm.Lower.Types (CtorInfo)
 import PureScript.Backend.Wasm.MiddleEnd (CacheInput, CacheWrite, noCache, optimizeProgramCached, optimizeProgramTrace)
 import PureScript.Backend.Wasm.MiddleEnd.IR as M
 import PureScript.Backend.Wasm.MiddleEnd.Print (printModule)
@@ -59,10 +68,7 @@ parseModule source = case jsonParser source of
 -- | spans are threaded through to Binaryen debug locations. `optimizeMir` toggles
 -- | the middle-end (dictionary elimination); off builds an unoptimized baseline
 -- | (lambda lifting still runs, since it is needed for constant-stack tail recursion).
--- | `perModuleRep` (ADR 0037 ③) constrains the representation analysis to a per-module
--- | boundary (cross-module-visible functions pinned to the boxed ABI). Off by default; the
--- | build is still whole-program, this only simulates the per-module rep for A/B measurement.
-type CompileOptions = { optimize :: Boolean, optimizeMir :: Boolean, perModuleRep :: Boolean }
+type CompileOptions = { optimize :: Boolean, optimizeMir :: Boolean }
 
 -- | The live result of `linkModule` (the "link" half of link/emit, ADR 0021): the built
 -- | Binaryen module, the distinct user-foreign source modules to resolve (ADR 0014), and the
@@ -216,12 +222,121 @@ compilePerModule opts roots foreignSigs' foreignNames externs optimizedModules =
       B.dispose single.mod
       pure (Right { moduleName: dotted, bytes, cafInitExport: single.cafInitExport, foreignModules: single.foreignModules })
 
+-- | What `compileModuleWasm` produces for ONE module (ADR 0038 Phase B — the `purwc` worker): the
+-- | module's emitted (optimised) wasm bytes ready for `wasm-merge`, its per-module CAF-init export
+-- | name (`caf_init$<Module>`, `Nothing` if it globalizes none — the orchestrator's glue calls it),
+-- | the foreign source modules to resolve, and the cross-module function keys this module exported
+-- | for merge resolution (the orchestrator internalises + DCEs them post-merge, so over-exporting is
+-- | safe). Unlike `PerModuleArtifacts`, there is no link glue — the orchestrator builds that from the
+-- | per-module `cafInitExport`s of the whole program.
+type ModuleArtifact =
+  { bytes :: Uint8Array
+  , cafInitExport :: Maybe String
+  , foreignModules :: Array String
+  , crossModuleExports :: Array String
+  }
+
+-- | Lower + codegen ONE module in isolation (ADR 0038 Phase B M2b). `target` is the module's
+-- | finalized MIR; `deps` are its dependencies' lowering INTERFACES — loaded from their `.pmi`, never
+-- | their `.pmo`. `lowerModuleWithInterfaces` builds the lowering context by merging the target's own
+-- | `collect*` tables with the dep interfaces, then codegens only the target via `buildModuleSingle`
+-- | (cross-module calls → imports, the target's functions → over-exported for merge). Emits NO link
+-- | glue and does NO merge — the orchestrator's job (Phase C). A dependency-free module is
+-- | byte-identical to the whole-program per-module oracle; a dependency-having one is
+-- | behaviour-identical (over-export makes its rep-pinning, hence bytes, diverge).
+compileModuleWasm
+  :: CompileOptions
+  -> Object ForeignSig
+  -> Set String
+  -> Array ExternsFile
+  -> Array DepInterface
+  -> Boolean
+  -> M.Module
+  -> Effect (Either String ModuleArtifact)
+compileModuleWasm opts foreignSigs' foreignNames externs deps isEntry target =
+  case lowerModuleWithInterfaces (ctorFieldReps externs) foreignSigs' foreignNames deps isEntry target of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right lowered -> emitLoweredTarget opts lowered target
+
+-- | Like `compileModuleWasm`, but lowers the target against a prebuilt whole-program lowering context
+-- | (`buildSharedInfo`, ADR 0038 Phase C2) instead of folding the dependency interfaces afresh — so a
+-- | long-lived `compile-batch` worker pays the interface merge ONCE for the batch, not per module
+-- | (O(N) not O(N²)). The emitted artifact is behaviour-identical (the shared context's extra,
+-- | non-dependency entries are inert).
+compileModuleWasmShared :: CompileOptions -> SharedLowerInfo -> Boolean -> M.Module -> Effect (Either String ModuleArtifact)
+compileModuleWasmShared opts shared isEntry target =
+  case lowerModuleAgainstInfo shared isEntry target of
+    Left err -> pure (Left ("linking failed: " <> show err))
+    Right lowered -> emitLoweredTarget opts lowered target
+
+-- | Codegen a lowered target to its (optimised) wasm bytes + link facts, shared by the per-module
+-- | (`compileModuleWasm`) and shared-context (`compileModuleWasmShared`) lowering paths.
+emitLoweredTarget :: CompileOptions -> LoweredTarget -> M.Module -> Effect (Either String ModuleArtifact)
+emitLoweredTarget opts lowered target = do
+  let dotted = joinWith "." target.name
+  let meta = { moduleName: dotted, keyHomeModule: lowered.keyHomeModule, crossModuleRefs: lowered.crossModuleRefs }
+  single <- buildModuleSingle meta { funcs: lowered.fragment.funcs, labels: lowered.labels, exportSigs: lowered.fragment.exportSigs }
+  ok <- B.validate single.mod
+  if not ok then do
+    wat <- B.emitText single.mod
+    B.dispose single.mod
+    pure (Left ("per-module codegen: " <> dotted <> " failed validation:\n" <> wat))
+  else do
+    when opts.optimize (B.optimize single.mod)
+    bytes <- B.emitBinary single.mod
+    B.dispose single.mod
+    -- Over-export the cross-module-referenced keys HOMED in this module (merge resolves them;
+    -- the orchestrator internalises + DCEs post-merge) plus this module's own `caf_init$M`.
+    let homed = Set.toUnfoldable (Set.filter (\k -> Object.lookup k lowered.keyHomeModule == Just dotted) lowered.crossModuleRefs)
+    pure
+      ( Right
+          { bytes
+          , cafInitExport: single.cafInitExport
+          , foreignModules: single.foreignModules
+          , crossModuleExports: homed <> maybe [] (\e -> [ e ]) single.cafInitExport
+          }
+      )
+
+-- | The lowering-interface tables of ONE module (ADR 0038 Phase B): the symbol signatures a
+-- | dependent merges into its `ModuleInfo` to lower this module's cross-module callees — derived
+-- | from this module's OWN finalized MIR via the existing `collect*` passes and serialized into its
+-- | `.pmi`, so the dependent never reads this module's `.pmo`. `foreignSigs` is filtered to the
+-- | foreigns THIS module declares; `foreignNames` is the module's full qualified foreign-name set
+-- | (the lowering opaque fallback). `labels` is carried for the orchestrator's pre-merge
+-- | hash-collision check (Phase C), NOT for a dependent's lowering.
+type ModuleInterfaceTables =
+  { funcs :: Object Int
+  , ctors :: Object CtorInfo
+  , dictCtors :: Object Unit
+  , enumCtors :: Object Unit
+  , foreignSigs :: Object ForeignSig
+  , foreignNames :: Array String
+  , labels :: Object Int
+  }
+
+moduleInterface :: Object (Array Rep) -> Object ForeignSig -> Array String -> M.Module -> ModuleInterfaceTables
+moduleInterface fieldReps allForeignSigs foreignNames m =
+  let
+    dotted = joinWith "." m.name
+    dictCtors = collectDictCtors [ m ]
+  in
+    { funcs: collectFuncs dictCtors [ m ]
+    , ctors: collectCtors fieldReps [ m ]
+    , dictCtors
+    , enumCtors: collectEnumCtors [ m ]
+    -- only the foreigns THIS module declares (the whole-program `allForeignSigs` is filtered by
+    -- the declaring module, so a dependent reading this `.pmi` gets exactly this module's foreigns).
+    , foreignSigs: Object.filter (\sig -> sig.moduleName == dotted) allForeignSigs
+    , foreignNames
+    , labels: collectLabels [ m ]
+    }
+
 -- | The shared back half of linking: lower the optimized MIR, build and validate the Binaryen
 -- | module, and package it with the cache misses to persist. `foreignNames` is the qualified
 -- | CoreFn-declared foreign set (for lowering's opaque-import fallback, ADR 0016).
 finishLink :: LinkCore
 finishLink opts roots foreignSigs' foreignNames externs optimizedModules cacheWrites =
-  case lowerModules opts.perModuleRep opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
+  case lowerModules opts.optimizeMir (ctorFieldReps externs) foreignSigs' foreignNames roots optimizedModules of
     Left err -> pure (Left ("linking failed: " <> show err))
     Right program -> do
       built <- buildModule program

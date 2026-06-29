@@ -21,10 +21,10 @@ import Fmt as Fmt
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import PureScript.Backend.Wasm.Lower.IR (ForeignImport, MarshalKind(..), foreignManifestJson)
-import PursWasm.CLI.Build.Paths (loaderGlue)
-import PursWasm.CLI.Effect (FS, FilePath, LOG, info, joinPath, mkdirP, readText, writeText)
-import PursWasm.CLI.Effect.Log as Log
-import PursWasm.CLI.Module (printModname)
+import PureScript.Backend.Wasm.CLI.Paths (loaderGlue)
+import PureScript.Backend.Wasm.CLI.Effect (FS, FilePath, LOG, info, joinPath, mkdirP, readText, writeText)
+import PureScript.Backend.Wasm.CLI.Effect.Log as Log
+import PureScript.Backend.Wasm.CLI.Module (printModname)
 import Run (Run)
 import Type.Row (type (+))
 

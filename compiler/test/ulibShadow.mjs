@@ -21,14 +21,14 @@ const fail = (m) => {
 execFileSync("spago", ["build", "-p", "ulib-tooling"], { cwd: repo, stdio: "inherit" });
 // The shadows must be installed into the lib first (CI does `ulib install` before the bench/test
 // steps; do it here too so the test is self-contained).
-execFileSync("node", ["ulib-tooling/index.dev.js", "install"], { cwd: repo, stdio: "inherit" });
+execFileSync("node", ["ulib-tooling/index.js", "install"], { cwd: repo, stdio: "inherit" });
 
 const compiled = mkdtempSync(join(tmpdir(), "ulibshadow-out-"));
 execFileSync("spago", ["build", "-p", "examples-helloworld", "--output", compiled], { cwd: repo, stdio: "inherit" });
 const bundle = mkdtempSync(join(tmpdir(), "ulibshadow-bundle-"));
 execFileSync(
   "node",
-  ["purs-wasm/index.dev.js", "build", "-e", "Examples.HelloWorld.ArrayShadowCheck", "-I", compiled, "-O", bundle],
+  ["purs-wasm/index.js", "build", "-e", "Examples.HelloWorld.ArrayShadowCheck", "-I", compiled, "-O", bundle],
   { cwd: repo, stdio: "inherit" },
 );
 

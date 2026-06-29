@@ -27,12 +27,18 @@ const walk = (dir) =>
 const entries = walk(srcDir).map(moduleOf).sort();
 
 // the build tooling the CLI needs: its own compile, the installed ulib lib, and the fixtures' corefn.
+// `purs-wasm` must be built explicitly — `ulib-tooling` no longer depends on it (the maintainer CLI was
+// decoupled from the orchestrator, ADR 0038), so building ulib-tooling alone leaves `PursWasm.CLI.Main`
+// (the `index.js` entry) uncompiled. `purwc` too: the DEFAULT build is now orchestrate (ADR 0042),
+// which spawns the `purwc` worker as a subprocess — its `output/Purwc` entry must exist.
+run("spago", ["build", "-p", "purs-wasm"]);
+run("spago", ["build", "-p", "purwc"]);
 run("spago", ["build", "-p", "ulib-tooling"]);
 // `ulib install` compiles the shadows over `.spago/p` (incl. the resolved `wasm-base` package — it is
 // an extraPackage now, not a local dir); prime `.spago` by building `bench` (its closure pulls
 // wasm-base in) so that package is present when the install globs `.spago/p`.
 run("spago", ["build", "-p", "bench", "--output", "bench/output"]);
-run("node", ["ulib-tooling/index.dev.js", "install"]);
+run("node", ["ulib-tooling/index.js", "install"]);
 const fixturesOut = "compiler/test/e2e-fixtures-out";
 rmSync(join(repo, fixturesOut), { recursive: true, force: true });
 run("spago", ["build", "-p", "e2e-fixtures", "--output", fixturesOut]);
@@ -41,6 +47,6 @@ run("spago", ["build", "-p", "e2e-fixtures", "--output", fixturesOut]);
 const buildDir = "compiler/test/e2e-build";
 rmSync(join(repo, buildDir), { recursive: true, force: true });
 for (const m of entries) {
-  run("node", ["purs-wasm/index.dev.js", "build", "-e", m, "-I", fixturesOut, "-O", `${buildDir}/${m}`]);
+  run("node", ["purs-wasm/index.js", "build", "-e", m, "-I", fixturesOut, "-O", `${buildDir}/${m}`]);
 }
 console.log(`e2eCliPrebuild: built ${entries.length} fixture(s): ${entries.join(", ")}`);

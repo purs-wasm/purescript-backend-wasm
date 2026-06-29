@@ -1,0 +1,8 @@
+package:
+  name: purwc-fixtures
+  # Dependency-free fixtures for the `purwc` worker's differential tests (ADR 0038 M1). Each module
+  # imports NOTHING (not even Prelude), so it has no cross-module references — letting `purwc compile`
+  # build it in true isolation (empty dependency set) and be checked byte-for-byte against the
+  # whole-program `purs-wasm build --per-module-codegen` per-module output.
+  dependencies:
+    - prelude

@@ -22,11 +22,15 @@ importers:
 
   bench/output-wasm-curry: {}
 
+  bench/output-wasm-run: {}
+
   binaryen:
     dependencies:
       binaryen:
         specifier: ^123.0.0
         version: 123.0.0
+
+  cli-lib: {}
 
   compiler:
     dependencies:
@@ -74,6 +78,8 @@ importers:
 
   compiler/test/e2e-build/E2E.Guards: {}
 
+  compiler/test/e2e-build/E2E.IntConv: {}
+
   compiler/test/e2e-build/E2E.LinkB: {}
 
   compiler/test/e2e-build/E2E.Literals: {}
@@ -83,6 +89,8 @@ importers:
   compiler/test/e2e-build/E2E.Mon: {}
 
   compiler/test/e2e-build/E2E.NestedRecordPat: {}
+
+  compiler/test/e2e-build/E2E.Num: {}
 
   compiler/test/e2e-build/E2E.PerformUserEffect: {}
 
@@ -116,9 +124,13 @@ importers:
 
   examples/output-effect-prim: {}
 
+  examples/output-helloworld: {}
+
   examples/output-meta: {}
 
   examples/output-metatheory: {}
+
+  examples/output-metatheory-wasm: {}
 
   examples/output-priv: {}
 
@@ -128,17 +140,15 @@ importers:
 
   examples/output-wasm: {}
 
+  examples/run/output-wasm: {}
+
   purs-wasm:
     dependencies:
       binaryen:
         specifier: ^123.0.0
         version: 123.0.0
 
-  purs-wasm/package:
-    dependencies:
-      binaryen:
-        specifier: ^123.0.0
-        version: 123.0.0
+  purwc: {}
 
   ulib-tooling: {}
 
