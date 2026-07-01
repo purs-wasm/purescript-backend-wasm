@@ -13,7 +13,14 @@ import PureScript.Backend.Wasm.Lower.IR (Rep(..))
 
 -- | The natural representation an intrinsic's result is produced at: raw `i32` for
 -- | `Int` arithmetic / lengths / constants, raw `f64` for `Number` arithmetic,
--- | `Boxed` (an `i31` Boolean or an `eqref`) otherwise.
+-- | raw `i64` for the `Wasm.Int64` ops, `Boxed` (an `i31` Boolean or an `eqref`)
+-- | otherwise.
+-- |
+-- | INVARIANT: this MUST equal the wasm rep `Codegen.Prim.genPrim` actually emits
+-- | for the intrinsic. A wrong entry here does not box/unbox harmlessly; it makes
+-- | `coerce` apply a transition (e.g. `Boxed -> I64` = `ref.cast (ref $Int64)`) to
+-- | an expression of the wrong binaryen type, which aborts in binaryen's
+-- | `visitRefCast` (`isSubType` assertion), not at the PureScript layer.
 primRep :: Intrinsic -> Rep
 primRep = case _ of
   IntAdd -> I32
@@ -30,6 +37,22 @@ primRep = case _ of
   IntShr -> I32
   IntZshr -> I32
   IntComplement -> I32
+  -- `Wasm.Int64`: the ops returning `Int64` produce a raw i64 (single `i64.*`
+  -- instruction in `Codegen.Prim`); `lowBits` wraps to i32; `eq`/`lt` produce an
+  -- i31 Boolean (`Boxed`, via the catch-all below).
+  Int64FromInt -> I64
+  Int64And -> I64
+  Int64Or -> I64
+  Int64Xor -> I64
+  Int64Complement -> I64
+  Int64Shl -> I64
+  Int64ShrS -> I64
+  Int64ShrU -> I64
+  Int64RotL -> I64
+  Int64RotR -> I64
+  Int64ToInt -> I32
+  Int64Eq -> Boxed -- i31 Boolean
+  Int64Lt -> Boxed -- i31 Boolean
   NumToInt -> I32
   StrLen -> I32
   StrByteAt -> I32 -- a UTF-8 byte (0-255), as an Int
@@ -55,11 +78,20 @@ primRep = case _ of
   IntToNum -> F64
   TopNumber -> F64
   BottomNumber -> F64
+  I32ArrayLength -> I32
+  I64ArrayLength -> I32
+  I64ArrayIndex -> I64
+  I32ArrayIndex -> I32
+  F64ArrayLength -> I32
+  F64ArrayIndex -> F64
   _ -> Boxed
 
 -- | The representation each operand is generated at (by position); operands past
 -- | the listed reps — and every operand of an unlisted intrinsic — default to
--- | `Boxed`.
+-- | `Boxed`. This must agree with the reps `Codegen.Prim` coerces each operand to
+-- | (the i64 ops coerce every operand with `i64Arg = genAtomAs ctx I64`); a
+-- | mismatch here is "only" a box/unbox round-trip (valid but wasteful), unlike a
+-- | wrong `primRep`, but keep it correct so the box-elision analysis is accurate.
 primOperandReps :: Intrinsic -> Array Rep
 primOperandReps = case _ of
   IntAdd -> [ I32, I32 ]
@@ -79,6 +111,22 @@ primOperandReps = case _ of
   IntShr -> [ I32, I32 ]
   IntZshr -> [ I32, I32 ]
   IntComplement -> [ I32 ]
+  -- `Wasm.Int64`: operands are i64, except `fromInt` (takes an i32 `Int`) and the
+  -- shift/rotate count, which is itself an `Int64` on the surface and coerced to
+  -- i64 by `i64Arg`, so `[ I64, I64 ]` for the binary shifts/rotates.
+  Int64And -> [ I64, I64 ]
+  Int64Or -> [ I64, I64 ]
+  Int64Xor -> [ I64, I64 ]
+  Int64Complement -> [ I64 ]
+  Int64Shl -> [ I64, I64 ]
+  Int64ShrS -> [ I64, I64 ]
+  Int64ShrU -> [ I64, I64 ]
+  Int64RotL -> [ I64, I64 ]
+  Int64RotR -> [ I64, I64 ]
+  Int64Eq -> [ I64, I64 ]
+  Int64Lt -> [ I64, I64 ]
+  Int64FromInt -> [ I32 ]
+  Int64ToInt -> [ I64 ]
   FromNumberImpl -> [ Boxed, Boxed, F64 ] -- just, nothing, n (the Number is unboxed)
   NumToInt -> [ F64 ]
   NumAdd -> [ F64, F64 ]
@@ -102,4 +150,13 @@ primOperandReps = case _ of
   OrdNumber -> [ Boxed, Boxed, Boxed, F64, F64 ]
   -- forE lo hi f (perform-unit): the bounds are unboxed i32, the body closure boxed
   ForE -> [ I32, I32, Boxed, Boxed ]
+  I32ArrayIndex -> [ Boxed, I32 ]
+  I32ArrayNew -> [ I32 ]
+  I32ArraySet -> [ Boxed, I32, I32 ]
+  I64ArrayIndex -> [ Boxed, I32 ]
+  I64ArrayNew -> [ I32 ]
+  I64ArraySet -> [ Boxed, I32, I64 ]
+  F64ArrayIndex -> [ Boxed, I32 ]
+  F64ArrayNew -> [ I32 ]
+  F64ArraySet -> [ Boxed, I32, F64 ]
   _ -> []

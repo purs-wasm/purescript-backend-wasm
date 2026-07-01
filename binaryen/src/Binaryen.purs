@@ -5,66 +5,91 @@
 -- | that allocates into the module's arena or mutates the module is modelled
 -- | as an `Effect`; pure type values (`i32`, `none`, ...) are not.
 module Binaryen
-  ( Module
-  , Expression
-  , Type
-  , Function
-  , Export
-  , createModule
-  , dispose
-  , i32
-  , i64
-  , f32
-  , f64
-  , none
+  ( addFunction
+  , addFunctionExport
+  , addFunctionImport
+  , addGlobal
+  , arrayCopy
+  , arrayGet
+  , arrayLen
+  , arrayNew
+  , arrayNewFixed
+  , arraySet
   , auto
-  , createType
-  , localGet
-  , localSet
   , block
   , blockNamed
-  , loop
   , br
   , brIf
-  , brWithValue
   , brIfWithValue
+  , brWithValue
   , call
-  , returnCall
+  , callRef
+  , createModule
+  , createType
+  , dispose
+  , emitBinary
+  , emitText
+  , eqref
+  , Export
+  , Expression
+  , f32
+  , f64
+  , f64Add
+  , f64Const
+  , f64ConvertI32S
+  , f64Div
+  , f64Eq
+  , f64Lt
+  , f64Mul
+  , f64Sub
+  , funcref
+  , Function
+  , getExpressionType
+  , globalGet
+  , globalSet
+  , HeapType
+  , i31GetS
+  , i31New
+  , i31ref
+  , i32
   , i32Add
-  , i32Sub
-  , i32Mul
-  , i32DivS
-  , i32RemS
-  , i32Eq
-  , i32Ne
-  , i32LtU
-  , i32LtS
   , i32And
+  , i32Const
+  , i32DivS
+  , i32Eq
+  , i32Eqz
+  , i32LtS
+  , i32LtU
+  , i32Mul
+  , i32Ne
   , i32Or
-  , i32Xor
+  , i32RemS
   , i32Shl
   , i32ShrS
   , i32ShrU
-  , i32Eqz
-  , i32Const
+  , i32Sub
   , i32TruncF64S
-  , f64Const
-  , f64Eq
-  , f64Lt
-  , f64Add
-  , f64Sub
-  , f64Mul
-  , f64Div
-  , f64ConvertI32S
+  , i32WrapI64
+  , i32Xor
+  , i64
+  , i64And
+  , i64Const
+  , i64Eq
+  , i64ExtendI32S
+  , i64LtS
+  , i64Or
+  , i64RotL
+  , i64RotR
+  , i64Shl
+  , i64ShrS
+  , i64ShrU
+  , i64Xor
   , if_
-  , unreachable
-  , addFunction
-  , addFunctionExport
-  , addFunctionImport
-  , setStart
-  , addGlobal
-  , globalGet
-  , globalSet
+  , localGet
+  , localSet
+  , loop
+  , Module
+  , none
   , optimize
   , runPasses
   , setOptimizeLevel
@@ -75,39 +100,32 @@ module Binaryen
   , emitText
   , emitBinary
   , readBinary
-  , removeExport
-  , removeExports
-  -- Wasm GC
-  , HeapType
-  , TypeBuilder
-  , eqref
-  , funcref
-  , i31ref
-  , i31New
-  , i31GetS
-  , setFeaturesGC
-  , typeBuilderCreate
-  , typeBuilderSetStructType
-  , typeBuilderSetArrayType
-  , typeBuilderSetSignatureType
-  , typeBuilderSetOpen
-  , typeBuilderSetSubType
-  , typeBuilderGetTempHeapType
-  , typeBuilderGetTempRefType
-  , typeBuilderBuildAndDispose
-  , typeFromHeapType
-  , structNew
-  , structGet
-  , arrayNew
-  , refNull
-  , arrayNewFixed
-  , arrayGet
-  , arraySet
-  , arrayLen
-  , arrayCopy
   , refCast
   , refFunc
-  , callRef
+  , refNull
+  , removeExport
+  , returnCall
+  , removeExports
+  , HeapType
+  , setFeaturesGC
+  , setStart
+  , structGet
+  , structNew
+  , Type
+  , TypeBuilder
+  , typeBuilderBuildAndDispose
+  , typeBuilderCreate
+  , typeBuilderGetTempHeapType
+  , typeBuilderGetTempRefType
+  , typeBuilderSetArrayType
+  , typeBuilderSetOpen
+  , typeBuilderSetSignatureType
+  , typeBuilderSetStructType
+  , typeBuilderSetSubType
+  , typeEq
+  , typeFromHeapType
+  , unreachable
+  , validate
   ) where
 
 import Prelude
@@ -157,6 +175,8 @@ foreign import auto :: Type
 -- | Pack zero or more types into a single (tuple) type, used for function
 -- | parameter and result signatures.
 foreign import createType :: Array Type -> Type
+
+foreign import arrayNewDefault :: Module -> HeapType -> Expression -> Effect Expression
 
 foreign import localGetImpl :: Module -> Int -> Type -> Effect Expression
 
@@ -302,6 +322,77 @@ foreign import i32XorImpl :: Module -> Expression -> Expression -> Effect Expres
 i32Xor :: Module -> Expression -> Expression -> Effect Expression
 i32Xor = i32XorImpl
 
+foreign import i64XorImpl :: Module -> Expression -> Expression -> Effect Expression
+foreign import i64AndImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.and`: bitwise AND.
+i64And :: Module -> Expression -> Expression -> Effect Expression
+i64And = i64AndImpl
+
+foreign import i64OrImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.or`: bitwise OR.
+i64Or :: Module -> Expression -> Expression -> Effect Expression
+i64Or = i64OrImpl
+
+foreign import i64ShlImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.shl`: shift left.
+i64Shl :: Module -> Expression -> Expression -> Effect Expression
+i64Shl = i64ShlImpl
+
+foreign import i64ShrSImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.shr_s`: arithmetic (sign-propagating) shift right.
+i64ShrS :: Module -> Expression -> Expression -> Effect Expression
+i64ShrS = i64ShrSImpl
+
+foreign import i64ShrUImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.shr_u`: logical (zero-fill) shift right.
+i64ShrU :: Module -> Expression -> Expression -> Effect Expression
+i64ShrU = i64ShrUImpl
+
+foreign import i64RotLImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.rotl`: rotate left.
+i64RotL :: Module -> Expression -> Expression -> Effect Expression
+i64RotL = i64RotLImpl
+
+foreign import i64RotRImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.rotr`: rotate right.
+i64RotR :: Module -> Expression -> Expression -> Effect Expression
+i64RotR = i64RotRImpl
+
+foreign import i64EqImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.eq`: 1 if equal, 0 otherwise.
+i64Eq :: Module -> Expression -> Expression -> Effect Expression
+i64Eq = i64EqImpl
+
+foreign import i64LtSImpl :: Module -> Expression -> Expression -> Effect Expression
+
+-- | `i64.lt_s`: 1 if `left < right` as signed, 0 otherwise.
+i64LtS :: Module -> Expression -> Expression -> Effect Expression
+i64LtS = i64LtSImpl
+
+foreign import i64ExtendI32SImpl :: Module -> Expression -> Effect Expression
+
+-- | `i64.extend_i32_s`: sign-extend an i32 to i64.
+i64ExtendI32S :: Module -> Expression -> Effect Expression
+i64ExtendI32S = i64ExtendI32SImpl
+
+foreign import i32WrapI64Impl :: Module -> Expression -> Effect Expression
+
+-- | `i32.wrap_i64`: the low 32 bits of an i64.
+i32WrapI64 :: Module -> Expression -> Effect Expression
+i32WrapI64 = i32WrapI64Impl
+
+-- | `i64.xor`: bitwise XOR.
+i64Xor :: Module -> Expression -> Expression -> Effect Expression
+i64Xor = i64XorImpl
+
 foreign import i32ShlImpl :: Module -> Expression -> Expression -> Effect Expression
 
 -- | `i32.shl`: logical left shift (`left << (right & 31)`).
@@ -341,6 +432,14 @@ unreachable :: Module -> Effect Expression
 unreachable = unreachableImpl
 
 foreign import i32ConstImpl :: Module -> Int -> Effect Expression
+
+foreign import i64ConstImpl :: Module -> Int -> Int -> Effect Expression
+
+-- | `i64.const`: a 64-bit literal from its low / high 32-bit halves (binaryen takes
+-- | the two i32 words). Used for constant initializers such as an i64 CAF global's
+-- | throwaway zero; runtime i64 values come from the ops / `extend`.
+i64Const :: Module -> Int -> Int -> Effect Expression
+i64Const = i64ConstImpl
 
 i32Const :: Module -> Int -> Effect Expression
 i32Const = i32ConstImpl
@@ -472,6 +571,13 @@ foreign import typeBuilderBuildAndDispose :: TypeBuilder -> Int -> Effect (Array
 
 -- | The `(ref null? ht)` value type for a finalized heap type.
 foreign import typeFromHeapType :: HeapType -> Boolean -> Type
+
+-- | The (already-finalized) result type of a built expression. Pure: binaryen
+-- | computes and stores the type at construction.
+foreign import getExpressionType :: Expression -> Type
+
+-- | Identity comparison of two binaryen types (they are interned ids).
+foreign import typeEq :: Type -> Type -> Boolean
 
 -- | `struct.new`: allocate a struct of the heap type, with field initializers
 -- | given in field order.

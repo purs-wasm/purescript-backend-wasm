@@ -57,6 +57,8 @@ import Test.E2E.Cli.Strings as Strings
 import Test.E2E.Cli.Arrays as Arrays
 import Test.E2E.Cli.StackSafe as StackSafe
 import Test.E2E.Cli.TailCall as TailCall
+import Test.E2E.Cli.Int64 as Int64
+import Test.E2E.Cli.PackedArrays as PackedArrays
 import Test.Spec.Reporter (consoleReporter)
 import Test.Spec.Runner.Node (runSpecAndExitProcess)
 
@@ -109,4 +111,6 @@ main = runSpecAndExitProcess [ consoleReporter ] do
   ForeignRecord.spec
   ForeignExport.spec
   ForeignEffect.spec
+  Int64.spec
+  PackedArrays.spec
   PerformUserEffect.spec

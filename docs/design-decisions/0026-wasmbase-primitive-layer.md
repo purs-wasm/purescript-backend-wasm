@@ -73,6 +73,21 @@
 > `degree`/`toNumber`/`top`/`bottom`/`compare`/`fromNumber`); (2) **`Wasm.Array.unsafeSet` returns the
 > `Array`**, not `Unit` (`… -> a -> Array a`), so a builder loop can thread it.
 
+> **Update (2026-06-23):** native 64-bit integers and unboxed packed numeric arrays
+> added. `Wasm.Int64` is a first-order `i64` scalar (`$Int64 = (struct i64)` when boxed)
+> with bitwise / shift / rotate / compare ops resolving to single `i64.*` instructions.
+> `Wasm.I32Array` / `Wasm.F64Array` / `Wasm.I64Array` are packed arrays
+> (`(array (mut i32|f64|i64))`) whose lanes are raw scalars, so an `Int` / `Number` /
+> `Int64` array pays no per-element box (unlike `Wasm.Array`, backed by `$Vals` =
+> `(array (mut eqref))`). Array surface per element type: `length` / `unsafeIndex` /
+> `unsafeNew` / `unsafeSet`, resolving to `array.len` / `array.get` / `array.new`
+> (zero-initialised, not null/trapping) / `array.set`. Four value types are added
+> (`$I32Arr`, `$F64Arr`, `$Int64`, `$I64Arr`); all are acyclic and emit as their own
+> singleton rec groups, so cross-module type canonicalization is unchanged and
+> `runtime.wat` is untouched. `$I32Arr` is structurally identical to `$Bytes` and
+> canonicalises with it today; it is kept a distinct nominal type so a future
+> packed-byte `$Str` cannot silently alias it.
+
 ## Context
 
 Three threads converge on one missing layer.

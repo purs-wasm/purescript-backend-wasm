@@ -32,6 +32,7 @@ type Sig = { params :: Array Rep, result :: Rep }
 -- | derived from them for `ref.cast` targets, field reads, and signatures.
 type RuntimeTypes =
   { intHt :: B.HeapType
+  , int64Ht :: B.HeapType
   , valsHt :: B.HeapType
   , cloHt :: B.HeapType
   , labelIdsHt :: B.HeapType
@@ -39,8 +40,12 @@ type RuntimeTypes =
   , numHt :: B.HeapType
   , bytesHt :: B.HeapType
   , strHt :: B.HeapType
+  , i32ArrHt :: B.HeapType
+  , f64ArrHt :: B.HeapType
+  , i64ArrHt :: B.HeapType
   , codeHt :: B.HeapType
   , refInt :: B.Type
+  , refInt64 :: B.Type
   , refVals :: B.Type
   , refClo :: B.Type
   , refLabelIds :: B.Type
@@ -48,6 +53,9 @@ type RuntimeTypes =
   , refNum :: B.Type
   , refBytes :: B.Type
   , refStr :: B.Type
+  , refI32Arr :: B.Type
+  , refF64Arr :: B.Type
+  , refI64Arr :: B.Type
   , refCode :: B.Type
   }
 
@@ -94,7 +102,7 @@ type Ctx =
 -- | matches `$Code` for `call_ref`.
 buildRuntimeTypes :: B.Module -> Effect RuntimeTypes
 buildRuntimeTypes _ = do
-  tb <- B.typeBuilderCreate 8
+  tb <- B.typeBuilderCreate 12
   B.typeBuilderSetArrayType tb 0 B.eqref true -- $Vals = (array (mut eqref))
   B.typeBuilderSetStructType tb 1 [ { ty: B.i32, mutable: false } ] -- $Int (also $Char)
   refValsTmp <- B.typeBuilderGetTempHeapType tb 0 >>= \h -> B.typeBuilderGetTempRefType tb h false
@@ -107,9 +115,19 @@ buildRuntimeTypes _ = do
   B.typeBuilderSetArrayType tb 6 B.i32 true -- $Bytes = (array (mut i32)); one UTF-8 byte per i32 lane (not packed)
   refBytesTmp <- B.typeBuilderGetTempHeapType tb 6 >>= \h -> B.typeBuilderGetTempRefType tb h false
   B.typeBuilderSetStructType tb 7 [ { ty: refBytesTmp, mutable: false } ] -- $Str = (struct (ref $Bytes))
-  main <- B.typeBuilderBuildAndDispose tb 8
+  -- $I32Arr / $F64Arr / $I64Arr (WasmBase, ADR 0026): packed unboxed numeric arrays. Each is acyclic,
+  -- so Binaryen emits it as its own singleton rec group (like every value type above); adding them
+  -- leaves the other types' canonical identity untouched, so the runtime ABI is unchanged. They
+  -- are inlined in codegen (no `$rt.*` helper crosses to the runtime module), so runtime.wat does
+  -- not declare them. $I32Arr is structurally identical to $Bytes and canonicalises with it today;
+  -- it is kept distinct so a future packed-byte $Str representation cannot silently change it.
+  B.typeBuilderSetArrayType tb 8 B.i32 true -- $I32Arr = (array (mut i32))
+  B.typeBuilderSetArrayType tb 9 B.f64 true -- $F64Arr = (array (mut f64))
+  B.typeBuilderSetStructType tb 10 [ { ty: B.i64, mutable: false } ] -- $Int64 = (struct i64)
+  B.typeBuilderSetArrayType tb 11 B.i64 true -- $I64Arr = (array (mut i64)); packed native 64-bit lanes
+  main <- B.typeBuilderBuildAndDispose tb 12
   case main of
-    [ valsHt, intHt, cloHt, labelIdsHt, recHt, numHt, bytesHt, strHt ] -> do
+    [ valsHt, intHt, cloHt, labelIdsHt, recHt, numHt, bytesHt, strHt, i32ArrHt, f64ArrHt, int64Ht, i64ArrHt ] -> do
       let refClo = B.typeFromHeapType cloHt false
       tb2 <- B.typeBuilderCreate 1
       B.typeBuilderSetSignatureType tb2 0 (B.createType [ refClo, B.eqref ]) B.eqref
@@ -117,6 +135,7 @@ buildRuntimeTypes _ = do
       case codeGroup of
         [ codeHt ] -> pure
           { intHt
+          , int64Ht
           , valsHt
           , cloHt
           , labelIdsHt
@@ -125,7 +144,11 @@ buildRuntimeTypes _ = do
           , bytesHt
           , strHt
           , codeHt
+          , i32ArrHt
+          , f64ArrHt
+          , i64ArrHt
           , refInt: B.typeFromHeapType intHt false
+          , refInt64: B.typeFromHeapType int64Ht false
           , refVals: B.typeFromHeapType valsHt false
           , refClo
           , refLabelIds: B.typeFromHeapType labelIdsHt false
@@ -134,14 +157,18 @@ buildRuntimeTypes _ = do
           , refBytes: B.typeFromHeapType bytesHt false
           , refStr: B.typeFromHeapType strHt false
           , refCode: B.typeFromHeapType codeHt false
+          , refI32Arr: B.typeFromHeapType i32ArrHt false
+          , refF64Arr: B.typeFromHeapType f64ArrHt false
+          , refI64Arr: B.typeFromHeapType i64ArrHt false
           }
         _ -> throwException (error "Codegen: expected exactly 1 code heap type")
-    _ -> throwException (error "Codegen: expected exactly 8 runtime heap types")
+    _ -> throwException (error "Codegen: expected exactly 12 runtime heap types")
 
 -- | The wasm value type for an IR representation.
 repType :: Ctx -> Rep -> B.Type
 repType ctx = case _ of
   I32 -> B.i32
+  I64 -> B.i64
   F64 -> B.f64
   Boxed -> B.eqref
   CloRef -> ctx.rt.refClo

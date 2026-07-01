@@ -11,3 +11,4 @@ package:
     - record
     - refs
     - unsafe-coerce
+    - wasm-base

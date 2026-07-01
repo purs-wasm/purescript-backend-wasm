@@ -124,6 +124,66 @@ genPrim ctx intr args = case intr, args of
     setE <- B.call ctx.mod strSetByteHelperName [ str, idx, byte ] B.none
     strAgain <- genAtomAs ctx Boxed s
     B.block ctx.mod [ setE, strAgain ] B.eqref
+  -- `Wasm.I32Array` (WasmBase, ADR 0026): packed unboxed i32 array. Cast the eqref operand to
+  -- the concrete `(ref $I32Arr)`, then inline the array op (no runtime helper: the heap type is
+  -- module-local and the lanes are scalars). `unsafeNew` zero-inits; `unsafeSet` writes in place
+  -- and yields the threaded array, exactly like `ArraySet`.
+  I32ArrayLength, [ a ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI32Arr
+    B.arrayLen ctx.mod arr
+  I32ArrayIndex, [ a, i ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI32Arr
+    idx <- intArg i
+    B.arrayGet ctx.mod arr idx B.i32 false
+  I32ArrayNew, [ n ] -> do
+    len <- intArg n
+    zero <- B.i32Const ctx.mod 0
+    B.arrayNew ctx.mod ctx.rt.i32ArrHt len zero
+  I32ArraySet, [ a, i, v ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI32Arr
+    idx <- intArg i
+    val <- intArg v
+    setE <- B.arraySet ctx.mod arr idx val
+    arrAgain <- genAtomAs ctx Boxed a
+    B.block ctx.mod [ setE, arrAgain ] B.eqref
+  -- `Wasm.F64Array` (WasmBase, ADR 0026): packed unboxed f64 array (the `$Num` box avoided per lane).
+  F64ArrayLength, [ a ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refF64Arr
+    B.arrayLen ctx.mod arr
+  F64ArrayIndex, [ a, i ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refF64Arr
+    idx <- intArg i
+    B.arrayGet ctx.mod arr idx B.f64 false
+  F64ArrayNew, [ n ] -> do
+    len <- intArg n
+    zero <- B.f64Const ctx.mod 0.0
+    B.arrayNew ctx.mod ctx.rt.f64ArrHt len zero
+  F64ArraySet, [ a, i, v ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refF64Arr
+    idx <- intArg i
+    val <- numArg v
+    setE <- B.arraySet ctx.mod arr idx val
+    arrAgain <- genAtomAs ctx Boxed a
+    B.block ctx.mod [ setE, arrAgain ] B.eqref
+  -- `Wasm.I64Array` (WasmBase, ADR 0026): packed unboxed i64 array (the `$Int64` box avoided per lane).
+  I64ArrayLength, [ a ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI64Arr
+    B.arrayLen ctx.mod arr
+  I64ArrayIndex, [ a, i ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI64Arr
+    idx <- intArg i
+    B.arrayGet ctx.mod arr idx B.i64 false
+  I64ArrayNew, [ n ] -> do
+    len <- intArg n
+    zero <- B.i64Const ctx.mod 0 0
+    B.arrayNew ctx.mod ctx.rt.i64ArrHt len zero
+  I64ArraySet, [ a, i, v ] -> do
+    arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refI64Arr
+    idx <- intArg i
+    val <- i64Arg v
+    setE <- B.arraySet ctx.mod arr idx val
+    arrAgain <- genAtomAs ctx Boxed a
+    B.block ctx.mod [ setE, arrAgain ] B.eqref
   -- Array a -> Int: the element count
   ArrayLength, [ a ] -> do
     arr <- genAtomAs ctx Boxed a >>= \e -> B.refCast ctx.mod e ctx.rt.refVals
@@ -265,6 +325,32 @@ genPrim ctx intr args = case intr, args of
   IntShl, [ a, b ] -> intBinop B.i32Shl a b
   IntShr, [ a, b ] -> intBinop B.i32ShrS a b
   IntZshr, [ a, b ] -> intBinop B.i32ShrU a b
+  Int64And, [ a, b ] -> i64Binop B.i64And a b
+  Int64Or, [ a, b ] -> i64Binop B.i64Or a b
+  Int64Xor, [ a, b ] -> i64Binop B.i64Xor a b
+  Int64Shl, [ a, b ] -> i64Binop B.i64Shl a b
+  Int64ShrS, [ a, b ] -> i64Binop B.i64ShrS a b
+  Int64ShrU, [ a, b ] -> i64Binop B.i64ShrU a b
+  Int64RotL, [ a, b ] -> i64Binop B.i64RotL a b
+  Int64RotR, [ a, b ] -> i64Binop B.i64RotR a b
+  Int64Complement, [ a ] -> do
+    ea <- i64Arg a
+    m1 <- B.i32Const ctx.mod (-1) >>= B.i64ExtendI32S ctx.mod
+    B.i64Xor ctx.mod ea m1
+  Int64Eq, [ a, b ] -> do
+    ea <- i64Arg a
+    eb <- i64Arg b
+    B.i64Eq ctx.mod ea eb >>= B.i31New ctx.mod
+  Int64Lt, [ a, b ] -> do
+    ea <- i64Arg a
+    eb <- i64Arg b
+    B.i64LtS ctx.mod ea eb >>= B.i31New ctx.mod
+  Int64FromInt, [ a ] -> do
+    ea <- intArg a
+    B.i64ExtendI32S ctx.mod ea
+  Int64ToInt, [ a ] -> do
+    ea <- i64Arg a
+    B.i32WrapI64 ctx.mod ea
   IntComplement, [ a ] -> do
     ea <- intArg a
     m1 <- B.i32Const ctx.mod (-1)
@@ -303,6 +389,11 @@ genPrim ctx intr args = case intr, args of
     ea <- intArg a
     eb <- intArg b
     B.call ctx.mod name [ ea, eb ] B.i32
+  i64Arg = genAtomAs ctx I64
+  i64Binop op a b = do
+    ea <- i64Arg a
+    eb <- i64Arg b
+    op ctx.mod ea eb
   boolBinop op a b = do
     ea <- boolArg a
     eb <- boolArg b

@@ -26,6 +26,11 @@ export const auto = binaryen.auto;
 
 export const createType = (types) => binaryen.createType(types);
 
+// expose the actual expression type from binaryen
+export const getExpressionType = (expr) => binaryen.getExpressionType(expr);
+
+export const typeEq = (a) => (b) => a === b;
+
 // --- Expression builders ----------------------------------------------------
 // These allocate nodes in the module's arena, so they are modelled as Effect.
 
@@ -109,10 +114,49 @@ export const i32EqzImpl = (mod) => (value) => () =>
 export const i32NeImpl = (mod) => (left) => (right) => () =>
   mod.i32.ne(left, right);
 
+export const i64AndImpl = (mod) => (left) => (right) => () =>
+  mod.i64.and(left, right);
+
+export const i64OrImpl = (mod) => (left) => (right) => () =>
+  mod.i64.or(left, right);
+
+export const i64XorImpl = (mod) => (left) => (right) => () =>
+  mod.i64.xor(left, right);
+
+export const i64ShlImpl = (mod) => (left) => (right) => () =>
+  mod.i64.shl(left, right);
+
+export const i64ShrSImpl = (mod) => (left) => (right) => () =>
+  mod.i64.shr_s(left, right);
+
+export const i64ShrUImpl = (mod) => (left) => (right) => () =>
+  mod.i64.shr_u(left, right);
+
+export const i64RotLImpl = (mod) => (left) => (right) => () =>
+  mod.i64.rotl(left, right);
+
+export const i64RotRImpl = (mod) => (left) => (right) => () =>
+  mod.i64.rotr(left, right);
+
+export const i64EqImpl = (mod) => (left) => (right) => () =>
+  mod.i64.eq(left, right);
+
+export const i64LtSImpl = (mod) => (left) => (right) => () =>
+  mod.i64.lt_s(left, right);
+
+export const i64ExtendI32SImpl = (mod) => (value) => () =>
+  mod.i64.extend_s(value);
+
+export const i32WrapI64Impl = (mod) => (value) => () =>
+  mod.i32.wrap(value);
+
 export const ifImpl = (mod) => (cond) => (ifTrue) => (ifFalse) => () =>
   mod.if(cond, ifTrue, ifFalse);
 
 export const unreachableImpl = (mod) => () => mod.unreachable();
+
+export const i64ConstImpl = (mod) => (low) => (high) => () =>
+  mod.i64.const(low, high);
 
 export const i32ConstImpl = (mod) => (value) => () =>
   mod.i32.const(value);
@@ -246,6 +290,9 @@ export const structGet = (mod) => (index) => (ref) => (ty) => (signed) => () =>
 
 export const arrayNew = (mod) => (ht) => (size) => (init) => () =>
   binaryen._BinaryenArrayNew(mod.ptr, ht, size, init);
+
+export const arrayNewDefault = (mod) => (ht) => (size) => () =>
+  binaryen._BinaryenArrayNewDefault(mod.ptr, ht, size);
 
 export const refNull = (mod) => (ht) => () =>
   binaryen._BinaryenRefNull(mod.ptr, ht);
